@@ -1,0 +1,42 @@
+{
+  "name": "toowix-backend",
+  "version": "1.0.0",
+  "description": "Toowix Meet SaaS Backend Service (MongoDB Atlas + Firebase Auth + Jitsi Integration)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "db:migrate": "ts-node migrations/runner.ts",
+    "db:indexes": "ts-node src/db/initIndexes.ts",
+    "db:seed": "ts-node src/db/seed.ts",
+    "db:test": "ts-node src/scripts/test-db.ts",
+    "test:backend": "ts-node src/scripts/test-backend.ts",
+    "test:auth": "ts-node src/scripts/test-auth.ts",
+    "test:jitsi": "ts-node src/scripts/test-jitsi-integration.ts",
+    "test:meeting-id": "ts-node src/scripts/test-meeting-id.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.7.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.8.0",
+    "morgan": "^1.10.0",
+    "nodemailer": "^6.9.13"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^20.14.0",
+    "@types/nodemailer": "^6.4.15",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  },
+  "license": "UNLICENSED"
+}

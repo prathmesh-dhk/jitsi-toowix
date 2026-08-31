@@ -1,0 +1,20 @@
+<svg width="140" height="36" viewBox="0 0 140 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="toowixGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2E72B2" />
+      <stop offset="100%" stop-color="#4799E3" />
+    </linearGradient>
+  </defs>
+
+  <!-- Toowix Emblem Badge -->
+  <rect x="2" y="2" width="32" height="32" rx="8" fill="url(#toowixGradient)" />
+  <path d="M12 11H24M18 11V25" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Brand Typography -->
+  <text x="42" y="24" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF" letter-spacing="-0.3">
+    Toowix
+  </text>
+  <text x="100" y="24" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#3A86CA" letter-spacing="-0.3">
+    Meet
+  </text>
+</svg>

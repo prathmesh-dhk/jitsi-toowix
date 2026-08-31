@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in with Google</title>
+    <!-- Google Identity Services SDK -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0f172a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #f8fafc;
+        }
+
+        .center-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+        }
+
+        #g_id_signin_container {
+            display: flex;
+            justify-content: center;
+        }
+
+        /* Profile view shown after login */
+        #profileView {
+            display: none;
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 24px 32px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            margin-bottom: 12px;
+            border: 2px solid #3b82f6;
+            object-fit: cover;
+        }
+
+        .user-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .user-email {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 20px;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: opacity 0.2s;
+        }
+
+        .btn-primary {
+            background: #3b82f6;
+            color: #ffffff;
+        }
+
+        .btn-signout {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="center-container">
+        <!-- Sign in with Google Button (Centered) -->
+        <div id="loginView">
+            <div id="g_id_signin_container"></div>
+        </div>
+
+        <!-- Logged in State -->
+        <div id="profileView">
+            <img id="userAvatar" class="avatar" src="" alt="Avatar">
+            <h2 id="userName" class="user-name"></h2>
+            <p id="userEmail" class="user-email"></p>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="window.location.href='/'">Go to Meetings</button>
+                <button class="btn btn-signout" onclick="handleSignOut()">Sign Out</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Google OAuth Client ID from .env
+        const GOOGLE_CLIENT_ID = "112408190421-31ivj34umurm4c7set9tv8fn9otk73ig.apps.googleusercontent.com";
+
+        // Parse JWT ID token from Google
+        function decodeJwtResponse(token) {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => 
+                '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+            ).join(''));
+            return JSON.parse(jsonPayload);
+        }
+
+        // Handle Google Login Callback
+        function handleCredentialResponse(response) {
+            const payload = decodeJwtResponse(response.credential);
+
+            document.getElementById('userName').textContent = payload.name || 'User';
+            document.getElementById('userEmail').textContent = payload.email || '';
+            document.getElementById('userAvatar').src = payload.picture || '';
+
+            document.getElementById('loginView').style.display = 'none';
+            document.getElementById('profileView').style.display = 'block';
+
+            localStorage.setItem('toowix_user', JSON.stringify({
+                name: payload.name,
+                email: payload.email,
+                picture: payload.picture,
+                token: response.credential
+            }));
+        }
+
+        // Sign Out
+        function handleSignOut() {
+            localStorage.removeItem('toowix_user');
+            if (typeof google !== 'undefined' && google.accounts && google.accounts.id) {
+                google.accounts.id.disableAutoSelect();
+            }
+            document.getElementById('profileView').style.display = 'none';
+            document.getElementById('loginView').style.display = 'block';
+            renderGoogleButton();
+        }
+
+        // Render official Google Sign-in button
+        function renderGoogleButton() {
+            if (typeof google === 'undefined' || !google.accounts || !google.accounts.id) {
+                setTimeout(renderGoogleButton, 100);
+                return;
+            }
+
+            google.accounts.id.initialize({
+                client_id: GOOGLE_CLIENT_ID,
+                callback: handleCredentialResponse,
+                auto_select: false
+            });
+
+            google.accounts.id.renderButton(
+                document.getElementById("g_id_signin_container"),
+                {
+                    theme: "filled_blue",
+                    size: "large",
+                    shape: "pill",
+                    text: "signin_with",
+                    logo_alignment: "left",
+                    width: 280
+                }
+            );
+        }
+
+        // On Load
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedUser = localStorage.getItem('toowix_user');
+            if (savedUser) {
+                try {
+                    const user = JSON.parse(savedUser);
+                    document.getElementById('userName').textContent = user.name;
+                    document.getElementById('userEmail').textContent = user.email;
+                    document.getElementById('userAvatar').src = user.picture;
+                    document.getElementById('loginView').style.display = 'none';
+                    document.getElementById('profileView').style.display = 'block';
+                    return;
+                } catch(e) {}
+            }
+
+            renderGoogleButton();
+        });
+    </script>
+</body>
+</html>
