@@ -58,45 +58,23 @@ export function ForgotPasswordPage() {
   return (
     <div
       style={{
-        height: '100vh',
-        width: '100vw',
-        overflow: 'hidden',
+        minHeight: '100vh',
+        width: '100%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        padding: '24px',
+        padding: '24px 16px',
+        boxSizing: 'border-box',
       }}
     >
       {/* Floating Card Container */}
-      <main
-        style={{
-          display: 'flex',
-          width: '100%',
-          maxWidth: '1100px',
-          height: '100%',
-          maxHeight: '800px',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '32px',
-          boxShadow: '0 25px 50px -12px rgba(37, 38, 94, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.03)',
-          overflow: 'hidden',
-        }}
-      >
+      <main className="auth-card-container">
         {/* Left Column: Form Section */}
-        <section
-          style={{
-            width: '50%',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'relative',
-            backgroundColor: '#FFFFFF',
-            overflowY: 'auto',
-            flex: '1 1 50%',
-          }}
-        >
+        <section className="auth-form-column">
           <div
+            className="auth-form-wrapper"
             style={{
               flex: 1,
               display: 'flex',
@@ -388,17 +366,7 @@ export function ForgotPasswordPage() {
         </section>
 
         {/* Right Column: 3D Frosted Glass Logo Hero Image */}
-        <section
-          style={{
-            display: 'flex',
-            width: '50%',
-            height: '100%',
-            position: 'relative',
-            backgroundColor: '#F9F9FF',
-            flex: '1 1 50%',
-            overflow: 'hidden',
-          }}
-        >
+        <section className="auth-hero-column">
           <img
             src={ARTWORK_URL}
             alt="Toowix Meet Forgot Password Artwork"

@@ -7,7 +7,7 @@ import {
   sendEmailVerification,
   signInWithPopup,
 } from 'firebase/auth';
-import { auth, googleProvider, microsoftProvider } from '../lib/firebase';
+import { auth, googleProvider } from '../lib/firebase';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -157,64 +157,26 @@ export function SignupPage() {
     }
   };
 
-  const handleMicrosoftSignUp = async () => {
-    setErrorMessage(null);
-    setIsLoading(true);
-    try {
-      const result = await signInWithPopup(auth, microsoftProvider);
-      const idToken = await result.user.getIdToken();
-      await handleBackendSignup(idToken, result.user.displayName || 'User');
-      navigate('/login');
-    } catch (err: any) {
-      console.error('[Microsoft SSO Signup] Error:', err);
-      setErrorMessage(err.message || 'Microsoft sign up failed.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <div
       style={{
-        height: '100vh',
-        width: '100vw',
-        overflow: 'hidden',
+        minHeight: '100vh',
+        width: '100%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-        padding: '24px',
+        padding: '24px 16px',
+        boxSizing: 'border-box',
       }}
     >
       {/* Floating Card Container */}
-      <main
-        style={{
-          display: 'flex',
-          width: '100%',
-          maxWidth: '1100px',
-          height: '100%',
-          maxHeight: '800px',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '32px',
-          boxShadow: '0 25px 50px -12px rgba(37, 38, 94, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.03)',
-          overflow: 'hidden',
-        }}
-      >
+      <main className="auth-card-container">
         {/* Left Column: Form Area */}
-        <section
-          style={{
-            width: '50%',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'relative',
-            backgroundColor: '#FFFFFF',
-            overflowY: 'auto',
-            flex: '1 1 50%',
-          }}
-        >
+        <section className="auth-form-column">
           <div
+            className="auth-form-wrapper"
             style={{
               flex: 1,
               display: 'flex',
@@ -655,13 +617,14 @@ export function SignupPage() {
               </span>
             </div>
 
-            {/* Social Auth Grid (2 Columns) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+            {/* Social Auth (Google Full-width) */}
+            <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '16px' }}>
               <button
                 type="button"
                 onClick={handleGoogleSignUp}
                 disabled={isLoading}
                 style={{
+                  width: '100%',
                   height: '42px',
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #E5E7EB',
@@ -669,7 +632,7 @@ export function SignupPage() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '8px',
+                  gap: '10px',
                   fontSize: '14px',
                   fontWeight: 500,
                   color: '#141B2B',
@@ -697,38 +660,7 @@ export function SignupPage() {
                     fill="#EA4335"
                   />
                 </svg>
-                Google
-              </button>
-
-              <button
-                type="button"
-                onClick={handleMicrosoftSignUp}
-                disabled={isLoading}
-                style={{
-                  height: '42px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
-                  borderRadius: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  color: '#141B2B',
-                  cursor: isLoading ? 'not-allowed' : 'pointer',
-                  transition: 'background-color 0.15s ease',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F1F3FF')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
-              >
-                <svg width="18" height="18" viewBox="0 0 21 21" fill="none">
-                  <path d="M10 0H0V10H10V0Z" fill="#F25022" />
-                  <path d="M21 0H11V10H21V0Z" fill="#7FBA00" />
-                  <path d="M10 11H0V21H10V11Z" fill="#00A4EF" />
-                  <path d="M21 11H11V21H21V11Z" fill="#FFB900" />
-                </svg>
-                Microsoft
+                Sign up with Google
               </button>
             </div>
 
@@ -770,17 +702,7 @@ export function SignupPage() {
         </section>
 
         {/* Right Column: 3D Frosted Glass Logo Hero Image */}
-        <section
-          style={{
-            display: 'flex',
-            width: '50%',
-            height: '100%',
-            position: 'relative',
-            backgroundColor: '#F9F9FF',
-            flex: '1 1 50%',
-            overflow: 'hidden',
-          }}
-        >
+        <section className="auth-hero-column">
           <img
             src={ARTWORK_URL}
             alt="Toowix Meet Sign Up Artwork"
