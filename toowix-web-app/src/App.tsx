@@ -397,19 +397,12 @@ function MeetingRoomPage() {
   );
 }
 
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <div style={{ padding: '60px 20px', textAlign: 'center' }}>
-      <h2 style={{ fontSize: '28px', marginBottom: '12px' }}>{title}</h2>
-      <p style={{ color: 'var(--color-text-secondary)', marginBottom: '24px' }}>
-        This screen will be connected during Tuesday/Thursday sprint milestones.
-      </p>
-      <Link to="/" style={{ color: 'var(--color-primary)', fontWeight: 600 }}>
-        &larr; Return Home
-      </Link>
-    </div>
-  );
-}
+
+
+import { LoginPage } from './pages/LoginPage';
+import { SignupPage } from './pages/SignupPage';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { EmailVerificationPage } from './pages/EmailVerificationPage';
 
 export default function App() {
   return (
@@ -417,8 +410,12 @@ export default function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
-        <Route path="/login" element={<PlaceholderPage title="Toowix Login" />} />
-        <Route path="/signup" element={<PlaceholderPage title="Company Registration & Signup" />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signin" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/register" element={<SignupPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/verify-email" element={<EmailVerificationPage />} />
       </Routes>
     </BrowserRouter>
   );

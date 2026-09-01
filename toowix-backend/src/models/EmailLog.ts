@@ -7,7 +7,10 @@ export type EmailTemplateName =
   | 'E4_REG_REJECTED'
   | 'E5_USER_SIGNIN'
   | 'E6_ADMIN_SIGNIN'
-  | 'E7_PASSWORD_RESET';
+  | 'E7_PASSWORD_RESET'
+  | 'E8_INVITE_MEMBER'
+  | 'E9_MEETING_INVITE'
+  | 'E10_2FA_ENABLED';
 
 export type EmailDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
 
@@ -52,6 +55,9 @@ const EmailLogSchema = new Schema<IEmailLogDocument>(
         'E5_USER_SIGNIN',
         'E6_ADMIN_SIGNIN',
         'E7_PASSWORD_RESET',
+        'E8_INVITE_MEMBER',
+        'E9_MEETING_INVITE',
+        'E10_2FA_ENABLED',
       ],
       required: [true, 'Email template name is required'],
       index: true,

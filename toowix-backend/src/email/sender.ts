@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { emailConfig } from '../config/email';
-import { renderEmailLayout, IRenderEmailOptions } from './renderer';
+import { renderEmailLayout, renderDedicatedTemplate, IRenderEmailOptions } from './renderer';
 import { EmailLog, EmailTemplateName, IEmailLogMetadata, IEmailLogDocument } from '../models/EmailLog';
 
 let transporter: nodemailer.Transporter | null = null;
@@ -31,7 +31,8 @@ export interface ISendEmailOptions {
   to: string;
   templateName: EmailTemplateName;
   subject: string;
-  renderOptions: IRenderEmailOptions;
+  renderOptions?: IRenderEmailOptions;
+  templateVariables?: Record<string, string | number | undefined>;
   metadata?: IEmailLogMetadata;
 }
 
@@ -45,7 +46,7 @@ export interface ISendEmailResult {
  * Guarantees that the caller is NEVER blocked and errors NEVER crash the caller.
  */
 export const sendEmailAsync = async (options: ISendEmailOptions): Promise<ISendEmailResult> => {
-  const { to, templateName, subject, renderOptions, metadata = {} } = options;
+  const { to, templateName, subject, renderOptions, templateVariables, metadata = {} } = options;
 
   let logRecord: IEmailLogDocument | null = null;
   try {
@@ -66,7 +67,15 @@ export const sendEmailAsync = async (options: ISendEmailOptions): Promise<ISendE
   // 2. Dispatch sending in a non-blocking detached background task
   setImmediate(async () => {
     try {
-      const html = renderEmailLayout(renderOptions);
+      let html: string;
+      if (templateVariables) {
+        html = renderDedicatedTemplate(templateName, templateVariables);
+      } else if (renderOptions) {
+        html = renderEmailLayout(renderOptions);
+      } else {
+        html = renderDedicatedTemplate(templateName, {});
+      }
+
       const mailTransporter = getTransporter();
 
       const mailOptions = {

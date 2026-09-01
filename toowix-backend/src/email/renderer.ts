@@ -90,3 +90,61 @@ export const renderEmailLayout = (options: IRenderEmailOptions): string => {
 
   return template;
 };
+
+const templateFileMap: Record<string, string> = {
+  E1_VERIFY_EMAIL: 'e1_verify_email.html',
+  E2_REG_RECEIVED: 'e2_reg_received.html',
+  E3_REG_APPROVED: 'e3_reg_approved.html',
+  E4_REG_REJECTED: 'e4_reg_rejected.html',
+  E5_USER_SIGNIN: 'e5_user_signin.html',
+  E6_ADMIN_SIGNIN: 'e6_admin_signin.html',
+  E7_PASSWORD_RESET: 'e7_password_reset.html',
+  E8_INVITE_MEMBER: 'e8_invite_member.html',
+  E9_MEETING_INVITE: 'e9_meeting_invite.html',
+  E10_2FA_ENABLED: 'e10_2fa_enabled.html',
+};
+
+const templateCache: Map<string, string> = new Map();
+
+/**
+ * Loads and renders any dedicated HTML email template (E1 - E10).
+ */
+export const renderDedicatedTemplate = (
+  templateName: string,
+  variables: Record<string, string | number | undefined> = {}
+): string => {
+  const fileName = templateFileMap[templateName];
+  if (!fileName) {
+    throw new Error(`[Email Renderer] Unknown template name: ${templateName}`);
+  }
+
+  let rawHtml = templateCache.get(fileName);
+  if (!rawHtml) {
+    const templatePath = path.join(__dirname, 'templates', fileName);
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`[Email Renderer] Template file not found: ${templatePath}`);
+    }
+    rawHtml = fs.readFileSync(templatePath, 'utf8');
+    templateCache.set(fileName, rawHtml);
+  }
+
+  const replacements: Record<string, string> = {
+    support_email: emailConfig.supportEmail,
+    app_url: emailConfig.appUrl,
+    current_year: new Date().getFullYear().toString(),
+  };
+
+  for (const [key, value] of Object.entries(variables)) {
+    if (value !== undefined) {
+      replacements[key] = String(value);
+    }
+  }
+
+  let rendered = rawHtml;
+  for (const [key, value] of Object.entries(replacements)) {
+    const regex = new RegExp(`{{${key}}}`, 'g');
+    rendered = rendered.replace(regex, value);
+  }
+
+  return rendered;
+};

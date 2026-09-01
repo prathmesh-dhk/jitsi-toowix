@@ -35,12 +35,27 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
     // 1. Locate User in MongoDB
     let user: IUserDocument | null = await User.findOne({ firebaseUid });
 
+    if (!user && req.firebaseEmail) {
+      user = await User.findOne({ email: req.firebaseEmail.toLowerCase() });
+      if (user) {
+        user.firebaseUid = firebaseUid;
+        await user.save();
+      }
+    }
+
+    // Auto-provision if user exists in Firebase Auth
     if (!user) {
-      res.status(401).json({
-        status: 'INVALID_CREDENTIALS',
-        error: 'User profile does not exist in Toowix database',
+      const email = (req.firebaseEmail || '').toLowerCase();
+      const fullName = email ? email.split('@')[0] : 'User';
+      user = new User({
+        firebaseUid,
+        email,
+        fullName,
+        role: 'MEMBER',
+        status: 'ACTIVE',
+        emailVerifiedAt: emailVerified ? new Date() : null,
       });
-      return;
+      await user.save();
     }
 
     // 2. Check Email Verification
@@ -118,10 +133,46 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     // 6. Check Company Association & Lifecycle Status
     if (!user.companyId) {
-      res.status(403).json({
-        status: 'PENDING',
-        error: 'Your account is not yet associated with an active company workspace',
+      // Check if a company exists with matching domain
+      const domain = user.email ? user.email.split('@')[1]?.toLowerCase() : '';
+      if (
+        domain &&
+        domain !== 'gmail.com' &&
+        domain !== 'yahoo.com' &&
+        domain !== 'outlook.com' &&
+        domain !== 'hotmail.com'
+      ) {
+        const matchedCompany = await Company.findOne({
+          $or: [{ allowedDomains: domain }, { slug: domain.split('.')[0] }],
+        });
+        if (matchedCompany) {
+          user.companyId = matchedCompany._id as any;
+          await user.save();
+        }
+      }
+    }
+
+    if (!user.companyId) {
+      // Standalone user without company workspace — issue direct active token
+      const jitsiToken = generateJitsiToken({
+        user: {
+          id: String(user._id),
+          name: user.fullName,
+          email: user.email,
+          avatar: user.avatarUrl,
+        },
+        features: {
+          moderator: false,
+          recording: false,
+          screenShare: true,
+        },
+      });
+
+      res.json({
+        status: 'ACTIVE',
         user,
+        company: null,
+        jitsiToken,
       });
       return;
     }
