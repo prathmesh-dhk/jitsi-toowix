@@ -42,8 +42,7 @@ export function LoginPage() {
           localStorage.setItem('toowix_company', JSON.stringify(data.company));
         }
 
-        const defaultRoom = data.company?.slug ? `${data.company.slug}-lounge` : 'toowix-room';
-        navigate(`/meet/${defaultRoom}?jwt=${encodeURIComponent(data.jitsiToken)}`);
+        navigate('/dashboard');
         return;
       }
 
