@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
-import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { useTheme } from '../lib/theme';
 
@@ -23,7 +23,7 @@ export function LoginPage() {
   const navigate = useNavigate();
 
   // Process Login Gate Verification with Toowix Backend
-  const handleBackendLoginGate = async (idToken: string) => {
+  const handleBackendLoginGate = async (idToken: string, firebaseUser?: FirebaseUser) => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/auth/login-gate`, {
         method: 'POST',
@@ -49,7 +49,24 @@ export function LoginPage() {
       }
 
       setStatusReason(data.status || 'ERROR');
-      setErrorMessage(data.message || 'Access restricted. Please contact your company administrator.');
+      if (data.status === 'NOT_REGISTERED') {
+        setErrorMessage('No account found for this sign-in. Please create an account first, then sign in.');
+        if (firebaseUser) {
+          try { await firebaseUser.delete(); } catch (error) { console.warn('[Login Gate] Could not delete unregistered Firebase account:', error); }
+        }
+      } else if (data.status === 'PENDING') {
+        setErrorMessage('Your company registration is currently pending review by the Toowix Super Admin.');
+      } else if (data.status === 'REJECTED') {
+        setErrorMessage(`Your company registration was declined. Reason: ${data.rejectionReason || 'Contact support for details.'}`);
+      } else if (data.status === 'UNVERIFIED') {
+        setErrorMessage('Please verify your email address via the link sent to your inbox before signing in.');
+      } else if (data.status === 'SUSPENDED_USER') {
+        setErrorMessage('Your user account has been suspended by an administrator.');
+      } else if (data.status === 'SUSPENDED_COMPANY') {
+        setErrorMessage('Your company workspace has been suspended. Please contact your administrator.');
+      } else {
+        setErrorMessage(data.error || data.message || 'Access restricted. Please contact your company administrator.');
+      }
     } catch (err: any) {
       console.error('[LoginGate] Verification error:', err);
       setErrorMessage('Server connection failed during gate verification. Please try again.');
@@ -87,7 +104,7 @@ export function LoginPage() {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const idToken = await result.user.getIdToken();
-      await handleBackendLoginGate(idToken);
+      await handleBackendLoginGate(idToken, result.user);
     } catch (err: any) {
       console.error('[Google SSO] Sign in error:', err);
       setErrorMessage(err.message || 'Google SSO sign in failed.');

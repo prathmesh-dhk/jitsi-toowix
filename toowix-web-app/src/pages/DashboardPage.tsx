@@ -29,6 +29,14 @@ import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
 import { useTheme } from '../lib/theme';
+import { ScheduleCalendar } from '../components/ScheduleCalendar';
+import { RecordingsPanel } from '../components/RecordingsPanel';
+import { PastMeetingsPanel } from '../components/PastMeetingsPanel';
+import { UpcomingMeetingsPanel } from '../components/UpcomingMeetingsPanel';
+import { PeoplePanel } from '../components/PeoplePanel';
+import { TeamsPanel } from '../components/TeamsPanel';
+
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 interface IMeeting {
   id: string;
@@ -38,7 +46,95 @@ interface IMeeting {
   duration: string;
   type: 'Internal' | 'Guest' | 'Private';
   roomSlug: string;
+  isFuture: boolean;
+  scheduledAtIso: string | null;
+  refDateIso: string;
+  durationMinutes: number | null;
+  organizerInitials: string;
+  organizerId?: string;
+  organizerEmail?: string;
+  organizerAvatarUrl?: string;
+  organizerTeam?: string;
+  status: 'Scheduled' | 'Completed' | 'Cancelled' | 'Ended';
+  actualStartTime?: string;
+  actualEndTime?: string;
+  participants?: any[];
+  resources?: {
+    recordingUrl?: string;
+    transcriptUrl?: string;
+    chatUrl?: string;
+    sharedFilesUrl?: string;
+    notesUrl?: string;
+    recordingAllowDownload?: boolean;
+  };
 }
+
+interface IApiMeeting {
+  id: string;
+  name: string;
+  roomSlug: string;
+  type: 'Internal' | 'Guest' | 'Private';
+  scheduledAt: string | null;
+  durationMinutes: number | null;
+  createdAt: string;
+  createdBy?: { _id?: string; id?: string; fullName?: string; email?: string; avatarUrl?: string; team?: string; department?: string } | string;
+  cancelledAt?: string | null;
+  actualStartedAt?: string | null;
+  actualEndedAt?: string | null;
+  participants?: any[];
+  resources?: IMeeting['resources'];
+}
+
+const formatMeetingDateTime = (iso: string) => {
+  const date = new Date(iso);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (date.toDateString() === now.toDateString()) return `Today, ${time}`;
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday, ${time}`;
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
+};
+
+const initialsOf = (name: string) => name.split(' ').filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || '?';
+
+const mapApiMeeting = (meeting: IApiMeeting): IMeeting => {
+  const organizer = typeof meeting.createdBy === 'object' ? meeting.createdBy?.fullName || meeting.createdBy?.email || 'Unknown' : 'Unknown';
+  const referenceDate = meeting.scheduledAt || meeting.createdAt;
+  const isFuture = !meeting.cancelledAt && !!meeting.scheduledAt && new Date(meeting.scheduledAt).getTime() > Date.now();
+  return {
+    id: meeting.id,
+    name: meeting.name,
+    organizer,
+    organizerInitials: initialsOf(organizer),
+    dateTime: formatMeetingDateTime(referenceDate),
+    duration: meeting.durationMinutes ? `${meeting.durationMinutes} min` : 'Instant',
+    durationMinutes: meeting.durationMinutes,
+    type: meeting.type,
+    roomSlug: meeting.roomSlug,
+    isFuture,
+    scheduledAtIso: meeting.scheduledAt,
+    refDateIso: referenceDate,
+    organizerId: typeof meeting.createdBy === 'object' ? meeting.createdBy?._id || meeting.createdBy?.id : meeting.createdBy,
+    organizerEmail: typeof meeting.createdBy === 'object' ? meeting.createdBy?.email : undefined,
+    organizerAvatarUrl: typeof meeting.createdBy === 'object' ? meeting.createdBy?.avatarUrl : undefined,
+    organizerTeam: typeof meeting.createdBy === 'object' ? meeting.createdBy?.team || meeting.createdBy?.department : undefined,
+    status: meeting.cancelledAt ? 'Cancelled' : isFuture ? 'Scheduled' : meeting.actualEndedAt ? 'Ended' : 'Completed',
+    actualStartTime: meeting.actualStartedAt ? formatMeetingDateTime(meeting.actualStartedAt) : undefined,
+    actualEndTime: meeting.actualEndedAt ? formatMeetingDateTime(meeting.actualEndedAt) : undefined,
+    participants: meeting.participants?.map((participant: any) => ({
+      name: participant.name,
+      email: participant.email,
+      avatarUrl: participant.avatarUrl,
+      role: participant.role || 'Participant',
+      joinedAt: participant.joinedAt ? formatMeetingDateTime(participant.joinedAt) : undefined,
+      leftAt: participant.leftAt ? formatMeetingDateTime(participant.leftAt) : undefined,
+      timeSpent: participant.timeSpentMinutes != null ? `${participant.timeSpentMinutes} min` : undefined,
+      attendanceStatus: participant.attendanceStatus,
+    })),
+    resources: meeting.resources,
+  };
+};
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -55,54 +151,41 @@ export function DashboardPage() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [createdRoomLink, setCreatedRoomLink] = useState<string | null>(null);
 
-  // Sample meetings for the user's workspace
-  const [allMeetings] = useState<IMeeting[]>([
-    {
-      id: '1',
-      name: 'Marketing All Hands',
-      organizer: 'Sarah J.',
-      dateTime: 'Today, 9:00 AM',
-      duration: '45 min',
-      type: 'Internal',
-      roomSlug: 'marketing-all-hands',
-    },
-    {
-      id: '2',
-      name: 'Vendor Sync: Acme Corp',
-      organizer: 'You',
-      dateTime: 'Yesterday, 2:30 PM',
-      duration: '30 min',
-      type: 'Guest',
-      roomSlug: 'vendor-sync-acme',
-    },
-    {
-      id: '3',
-      name: '1:1 with Manager',
-      organizer: 'David M.',
-      dateTime: 'Mon, 11:00 AM',
-      duration: '60 min',
-      type: 'Private',
-      roomSlug: 'one-on-one-manager',
-    },
-    {
-      id: '4',
-      name: 'Engineering Sprint Planning',
-      organizer: 'Alex K.',
-      dateTime: 'Tomorrow, 10:00 AM',
-      duration: '60 min',
-      type: 'Internal',
-      roomSlug: 'eng-sprint-planning',
-    },
-    {
-      id: '5',
-      name: 'Client Demo: Cloud Integration',
-      organizer: 'You',
-      dateTime: 'Fri, 3:00 PM',
-      duration: '45 min',
-      type: 'Guest',
-      roomSlug: 'client-demo-cloud',
-    },
-  ]);
+  const [allMeetings, setAllMeetings] = useState<IMeeting[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(true);
+
+  const fetchMeetings = async () => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) return;
+      const response = await fetch(`${BACKEND_URL}/api/meetings`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.meetings)) setAllMeetings(data.meetings.map(mapApiMeeting));
+    } catch (error) {
+      console.error('[Dashboard] Failed to fetch meetings:', error);
+    } finally {
+      setMeetingsLoading(false);
+    }
+  };
+
+  const persistMeeting = async (name: string, roomSlug: string, type: IMeeting['type'] = 'Internal', scheduledAt?: string, durationMinutes?: number) => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) return;
+      const response = await fetch(`${BACKEND_URL}/api/meetings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name, roomSlug, type, scheduledAt, durationMinutes }),
+      });
+      if (response.ok) fetchMeetings();
+    } catch (error) {
+      console.error('[Dashboard] Failed to save meeting:', error);
+    }
+  };
+
+  const handleScheduleMeeting = async (data: { name: string; scheduledAt: string; durationMinutes: number; type: IMeeting['type'] }) => {
+    await persistMeeting(data.name, generateUniqueMeetingId(), data.type, data.scheduledAt, data.durationMinutes);
+  };
 
   useEffect(() => {
     // 1. Check local session cache
@@ -124,10 +207,12 @@ export function DashboardPage() {
           email: user.email,
           avatarUrl: user.photoURL || prev?.avatarUrl,
         }));
+        fetchMeetings();
       }
     });
 
     return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSignOut = async () => {
@@ -144,12 +229,14 @@ export function DashboardPage() {
 
   const handleStartInstantMeeting = () => {
     const roomId = generateUniqueMeetingId();
+    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal');
     navigate(`/meet/${roomId}`);
   };
 
   const handleCreateMeetingForLater = () => {
     const roomId = generateUniqueMeetingId();
     const url = `${window.location.origin}/meet/${roomId}`;
+    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal');
     setCreatedRoomLink(url);
   };
 
@@ -183,6 +270,12 @@ export function DashboardPage() {
   };
 
   const displayName = currentUser?.name?.split(' ')[0] || 'User';
+  const currentUserId = String(currentUser?.id || currentUser?._id || '');
+  const currentUserEmail = String(currentUser?.email || '').toLowerCase();
+  const isWorkspaceAdmin = currentUser?.role === 'COMPANY_ADMIN' || currentUser?.role === 'SUPER_ADMIN';
+  const canManageMeeting = (meeting: IMeeting) => isWorkspaceAdmin
+    || (!!currentUserId && meeting.organizerId === currentUserId)
+    || (!!currentUserEmail && meeting.organizerEmail?.toLowerCase() === currentUserEmail);
 
   // Filter meetings by tab and search
   const filteredMeetings = allMeetings.filter((m) => {
@@ -192,10 +285,10 @@ export function DashboardPage() {
       m.roomSlug.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (activeTab === 'upcoming') {
-      return matchesSearch && (m.dateTime.includes('Today') || m.dateTime.includes('Tomorrow') || m.dateTime.includes('Fri'));
+      return matchesSearch && m.isFuture;
     }
     if (activeTab === 'past') {
-      return matchesSearch && (m.dateTime.includes('Yesterday') || m.dateTime.includes('Mon'));
+      return matchesSearch && !m.isFuture;
     }
     return matchesSearch;
   });
@@ -271,7 +364,7 @@ export function DashboardPage() {
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
           {[
             { key: 'home', label: 'Home', icon: <Home size={18} />, action: () => { setActiveTab('home'); setSidebarOpen(false); } },
-            { key: 'schedule', label: 'Schedule', icon: <Calendar size={18} />, action: () => { setActiveTab('schedule'); setShowNewMeetingModal(true); setSidebarOpen(false); } },
+            { key: 'schedule', label: 'Schedule', icon: <Calendar size={18} />, action: () => { setActiveTab('schedule'); setSidebarOpen(false); } },
             { key: 'upcoming', label: 'Upcoming', icon: <Clock size={18} />, action: () => { setActiveTab('upcoming'); setSidebarOpen(false); } },
             { key: 'past', label: 'Past Meetings', icon: <History size={18} />, action: () => { setActiveTab('past'); setSidebarOpen(false); } },
             { key: 'recordings', label: 'Recordings', icon: <Video size={18} />, action: () => { setActiveTab('recordings'); setSidebarOpen(false); } },
@@ -649,7 +742,74 @@ export function DashboardPage() {
         {/* =========================================================================
             Dashboard Content Canvas
             ========================================================================= */}
-        <div className="dashboard-canvas">
+        <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}`}>
+          {activeTab === 'schedule' ? (
+            <ScheduleCalendar
+              meetings={allMeetings.map((meeting) => ({ id: meeting.id, name: meeting.name, scheduledAt: meeting.scheduledAtIso, roomSlug: meeting.roomSlug, type: meeting.type }))}
+              onSchedule={handleScheduleMeeting}
+            />
+          ) : activeTab === 'recordings' ? (
+            <RecordingsPanel />
+          ) : activeTab === 'past' ? (
+            <PastMeetingsPanel
+              meetings={allMeetings.filter((meeting) => !meeting.isFuture).map((meeting) => ({
+                id: meeting.id,
+                name: meeting.name,
+                type: meeting.type,
+                organizer: meeting.organizer,
+                organizerInitials: meeting.organizerInitials,
+                dateTime: meeting.dateTime,
+                duration: meeting.duration,
+                refDateIso: meeting.refDateIso,
+                roomSlug: meeting.roomSlug,
+                meetingUrl: `${window.location.origin}/meet/${meeting.roomSlug}`,
+                status: meeting.status === 'Scheduled' ? 'Completed' : meeting.status,
+                actualStartTime: meeting.actualStartTime,
+                actualEndTime: meeting.actualEndTime,
+                organizerEmail: meeting.organizerEmail,
+                organizerAvatarUrl: meeting.organizerAvatarUrl,
+                organizerTeam: meeting.organizerTeam,
+                participants: meeting.participants,
+                resources: meeting.resources,
+                canManage: canManageMeeting(meeting),
+                canDownloadRecording: canManageMeeting(meeting) || meeting.resources?.recordingAllowDownload === true,
+              }))}
+              onScheduleAgain={() => setActiveTab('schedule')}
+              onMeetingsChanged={fetchMeetings}
+            />
+          ) : activeTab === 'upcoming' ? (
+            <UpcomingMeetingsPanel
+              meetings={allMeetings.filter((meeting) => meeting.isFuture && meeting.scheduledAtIso).map((meeting) => ({
+                id: meeting.id,
+                name: meeting.name,
+                type: meeting.type,
+                organizer: meeting.organizer,
+                organizerInitials: meeting.organizerInitials,
+                scheduledAtIso: meeting.scheduledAtIso as string,
+                durationMinutes: meeting.durationMinutes,
+                roomSlug: meeting.roomSlug,
+                organizerEmail: meeting.organizerEmail,
+                canManage: canManageMeeting(meeting),
+                isInvitedParticipant: !canManageMeeting(meeting),
+              }))}
+              onJoinWithCode={() => setShowJoinModal(true)}
+              onNewMeeting={() => setShowNewMeetingModal(true)}
+              onMeetingsChanged={fetchMeetings}
+            />
+          ) : activeTab === 'teams' ? (
+            <TeamsPanel currentUserId={currentUserId} canManage={isWorkspaceAdmin} />
+          ) : activeTab === 'people' ? (
+            <PeoplePanel meetings={allMeetings.map((meeting) => ({
+              id: meeting.id,
+              name: meeting.name,
+              organizer: meeting.organizer,
+              organizerEmail: meeting.organizerEmail,
+              dateTime: meeting.dateTime,
+              refDateIso: meeting.refDateIso,
+              participants: meeting.participants,
+            }))} />
+          ) : (
+          <>
           {/* Greeting Section */}
           <div className="dashboard-greeting-row">
             <div>
@@ -923,13 +1083,13 @@ export function DashboardPage() {
           <section>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
               <h2 style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>
-                {activeTab === 'upcoming' ? 'Upcoming Schedule' : activeTab === 'past' ? 'Past Meeting History' : 'Recent Meetings'}
+                Recent Meetings
               </h2>
               <button
                 onClick={() => setActiveTab('home')}
                 style={{ background: 'transparent', color: isDark ? '#818CF8' : '#4F46E5', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
               >
-                {activeTab === 'home' ? 'View all' : 'Back to all'} <ArrowRight size={14} />
+                View all <ArrowRight size={14} />
               </button>
             </div>
 
@@ -1021,6 +1181,8 @@ export function DashboardPage() {
               )}
             </div>
           </section>
+          </>
+          )}
         </div>
       </main>
 

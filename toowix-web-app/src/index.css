@@ -96,6 +96,153 @@ input {
 }
 
 /* ==============================================================================
+   Non-home dashboard tabs: dark-mode compatibility for legacy inline UI styles.
+   The dashboard applies .dashboard-tab-panel only outside the Home page.
+   ============================================================================== */
+.dark .dashboard-tab-panel {
+  color: var(--color-text-primary);
+}
+
+.dark .dashboard-tab-panel input,
+.dark .dashboard-tab-panel select,
+.dark .dashboard-tab-panel textarea {
+  color: var(--color-text-primary) !important;
+  background-color: var(--color-input-bg) !important;
+  border-color: var(--color-input-border) !important;
+  color-scheme: dark;
+}
+
+.dark .dashboard-tab-panel input::placeholder,
+.dark .dashboard-tab-panel textarea::placeholder {
+  color: #64748B !important;
+  opacity: 1;
+}
+
+.dark .dashboard-tab-panel option {
+  color: var(--color-text-primary);
+  background: var(--color-input-bg);
+}
+
+.dark .dashboard-tab-panel table,
+.dark .dashboard-tab-panel thead,
+.dark .dashboard-tab-panel tbody,
+.dark .dashboard-tab-panel tr,
+.dark .dashboard-tab-panel td,
+.dark .dashboard-tab-panel th {
+  border-color: var(--color-border) !important;
+}
+
+.dark .dashboard-tab-panel thead,
+.dark .dashboard-tab-panel thead tr {
+  background-color: #0F172A !important;
+}
+
+.dark .dashboard-tab-panel tbody tr {
+  background-color: var(--color-surface) !important;
+}
+
+.dark .dashboard-tab-panel tbody tr:hover {
+  background-color: var(--color-surface-hover) !important;
+}
+
+/* White and pale surfaces become dark cards while active violet surfaces stay violet. */
+.dark .dashboard-tab-panel [style*="background-color: rgb(255, 255, 255)"],
+.dark .dashboard-tab-panel [style*="background: rgb(255, 255, 255)"] {
+  background-color: var(--color-surface) !important;
+}
+
+.dark .dashboard-tab-panel [style*="background-color: rgb(249, 250, 251)"],
+.dark .dashboard-tab-panel [style*="background: rgb(249, 250, 251)"],
+.dark .dashboard-tab-panel [style*="background-color: rgb(243, 244, 246)"],
+.dark .dashboard-tab-panel [style*="background: rgb(243, 244, 246)"],
+.dark .dashboard-tab-panel [style*="background-color: rgb(250, 250, 250)"],
+.dark .dashboard-tab-panel [style*="background: rgb(250, 250, 250)"],
+.dark .dashboard-tab-panel [style*="background-color: rgb(241, 245, 249)"],
+.dark .dashboard-tab-panel [style*="background: rgb(241, 245, 249)"] {
+  background-color: var(--color-surface-hover) !important;
+}
+
+.dark .dashboard-tab-panel [style*="background-color: rgb(238, 242, 255)"],
+.dark .dashboard-tab-panel [style*="background: rgb(238, 242, 255)"],
+.dark .dashboard-tab-panel [style*="background-color: rgb(245, 247, 255)"],
+.dark .dashboard-tab-panel [style*="background: rgb(245, 247, 255)"] {
+  background-color: var(--color-primary-light) !important;
+}
+
+.dark .dashboard-tab-panel [style*="background-color: rgb(240, 253, 244)"] {
+  background-color: rgba(34, 197, 94, 0.13) !important;
+}
+
+.dark .dashboard-tab-panel [style*="background-color: rgb(255, 251, 235)"] {
+  background-color: rgba(245, 158, 11, 0.13) !important;
+}
+
+.dark .dashboard-tab-panel [style*="background-color: rgb(254, 242, 242)"] {
+  background-color: rgba(239, 68, 68, 0.13) !important;
+}
+
+/* Convert hard-coded light-mode text colors without changing accents/status colors. */
+.dark .dashboard-tab-panel [style^="color: rgb(20, 27, 43)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(20, 27, 43)"],
+.dark .dashboard-tab-panel [style^="color: rgb(17, 24, 39)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(17, 24, 39)"] {
+  color: var(--color-text-primary) !important;
+}
+
+.dark .dashboard-tab-panel [style^="color: rgb(55, 65, 81)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(55, 65, 81)"],
+.dark .dashboard-tab-panel [style^="color: rgb(75, 85, 99)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(75, 85, 99)"],
+.dark .dashboard-tab-panel [style^="color: rgb(82, 96, 121)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(82, 96, 121)"],
+.dark .dashboard-tab-panel [style^="color: rgb(71, 85, 105)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(71, 85, 105)"] {
+  color: #CBD5E1 !important;
+}
+
+.dark .dashboard-tab-panel [style^="color: rgb(107, 114, 128)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(107, 114, 128)"],
+.dark .dashboard-tab-panel [style^="color: rgb(100, 116, 139)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(100, 116, 139)"],
+.dark .dashboard-tab-panel [style^="color: rgb(148, 163, 184)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(148, 163, 184)"],
+.dark .dashboard-tab-panel [style^="color: rgb(156, 163, 175)"],
+.dark .dashboard-tab-panel [style*="; color: rgb(156, 163, 175)"] {
+  color: #94A3B8 !important;
+}
+
+/* Replace light borders used by cards, rows, calendar cells and controls. */
+.dark .dashboard-tab-panel [style*="rgb(229, 231, 235)"],
+.dark .dashboard-tab-panel [style*="rgb(209, 213, 219)"] {
+  border-color: var(--color-input-border) !important;
+}
+
+/* Action menus render through a portal, so they need their own dark scope. */
+.dark .dashboard-action-menu {
+  color: var(--color-text-primary) !important;
+  background: var(--color-surface) !important;
+  border-color: var(--color-input-border) !important;
+  box-shadow: var(--shadow-lg) !important;
+}
+
+.dark .dashboard-action-menu button:not([data-destructive="true"]) {
+  color: #E2E8F0 !important;
+}
+
+.dark .dashboard-action-menu button:hover {
+  background: var(--color-surface-hover) !important;
+}
+
+.dark .dashboard-action-menu button[data-destructive="true"] {
+  color: #F87171 !important;
+  border-top-color: var(--color-input-border) !important;
+}
+
+.dark .dashboard-action-menu button[data-destructive="true"]:hover {
+  background: rgba(239, 68, 68, 0.13) !important;
+}
+
+/* ==============================================================================
    Responsive Auth Floating Cards (Clean Centered Floating Modal)
    ============================================================================== */
 .auth-page-container {

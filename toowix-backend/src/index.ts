@@ -41,9 +41,15 @@ app.get('/health', async (_req: Request, res: Response) => {
 // API Routes (Tue-BE-1 to Tue-BE-4)
 import authRoutes from './routes/auth.routes';
 import companyRoutes from './routes/company.routes';
+import meetingRoutes from './routes/meeting.routes';
+import recordingRoutes from './routes/recording.routes';
+import teamRoutes from './routes/team.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
+app.use('/api/meetings', meetingRoutes);
+app.use('/api/recordings', recordingRoutes);
+app.use('/api/team', teamRoutes);
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {

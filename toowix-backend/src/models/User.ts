@@ -29,6 +29,8 @@ export interface IUser {
   forcePasswordReset: boolean;
   oauthIdentities: IOAuthIdentity[];
   suspendedAt?: Date | null;
+  reportsTo?: Types.ObjectId | null;
+  lastActiveAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -132,6 +134,17 @@ const UserSchema = new Schema<IUserDocument>(
     suspendedAt: {
       type: Date,
       default: null,
+    },
+    reportsTo: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    lastActiveAt: {
+      type: Date,
+      default: null,
+      index: true,
     },
   },
   {

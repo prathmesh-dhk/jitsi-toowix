@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { Company } from '../models/Company';
 import { User } from '../models/User';
 import { sendEmailAsync } from '../email/sender';
+import { getFirebaseAuth } from '../config/firebase';
 
 /**
  * POST /api/companies/register
@@ -84,6 +85,16 @@ export const registerCompanyHandler = async (req: AuthenticatedRequest, res: Res
     user.companyId = company._id;
     user.role = 'COMPANY_ADMIN';
     await user.save();
+
+    // 5. Disable the Firebase account until Super Admin approves the company.
+    // A disabled account cannot authenticate at all (Firebase itself rejects it),
+    // so this is a real block, not just a status flag.
+    try {
+      const auth = getFirebaseAuth();
+      await auth.updateUser(firebaseUid, { disabled: true });
+    } catch (disableError: any) {
+      console.warn(`[Company Registration] Could not disable Firebase account for ${user.email}:`, disableError.message);
+    }
 
     console.log(`[Company Registration] Company "${company.name}" registered (PENDING approval) by ${user.email}`);
 

@@ -7,6 +7,7 @@ import { getFirebaseAuth } from '../config/firebase';
 
 export type LoginGateReasonCode =
   | 'INVALID_CREDENTIALS'
+  | 'NOT_REGISTERED'
   | 'UNVERIFIED'
   | 'PENDING'
   | 'REJECTED'
@@ -43,19 +44,14 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
       }
     }
 
-    // Auto-provision if user exists in Firebase Auth
+    // No Mongo record for this Firebase account -- do NOT auto-provision.
+    // The user must go through /api/auth/signup (+ company registration) first.
     if (!user) {
-      const email = (req.firebaseEmail || '').toLowerCase();
-      const fullName = email ? email.split('@')[0] : 'User';
-      user = new User({
-        firebaseUid,
-        email,
-        fullName,
-        role: 'MEMBER',
-        status: 'ACTIVE',
-        emailVerifiedAt: emailVerified ? new Date() : null,
+      res.status(404).json({
+        status: 'NOT_REGISTERED',
+        error: 'No account found for this sign-in. Please create an account first, then sign in.',
       });
-      await user.save();
+      return;
     }
 
     // 2. Check Email Verification
@@ -122,6 +118,8 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         console.warn('[Login Gate] Could not set custom claims:', claimsError.message);
       }
 
+      user.lastActiveAt = new Date();
+      await user.save();
       res.json({
         status: 'ACTIVE',
         user,
@@ -168,6 +166,8 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         },
       });
 
+      user.lastActiveAt = new Date();
+      await user.save();
       res.json({
         status: 'ACTIVE',
         user,
@@ -258,6 +258,8 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     console.log(`[Login Gate PASS] ${user.email} logged in successfully for company ${company.name}`);
 
+    user.lastActiveAt = new Date();
+    await user.save();
     res.json({
       status: 'ACTIVE',
       user,

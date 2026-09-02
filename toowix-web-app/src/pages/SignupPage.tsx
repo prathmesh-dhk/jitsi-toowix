@@ -18,9 +18,13 @@ const ARTWORK_URL = '/assets/signup-hero.png';
 
 export function SignupPage() {
   const { isDark, toggleTheme } = useTheme();
+  const inviteParams = new URLSearchParams(window.location.search);
+  const inviteId = inviteParams.get('invite');
+  const invitedEmail = inviteParams.get('email') || '';
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [email, setEmail] = useState(invitedEmail);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [agreedToTerms, setAgreedToTerms] = useState(false);
@@ -58,24 +62,25 @@ export function SignupPage() {
 
   // Sync New User Registration with Backend API
   const handleBackendSignup = async (idToken: string, name: string) => {
-    try {
-      const response = await fetch(`${BACKEND_URL}/api/auth/signup`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ name }),
-      });
+    const response = await fetch(`${BACKEND_URL}/api/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ fullName: name, inviteId }),
+    });
+    const data = await response.json();
+    if (!response.ok && response.status !== 409) throw new Error(data.error || 'Failed to initialize account in Toowix database.');
+    return data;
+  };
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to initialize account in Toowix database.');
-      }
-      return data;
-    } catch (err: any) {
-      console.warn('[Signup Backend Sync] Warning:', err);
-    }
+  const handleCompanyRegister = async (idToken: string, name: string) => {
+    const response = await fetch(`${BACKEND_URL}/api/companies/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ name }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to register company workspace.');
+    return data;
   };
 
   const handleEmailSignUp = async (e: React.FormEvent) => {
@@ -85,6 +90,11 @@ export function SignupPage() {
 
     if (!firstName.trim() || !lastName.trim()) {
       setErrorMessage('Please enter both your first and last name.');
+      return;
+    }
+
+    if (!inviteId && !companyName.trim()) {
+      setErrorMessage('Please enter your company name.');
       return;
     }
 
@@ -123,7 +133,11 @@ export function SignupPage() {
       const idToken = await userCredential.user.getIdToken();
       await handleBackendSignup(idToken, fullName);
 
-      setSuccessMessage('Account created successfully! Please verify your email before signing in.');
+      if (!inviteId) await handleCompanyRegister(idToken, companyName.trim());
+
+      setSuccessMessage(inviteId
+        ? 'Account created and added to your team. Please verify your email, then sign in.'
+        : 'Account created! Please verify your email, then sign in. Your company workspace is pending approval.');
       setTimeout(() => {
         navigate('/login');
       }, 2000);
@@ -147,9 +161,16 @@ export function SignupPage() {
     setErrorMessage(null);
     setIsLoading(true);
     try {
+      const googleCompanyName = inviteId ? '' : window.prompt('Enter your company name to finish signing up:');
+      if (!inviteId && (!googleCompanyName || !googleCompanyName.trim())) {
+        setErrorMessage('Company name is required to complete signup.');
+        setIsLoading(false);
+        return;
+      }
       const result = await signInWithPopup(auth, googleProvider);
       const idToken = await result.user.getIdToken();
       await handleBackendSignup(idToken, result.user.displayName || 'User');
+      if (!inviteId && googleCompanyName) await handleCompanyRegister(idToken, googleCompanyName.trim());
       navigate('/login');
     } catch (err: any) {
       console.error('[Google SSO Signup] Error:', err);
@@ -404,6 +425,22 @@ export function SignupPage() {
                 </div>
               </div>
 
+              {!inviteId && (
+                <div>
+                  <label htmlFor="company_name" style={{ display: 'block', fontSize: '13px', fontWeight: 500, lineHeight: '18px', color: isDark ? '#F9FAFB' : '#141B2B', marginBottom: '4px' }}>Company name</label>
+                  <input
+                    id="company_name"
+                    type="text"
+                    placeholder="Acme Inc."
+                    value={companyName}
+                    onChange={(event) => setCompanyName(event.target.value)}
+                    disabled={isLoading}
+                    required
+                    style={{ width: '100%', height: '40px', padding: '0 14px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, backgroundColor: isDark ? '#0F172A' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '14px', transition: 'all 0.15s ease' }}
+                  />
+                </div>
+              )}
+
               {/* Work Email */}
               <div>
                 <label
@@ -425,6 +462,7 @@ export function SignupPage() {
                   placeholder="jane@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  readOnly={Boolean(inviteId)}
                   disabled={isLoading}
                   required
                   style={{

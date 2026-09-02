@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { User } from '../models/User';
+import { TeamInvite } from '../models/TeamInvite';
 
 /**
  * POST /api/auth/signup
@@ -10,7 +11,7 @@ export const signupHandler = async (req: AuthenticatedRequest, res: Response): P
   const firebaseUid = req.firebaseUid;
   const email = req.firebaseEmail;
   const emailVerified = req.firebaseEmailVerified;
-  const { fullName, avatarUrl } = req.body;
+  const { fullName, avatarUrl, inviteId } = req.body;
 
   if (!firebaseUid || !email) {
     res.status(400).json({ error: 'Invalid authentication context' });
@@ -35,12 +36,22 @@ export const signupHandler = async (req: AuthenticatedRequest, res: Response): P
       return;
     }
 
+    const invitation = inviteId
+      ? await TeamInvite.findOne({ _id: inviteId, email: email.toLowerCase().trim(), expiresAt: { $gt: new Date() } })
+      : null;
+    if (inviteId && !invitation) {
+      res.status(400).json({ error: 'This team invitation is invalid, expired, or belongs to another email address' });
+      return;
+    }
+
     const newUser = await User.create({
       firebaseUid,
       email: email.toLowerCase().trim(),
       fullName: fullName.trim(),
       avatarUrl: avatarUrl || null,
-      role: 'MEMBER',
+      companyId: invitation?.companyId || null,
+      reportsTo: invitation?.reportsTo || null,
+      role: invitation?.role || 'MEMBER',
       status: 'ACTIVE',
       emailVerifiedAt: emailVerified ? new Date() : null,
       twoFactor: {
@@ -50,9 +61,12 @@ export const signupHandler = async (req: AuthenticatedRequest, res: Response): P
 
     console.log(`[Signup] User registered: ${newUser.email} (ID: ${newUser._id})`);
 
+    if (invitation) await invitation.deleteOne();
+
     res.status(201).json({
       message: 'Signup successful',
       user: newUser,
+      joinedFromInvite: Boolean(invitation),
     });
   } catch (error: any) {
     console.error('[Signup] Error during signup:', error.message);
