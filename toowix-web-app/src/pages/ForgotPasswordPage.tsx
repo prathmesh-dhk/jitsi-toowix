@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
+import { Mail, ArrowLeft, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -10,6 +11,7 @@ const TOOWIX_LOGO_URL = '/assets/toowix-logo.png';
 const ARTWORK_URL = '/assets/signup-hero.png';
 
 export function ForgotPasswordPage() {
+  const { isDark, toggleTheme } = useTheme();
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSent, setIsSent] = useState(false);
@@ -63,16 +65,27 @@ export function ForgotPasswordPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#F1F3FF', // surface-container-low
+        backgroundColor: isDark ? '#0B0F19' : '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         padding: '24px 16px',
         boxSizing: 'border-box',
       }}
     >
       {/* Floating Card Container */}
-      <main className="auth-card-container">
+      <main
+        className="auth-card-container"
+        style={{
+          backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+        }}
+      >
         {/* Left Column: Form Section */}
-        <section className="auth-form-column">
+        <section
+          className="auth-form-column"
+          style={{
+            backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          }}
+        >
           <div
             className="auth-form-wrapper"
             style={{
@@ -86,24 +99,46 @@ export function ForgotPasswordPage() {
               margin: '0 auto',
             }}
           >
-            {/* Brand Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '32px' }}>
-              <img
-                alt="Toowix Logo"
-                src={TOOWIX_LOGO_URL}
-                style={{ width: '36px', height: '36px', objectFit: 'contain' }}
-              />
-              <span
+            {/* Brand Header & Theme Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <img
+                  alt="Toowix Logo"
+                  src={TOOWIX_LOGO_URL}
+                  style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+                />
+                <span
+                  style={{
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    color: isDark ? '#F9FAFB' : '#141B2B',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Toowix Meet
+                </span>
+              </div>
+
+              {/* Theme Toggle Button */}
+              <button
+                onClick={toggleTheme}
                 style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '20px',
-                  fontWeight: 600,
-                  color: '#141B2B',
-                  letterSpacing: '-0.01em',
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '50%',
+                  backgroundColor: isDark ? '#1E293B' : '#F3F4F6',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: isDark ? '#FBBF24' : '#4B5563',
+                  cursor: 'pointer',
                 }}
+                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               >
-                Toowix Meet
-              </span>
+                {isDark ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
             </div>
 
             {!isSent ? (
@@ -116,7 +151,7 @@ export function ForgotPasswordPage() {
                       fontWeight: 700,
                       lineHeight: '34px',
                       letterSpacing: '-0.02em',
-                      color: '#141B2B',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       marginBottom: '8px',
                     }}
                   >
@@ -127,7 +162,7 @@ export function ForgotPasswordPage() {
                       fontSize: '14px',
                       fontWeight: 400,
                       lineHeight: '20px',
-                      color: '#777587',
+                      color: isDark ? '#9CA3AF' : '#777587',
                     }}
                   >
                     No worries. Enter your email and we'll send you a reset link.
@@ -143,9 +178,9 @@ export function ForgotPasswordPage() {
                       padding: '12px 14px',
                       borderRadius: '8px',
                       marginBottom: '20px',
-                      backgroundColor: '#FEF2F2',
-                      border: '1px solid #FECACA',
-                      color: '#991B1B',
+                      backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2',
+                      border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
+                      color: isDark ? '#F87171' : '#991B1B',
                       fontSize: '13px',
                       lineHeight: '18px',
                     }}
@@ -164,7 +199,7 @@ export function ForgotPasswordPage() {
                         fontSize: '13px',
                         fontWeight: 500,
                         lineHeight: '18px',
-                        color: '#141B2B',
+                        color: isDark ? '#F9FAFB' : '#141B2B',
                         marginBottom: '6px',
                       }}
                     >
@@ -183,9 +218,9 @@ export function ForgotPasswordPage() {
                         height: '44px',
                         padding: '0 16px',
                         borderRadius: '8px',
-                        border: '1px solid #D1D5DB',
-                        backgroundColor: '#FFFFFF',
-                        color: '#141B2B',
+                        border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                        backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                        color: isDark ? '#F9FAFB' : '#141B2B',
                         fontSize: '14px',
                         transition: 'all 0.15s ease',
                       }}
@@ -194,7 +229,7 @@ export function ForgotPasswordPage() {
                         e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                       }}
                       onBlur={(e) => {
-                        e.currentTarget.style.borderColor = '#D1D5DB';
+                        e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                         e.currentTarget.style.boxShadow = 'none';
                       }}
                     />
@@ -249,14 +284,14 @@ export function ForgotPasswordPage() {
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '6px',
-                      color: '#4F46E5',
+                      color: isDark ? '#818CF8' : '#4F46E5',
                       fontSize: '14px',
                       fontWeight: 500,
                       textDecoration: 'none',
                       cursor: 'pointer',
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
                   >
                     <ArrowLeft size={16} />
                     Back to Sign In
@@ -271,12 +306,12 @@ export function ForgotPasswordPage() {
                     width: '64px',
                     height: '64px',
                     borderRadius: '50%',
-                    backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                    backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : 'rgba(79, 70, 229, 0.1)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     margin: '0 auto 20px auto',
-                    color: '#4F46E5',
+                    color: isDark ? '#818CF8' : '#4F46E5',
                   }}
                 >
                   <Mail size={30} />
@@ -286,7 +321,7 @@ export function ForgotPasswordPage() {
                   style={{
                     fontSize: '24px',
                     fontWeight: 600,
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '10px',
                   }}
                 >
@@ -297,12 +332,12 @@ export function ForgotPasswordPage() {
                     fontSize: '14px',
                     fontWeight: 400,
                     lineHeight: '22px',
-                    color: '#777587',
+                    color: isDark ? '#9CA3AF' : '#777587',
                     marginBottom: '28px',
                   }}
                 >
                   We sent a password reset link to<br />
-                  <strong style={{ color: '#141B2B', fontWeight: 600 }}>{email}</strong>
+                  <strong style={{ color: isDark ? '#F9FAFB' : '#141B2B', fontWeight: 600 }}>{email}</strong>
                 </p>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -313,15 +348,15 @@ export function ForgotPasswordPage() {
                       width: '100%',
                       height: '44px',
                       backgroundColor: 'transparent',
-                      border: '1px solid #4F46E5',
-                      color: '#4F46E5',
+                      border: `1px solid ${isDark ? '#818CF8' : '#4F46E5'}`,
+                      color: isDark ? '#818CF8' : '#4F46E5',
                       fontSize: '14px',
                       fontWeight: 500,
                       borderRadius: '8px',
                       cursor: 'pointer',
                       transition: 'background-color 0.15s ease',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(79, 70, 229, 0.05)')}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(79, 70, 229, 0.05)')}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
                     Resend email
@@ -338,7 +373,7 @@ export function ForgotPasswordPage() {
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '6px',
-                        color: '#4F46E5',
+                        color: isDark ? '#818CF8' : '#4F46E5',
                         fontSize: '14px',
                         fontWeight: 500,
                         textDecoration: 'none',
@@ -346,7 +381,7 @@ export function ForgotPasswordPage() {
                         marginTop: '8px',
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-                      onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
                     >
                       <ArrowLeft size={16} />
                       Back to Sign In
@@ -359,7 +394,7 @@ export function ForgotPasswordPage() {
 
           {/* Footer Copyright */}
           <div style={{ paddingBottom: '20px', textAlign: 'center' }}>
-            <p style={{ fontSize: '12px', color: '#777587' }}>
+            <p style={{ fontSize: '12px', color: isDark ? '#6B7280' : '#777587' }}>
               &copy; 2026 Toowix. ALL RIGHTS RESERVED.
             </p>
           </div>

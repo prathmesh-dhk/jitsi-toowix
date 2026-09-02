@@ -261,165 +261,31 @@ function HomePage() {
   );
 }
 
-function MeetingRoomPage() {
-  const roomId = window.location.pathname.split('/').pop() || 'lobby';
-  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.toowix.com';
-
-  const queryParams = new URLSearchParams(window.location.search);
-  const jwtToken = queryParams.get('jwt');
-
-  // Decode JWT payload safely if provided
-  let tokenUser: { name?: string; email?: string; avatar?: string } | null = null;
-  let isModerator = false;
-
-  if (jwtToken) {
-    try {
-      const payloadPart = jwtToken.split('.')[1];
-      if (payloadPart) {
-        const decodedStr = atob(payloadPart.replace(/-/g, '+').replace(/_/g, '/'));
-        const decoded = JSON.parse(decodedStr);
-        tokenUser = decoded.context?.user || null;
-        isModerator = Boolean(decoded.context?.features?.moderator);
-      }
-    } catch (err) {
-      console.warn('[MeetingRoomPage] Failed to parse JWT payload client-side:', err);
-    }
-  }
-
-  const iframeSrc = jwtToken
-    ? `https://${jitsiDomain}/${roomId}?jwt=${encodeURIComponent(jwtToken)}`
-    : `https://${jitsiDomain}/${roomId}`;
-
-  return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#141B2B' }}>
-      <div
-        style={{
-          height: '56px',
-          backgroundColor: '#0E131F',
-          color: '#FFFFFF',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 24px',
-          borderBottom: '1px solid #232B3E',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontWeight: 600, fontSize: '15px' }}>
-            Toowix Meet: <span style={{ color: '#3A86CA' }}>{roomId}</span>
-          </span>
-
-          {isModerator && (
-            <span
-              style={{
-                backgroundColor: '#2778BC',
-                color: '#FFFFFF',
-                fontSize: '11px',
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: '12px',
-                letterSpacing: '0.5px',
-                textTransform: 'uppercase',
-              }}
-            >
-              Host / Moderator
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          {tokenUser && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              {tokenUser.avatar ? (
-                <img
-                  src={tokenUser.avatar}
-                  alt={tokenUser.name || 'User'}
-                  style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid #3A86CA' }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: '30px',
-                    height: '30px',
-                    borderRadius: '50%',
-                    backgroundColor: '#3A86CA',
-                    color: '#fff',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                  }}
-                >
-                  {(tokenUser.name || 'U').charAt(0).toUpperCase()}
-                </div>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, lineHeight: 1.2 }}>
-                  {tokenUser.name || 'Participant'}
-                </span>
-                {tokenUser.email && (
-                  <span style={{ fontSize: '11px', color: '#9CCAFF', lineHeight: 1.2 }}>
-                    {tokenUser.email}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          <Link
-            to="/"
-            style={{
-              color: '#9CCAFF',
-              fontSize: '13px',
-              fontWeight: 500,
-              padding: '6px 12px',
-              borderRadius: '6px',
-              backgroundColor: 'rgba(255,255,255,0.05)',
-            }}
-          >
-            &larr; Exit Meeting
-          </Link>
-        </div>
-      </div>
-
-      <iframe
-        src={iframeSrc}
-        allow="camera; microphone; display-capture; autoplay; clipboard-write; fullscreen"
-        style={{
-          width: '100%',
-          flex: 1,
-          border: 'none',
-        }}
-        title="Toowix Meeting Room"
-      />
-    </div>
-  );
-}
-
-
-
+import { MeetingRoomPage } from './pages/MeetingRoomPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { EmailVerificationPage } from './pages/EmailVerificationPage';
+import { ThemeProvider } from './lib/theme';
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/home" element={<HomePage />} />
-        <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/signin" element={<LoginPage />} />
-        <Route path="/signup" element={<SignupPage />} />
-        <Route path="/register" element={<SignupPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/verify-email" element={<EmailVerificationPage />} />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/home" element={<HomePage />} />
+          <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signin" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/register" element={<SignupPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/verify-email" element={<EmailVerificationPage />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }

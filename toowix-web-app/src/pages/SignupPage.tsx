@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Sun, Moon } from 'lucide-react';
 import {
   createUserWithEmailAndPassword,
   updateProfile,
@@ -8,6 +8,7 @@ import {
   signInWithPopup,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
+import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -16,6 +17,7 @@ const TOOWIX_LOGO_URL = '/assets/toowix-logo.png';
 const ARTWORK_URL = '/assets/signup-hero.png';
 
 export function SignupPage() {
+  const { isDark, toggleTheme } = useTheme();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -165,16 +167,27 @@ export function SignupPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#F1F3FF', // surface-container-low
+        backgroundColor: isDark ? '#0B0F19' : '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         padding: '24px 16px',
         boxSizing: 'border-box',
       }}
     >
       {/* Floating Card Container */}
-      <main className="auth-card-container">
+      <main
+        className="auth-card-container"
+        style={{
+          backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+        }}
+      >
         {/* Left Column: Form Area */}
-        <section className="auth-form-column">
+        <section
+          className="auth-form-column"
+          style={{
+            backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          }}
+        >
           <div
             className="auth-form-wrapper"
             style={{
@@ -188,24 +201,46 @@ export function SignupPage() {
               margin: '0 auto',
             }}
           >
-            {/* Brand Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-              <img
-                alt="Toowix Logo"
-                src={TOOWIX_LOGO_URL}
-                style={{ width: '36px', height: '36px', objectFit: 'contain' }}
-              />
-              <span
+            {/* Brand Header & Theme Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <img
+                  alt="Toowix Logo"
+                  src={TOOWIX_LOGO_URL}
+                  style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+                />
+                <span
+                  style={{
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    color: isDark ? '#F9FAFB' : '#141B2B',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Toowix Meet
+                </span>
+              </div>
+
+              {/* Theme Toggle Button */}
+              <button
+                onClick={toggleTheme}
                 style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '20px',
-                  fontWeight: 600,
-                  color: '#141B2B',
-                  letterSpacing: '-0.01em',
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '50%',
+                  backgroundColor: isDark ? '#1E293B' : '#F3F4F6',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: isDark ? '#FBBF24' : '#4B5563',
+                  cursor: 'pointer',
                 }}
+                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               >
-                Toowix Meet
-              </span>
+                {isDark ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
             </div>
 
             {/* Form Header */}
@@ -216,7 +251,7 @@ export function SignupPage() {
                   fontWeight: 700,
                   lineHeight: '34px',
                   letterSpacing: '-0.02em',
-                  color: '#141B2B',
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   marginBottom: '6px',
                 }}
               >
@@ -227,7 +262,7 @@ export function SignupPage() {
                   fontSize: '14px',
                   fontWeight: 400,
                   lineHeight: '20px',
-                  color: '#777587',
+                  color: isDark ? '#9CA3AF' : '#777587',
                 }}
               >
                 Start your journey with Toowix Meet. Set up your account to begin.
@@ -244,9 +279,9 @@ export function SignupPage() {
                   padding: '10px 14px',
                   borderRadius: '8px',
                   marginBottom: '14px',
-                  backgroundColor: '#FEF2F2',
-                  border: '1px solid #FECACA',
-                  color: '#991B1B',
+                  backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2',
+                  border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
+                  color: isDark ? '#F87171' : '#991B1B',
                   fontSize: '13px',
                   lineHeight: '18px',
                 }}
@@ -265,9 +300,9 @@ export function SignupPage() {
                   padding: '10px 14px',
                   borderRadius: '8px',
                   marginBottom: '14px',
-                  backgroundColor: '#ECFDF5',
-                  border: '1px solid #A7F3D0',
-                  color: '#065F46',
+                  backgroundColor: isDark ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5',
+                  border: `1px solid ${isDark ? 'rgba(16, 185, 129, 0.3)' : '#A7F3D0'}`,
+                  color: isDark ? '#34D399' : '#065F46',
                   fontSize: '13px',
                   lineHeight: '18px',
                 }}
@@ -289,7 +324,7 @@ export function SignupPage() {
                       fontSize: '13px',
                       fontWeight: 500,
                       lineHeight: '18px',
-                      color: '#141B2B',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       marginBottom: '4px',
                     }}
                   >
@@ -308,9 +343,9 @@ export function SignupPage() {
                       height: '40px',
                       padding: '0 14px',
                       borderRadius: '8px',
-                      border: '1px solid #D1D5DB',
-                      backgroundColor: '#FFFFFF',
-                      color: '#141B2B',
+                      border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                      backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       fontSize: '14px',
                       transition: 'all 0.15s ease',
                     }}
@@ -319,7 +354,7 @@ export function SignupPage() {
                       e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                     }}
                     onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#D1D5DB';
+                      e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                       e.currentTarget.style.boxShadow = 'none';
                     }}
                   />
@@ -332,7 +367,7 @@ export function SignupPage() {
                       fontSize: '13px',
                       fontWeight: 500,
                       lineHeight: '18px',
-                      color: '#141B2B',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       marginBottom: '4px',
                     }}
                   >
@@ -351,9 +386,9 @@ export function SignupPage() {
                       height: '40px',
                       padding: '0 14px',
                       borderRadius: '8px',
-                      border: '1px solid #D1D5DB',
-                      backgroundColor: '#FFFFFF',
-                      color: '#141B2B',
+                      border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                      backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       fontSize: '14px',
                       transition: 'all 0.15s ease',
                     }}
@@ -362,7 +397,7 @@ export function SignupPage() {
                       e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                     }}
                     onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#D1D5DB';
+                      e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                       e.currentTarget.style.boxShadow = 'none';
                     }}
                   />
@@ -378,7 +413,7 @@ export function SignupPage() {
                     fontSize: '13px',
                     fontWeight: 500,
                     lineHeight: '18px',
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '4px',
                   }}
                 >
@@ -397,9 +432,9 @@ export function SignupPage() {
                     height: '40px',
                     padding: '0 14px',
                     borderRadius: '8px',
-                    border: '1px solid #D1D5DB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#141B2B',
+                    border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     fontSize: '14px',
                     transition: 'all 0.15s ease',
                   }}
@@ -408,7 +443,7 @@ export function SignupPage() {
                     e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                   }}
                   onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#D1D5DB';
+                    e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 />
@@ -423,7 +458,7 @@ export function SignupPage() {
                     fontSize: '13px',
                     fontWeight: 500,
                     lineHeight: '18px',
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '4px',
                   }}
                 >
@@ -442,9 +477,9 @@ export function SignupPage() {
                     height: '40px',
                     padding: '0 14px',
                     borderRadius: '8px',
-                    border: '1px solid #D1D5DB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#141B2B',
+                    border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     fontSize: '14px',
                     transition: 'all 0.15s ease',
                   }}
@@ -453,7 +488,7 @@ export function SignupPage() {
                     e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                   }}
                   onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#D1D5DB';
+                    e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 />
@@ -469,7 +504,7 @@ export function SignupPage() {
                             height: '4px',
                             flex: 1,
                             borderRadius: '9999px',
-                            backgroundColor: level <= passwordStrength ? strengthColor : '#E5E7EB',
+                            backgroundColor: level <= passwordStrength ? strengthColor : (isDark ? '#334155' : '#E5E7EB'),
                             transition: 'background-color 0.2s',
                           }}
                         />
@@ -491,7 +526,7 @@ export function SignupPage() {
                     fontSize: '13px',
                     fontWeight: 500,
                     lineHeight: '18px',
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '4px',
                   }}
                 >
@@ -510,9 +545,9 @@ export function SignupPage() {
                     height: '40px',
                     padding: '0 14px',
                     borderRadius: '8px',
-                    border: '1px solid #D1D5DB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#141B2B',
+                    border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     fontSize: '14px',
                     transition: 'all 0.15s ease',
                   }}
@@ -521,7 +556,7 @@ export function SignupPage() {
                     e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                   }}
                   onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#D1D5DB';
+                    e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 />
@@ -542,13 +577,13 @@ export function SignupPage() {
                     accentColor: '#4F46E5',
                   }}
                 />
-                <label htmlFor="terms" style={{ fontSize: '13px', color: '#141B2B', cursor: 'pointer' }}>
+                <label htmlFor="terms" style={{ fontSize: '13px', color: isDark ? '#F9FAFB' : '#141B2B', cursor: 'pointer' }}>
                   I agree to the{' '}
-                  <a href="#" style={{ color: '#4F46E5', fontWeight: 500, textDecoration: 'none' }}>
+                  <a href="#" style={{ color: isDark ? '#818CF8' : '#4F46E5', fontWeight: 500, textDecoration: 'none' }}>
                     Terms of Service
                   </a>{' '}
                   and{' '}
-                  <a href="#" style={{ color: '#4F46E5', fontWeight: 500, textDecoration: 'none' }}>
+                  <a href="#" style={{ color: isDark ? '#818CF8' : '#4F46E5', fontWeight: 500, textDecoration: 'none' }}>
                     Privacy Policy
                   </a>
                 </label>
@@ -603,14 +638,14 @@ export function SignupPage() {
                 justifyContent: 'center',
               }}
             >
-              <div style={{ position: 'absolute', width: '100%', height: '1px', backgroundColor: '#E5E7EB' }} />
+              <div style={{ position: 'absolute', width: '100%', height: '1px', backgroundColor: isDark ? '#1E293B' : '#E5E7EB' }} />
               <span
                 style={{
                   position: 'relative',
-                  backgroundColor: '#FFFFFF',
+                  backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                   padding: '0 16px',
                   fontSize: '13px',
-                  color: '#777587',
+                  color: isDark ? '#9CA3AF' : '#777587',
                 }}
               >
                 Or
@@ -626,8 +661,8 @@ export function SignupPage() {
                 style={{
                   width: '100%',
                   height: '42px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
+                  backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                   borderRadius: '8px',
                   display: 'flex',
                   alignItems: 'center',
@@ -635,12 +670,12 @@ export function SignupPage() {
                   gap: '10px',
                   fontSize: '14px',
                   fontWeight: 500,
-                  color: '#141B2B',
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   cursor: isLoading ? 'not-allowed' : 'pointer',
                   transition: 'background-color 0.15s ease',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F1F3FF')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#334155' : '#F1F3FF')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#FFFFFF')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                   <path
@@ -669,7 +704,7 @@ export function SignupPage() {
               style={{
                 textAlign: 'center',
                 fontSize: '14px',
-                color: '#777587',
+                color: isDark ? '#9CA3AF' : '#777587',
               }}
             >
               Already have an account?{' '}
@@ -680,13 +715,13 @@ export function SignupPage() {
                   navigate('/login');
                 }}
                 style={{
-                  color: '#4F46E5',
+                  color: isDark ? '#818CF8' : '#4F46E5',
                   fontWeight: 500,
                   textDecoration: 'none',
                   cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
               >
                 Sign in
               </Link>
@@ -695,7 +730,7 @@ export function SignupPage() {
 
           {/* Copyright */}
           <div style={{ paddingBottom: '16px', textAlign: 'center' }}>
-            <p style={{ fontSize: '12px', color: '#777587' }}>
+            <p style={{ fontSize: '12px', color: isDark ? '#6B7280' : '#777587' }}>
               &copy; 2026 Toowix. ALL RIGHTS RESERVED.
             </p>
           </div>

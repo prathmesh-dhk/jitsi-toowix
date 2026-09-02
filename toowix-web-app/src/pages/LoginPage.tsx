@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
+import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -11,6 +12,7 @@ const TOOWIX_LOGO_URL = '/assets/toowix-logo.png';
 const ARTWORK_URL = '/assets/login-hero.png';
 
 export function LoginPage() {
+  const { isDark, toggleTheme } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -47,22 +49,10 @@ export function LoginPage() {
       }
 
       setStatusReason(data.status || 'ERROR');
-      if (data.status === 'PENDING') {
-        setErrorMessage('Your company registration has been submitted and is currently pending review by the Toowix Super Admin.');
-      } else if (data.status === 'REJECTED') {
-        setErrorMessage(`Your company registration was declined. Reason: ${data.rejectionReason || 'Contact support for details.'}`);
-      } else if (data.status === 'UNVERIFIED') {
-        setErrorMessage('Please verify your email address via the link sent to your inbox before signing in.');
-      } else if (data.status === 'SUSPENDED_USER') {
-        setErrorMessage('Your personal user account has been suspended by an administrator.');
-      } else if (data.status === 'SUSPENDED_COMPANY') {
-        setErrorMessage('Your company workspace has been suspended. Please contact your administrator.');
-      } else {
-        setErrorMessage(data.error || 'Authentication gate rejected the request.');
-      }
+      setErrorMessage(data.message || 'Access restricted. Please contact your company administrator.');
     } catch (err: any) {
-      console.error('[Login Gate] Connection error:', err);
-      setErrorMessage('Could not connect to Toowix Authentication server. Ensure backend is running.');
+      console.error('[LoginGate] Verification error:', err);
+      setErrorMessage('Server connection failed during gate verification. Please try again.');
     }
   };
 
@@ -70,25 +60,20 @@ export function LoginPage() {
     e.preventDefault();
     setErrorMessage(null);
     setStatusReason(null);
-
-    if (!email.trim() || !password.trim()) {
-      setErrorMessage('Please enter both your email address and password.');
-      return;
-    }
-
     setIsLoading(true);
+
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const idToken = await userCredential.user.getIdToken();
       await handleBackendLoginGate(idToken);
     } catch (err: any) {
-      console.error('[Firebase Auth] Sign in failed:', err);
+      console.error('[Email Auth] Sign in error:', err);
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        setErrorMessage('Invalid email or password. Please check your credentials and try again.');
+        setErrorMessage('Invalid email or password combination. Please try again.');
       } else if (err.code === 'auth/too-many-requests') {
-        setErrorMessage('Access to this account has been temporarily disabled due to many failed login attempts.');
+        setErrorMessage('Too many failed login attempts. Please reset your password or try again later.');
       } else {
-        setErrorMessage(err.message || 'Failed to authenticate with Firebase.');
+        setErrorMessage(err.message || 'Failed to authenticate. Please check your credentials.');
       }
     } finally {
       setIsLoading(false);
@@ -119,16 +104,27 @@ export function LoginPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#F1F3FF', // surface-container-low
+        backgroundColor: isDark ? '#0B0F19' : '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         padding: '24px 16px',
         boxSizing: 'border-box',
       }}
     >
       {/* Floating Card Container */}
-      <main className="auth-card-container">
+      <main
+        className="auth-card-container"
+        style={{
+          backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+        }}
+      >
         {/* Left Column: Form Area */}
-        <section className="auth-form-column">
+        <section
+          className="auth-form-column"
+          style={{
+            backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          }}
+        >
           <div
             className="auth-form-wrapper"
             style={{
@@ -142,47 +138,69 @@ export function LoginPage() {
               margin: '0 auto',
             }}
           >
-            {/* Brand Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '28px' }}>
-              <img
-                alt="Toowix Meet Logo"
-                src={TOOWIX_LOGO_URL}
-                style={{ width: '36px', height: '36px', objectFit: 'contain' }}
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                  const nextSibling = e.currentTarget.nextElementSibling;
-                  if (nextSibling) {
-                    (nextSibling as HTMLElement).style.display = 'flex';
-                  }
-                }}
-              />
-              <div
+            {/* Brand Header & Theme Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '28px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <img
+                  alt="Toowix Meet Logo"
+                  src={TOOWIX_LOGO_URL}
+                  style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    const nextSibling = e.currentTarget.nextElementSibling;
+                    if (nextSibling) {
+                      (nextSibling as HTMLElement).style.display = 'flex';
+                    }
+                  }}
+                />
+                <div
+                  style={{
+                    display: 'none',
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #2E72B2 0%, #4799E3 100%)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#FFFFFF',
+                    fontWeight: 700,
+                    fontSize: '20px',
+                  }}
+                >
+                  T
+                </div>
+                <span
+                  style={{
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    color: isDark ? '#F9FAFB' : '#141B2B',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Toowix Meet
+                </span>
+              </div>
+
+              {/* Theme Toggle Button */}
+              <button
+                onClick={toggleTheme}
                 style={{
-                  display: 'none',
                   width: '36px',
                   height: '36px',
-                  borderRadius: '8px',
-                  background: 'linear-gradient(135deg, #2E72B2 0%, #4799E3 100%)',
+                  borderRadius: '50%',
+                  backgroundColor: isDark ? '#1E293B' : '#F3F4F6',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                  display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#FFFFFF',
-                  fontWeight: 700,
-                  fontSize: '20px',
+                  color: isDark ? '#FBBF24' : '#4B5563',
+                  cursor: 'pointer',
                 }}
+                title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               >
-                T
-              </div>
-              <span
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: '20px',
-                  fontWeight: 600,
-                  color: '#141B2B',
-                  letterSpacing: '-0.01em',
-                }}
-              >
-                Toowix Meet
-              </span>
+                {isDark ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
             </div>
 
             {/* Form Header */}
@@ -193,7 +211,7 @@ export function LoginPage() {
                   fontWeight: 700,
                   lineHeight: '34px',
                   letterSpacing: '-0.02em',
-                  color: '#141B2B',
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   marginBottom: '8px',
                 }}
               >
@@ -204,7 +222,7 @@ export function LoginPage() {
                   fontSize: '14px',
                   fontWeight: 400,
                   lineHeight: '20px',
-                  color: '#777587',
+                  color: isDark ? '#9CA3AF' : '#777587',
                 }}
               >
                 Today is a new day. It's your day. You shape it. Sign in to start managing your meetings.
@@ -221,9 +239,9 @@ export function LoginPage() {
                   padding: '12px 14px',
                   borderRadius: '8px',
                   marginBottom: '18px',
-                  backgroundColor: statusReason === 'PENDING' ? '#FFFBEB' : '#FEF2F2',
-                  border: `1px solid ${statusReason === 'PENDING' ? '#FDE68A' : '#FECACA'}`,
-                  color: statusReason === 'PENDING' ? '#92400E' : '#991B1B',
+                  backgroundColor: statusReason === 'PENDING' ? (isDark ? 'rgba(245, 158, 11, 0.15)' : '#FFFBEB') : (isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2'),
+                  border: `1px solid ${statusReason === 'PENDING' ? (isDark ? 'rgba(245, 158, 11, 0.3)' : '#FDE68A') : (isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA')}`,
+                  color: statusReason === 'PENDING' ? (isDark ? '#FBBF24' : '#92400E') : (isDark ? '#F87171' : '#991B1B'),
                   fontSize: '13px',
                   lineHeight: '18px',
                 }}
@@ -244,7 +262,7 @@ export function LoginPage() {
                     fontSize: '13px',
                     fontWeight: 500,
                     lineHeight: '18px',
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '6px',
                   }}
                 >
@@ -263,9 +281,9 @@ export function LoginPage() {
                     height: '44px',
                     padding: '0 16px',
                     borderRadius: '8px',
-                    border: '1px solid #D1D5DB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#141B2B',
+                    border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     fontSize: '14px',
                     transition: 'all 0.15s ease',
                   }}
@@ -274,7 +292,7 @@ export function LoginPage() {
                     e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                   }}
                   onBlur={(e) => {
-                    e.currentTarget.style.borderColor = '#D1D5DB';
+                    e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                     e.currentTarget.style.boxShadow = 'none';
                   }}
                 />
@@ -289,7 +307,7 @@ export function LoginPage() {
                     fontSize: '13px',
                     fontWeight: 500,
                     lineHeight: '18px',
-                    color: '#141B2B',
+                    color: isDark ? '#F9FAFB' : '#141B2B',
                     marginBottom: '6px',
                   }}
                 >
@@ -309,9 +327,9 @@ export function LoginPage() {
                       height: '44px',
                       padding: '0 44px 0 16px',
                       borderRadius: '8px',
-                      border: '1px solid #D1D5DB',
-                      backgroundColor: '#FFFFFF',
-                      color: '#141B2B',
+                      border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                      backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
                       fontSize: '14px',
                       transition: 'all 0.15s ease',
                     }}
@@ -320,7 +338,7 @@ export function LoginPage() {
                       e.currentTarget.style.boxShadow = '0 0 0 4px rgba(79, 70, 229, 0.1)';
                     }}
                     onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#D1D5DB';
+                      e.currentTarget.style.borderColor = isDark ? '#334155' : '#D1D5DB';
                       e.currentTarget.style.boxShadow = 'none';
                     }}
                   />
@@ -335,7 +353,7 @@ export function LoginPage() {
                       transform: 'translateY(-50%)',
                       background: 'transparent',
                       border: 'none',
-                      color: '#777587',
+                      color: isDark ? '#9CA3AF' : '#777587',
                       cursor: 'pointer',
                       display: 'flex',
                       alignItems: 'center',
@@ -351,11 +369,11 @@ export function LoginPage() {
                     style={{
                       fontSize: '13px',
                       fontWeight: 500,
-                      color: '#4F46E5',
+                      color: isDark ? '#818CF8' : '#4F46E5',
                       textDecoration: 'none',
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
                   >
                     Forgot Password?
                   </Link>
@@ -411,14 +429,14 @@ export function LoginPage() {
                 justifyContent: 'center',
               }}
             >
-              <div style={{ position: 'absolute', width: '100%', height: '1px', backgroundColor: '#E5E7EB' }} />
+              <div style={{ position: 'absolute', width: '100%', height: '1px', backgroundColor: isDark ? '#1E293B' : '#E5E7EB' }} />
               <span
                 style={{
                   position: 'relative',
-                  backgroundColor: '#FFFFFF',
+                  backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                   padding: '0 16px',
                   fontSize: '14px',
-                  color: '#777587',
+                  color: isDark ? '#9CA3AF' : '#777587',
                 }}
               >
                 Or
@@ -434,8 +452,8 @@ export function LoginPage() {
                 style={{
                   width: '100%',
                   height: '44px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
+                  backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                   borderRadius: '8px',
                   display: 'flex',
                   alignItems: 'center',
@@ -443,12 +461,12 @@ export function LoginPage() {
                   gap: '12px',
                   fontSize: '14px',
                   fontWeight: 500,
-                  color: '#141B2B',
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   cursor: isLoading ? 'not-allowed' : 'pointer',
                   transition: 'background-color 0.15s ease',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F1F3FF')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#334155' : '#F1F3FF')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#FFFFFF')}
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                   <path
@@ -478,7 +496,7 @@ export function LoginPage() {
                 marginTop: '20px',
                 textAlign: 'center',
                 fontSize: '14px',
-                color: '#777587',
+                color: isDark ? '#9CA3AF' : '#777587',
               }}
             >
               Don't you have an account?{' '}
@@ -489,13 +507,13 @@ export function LoginPage() {
                   navigate('/signup');
                 }}
                 style={{
-                  color: '#4F46E5',
+                  color: isDark ? '#818CF8' : '#4F46E5',
                   fontWeight: 500,
                   textDecoration: 'none',
                   cursor: 'pointer',
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-                onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
               >
                 Sign up
               </Link>
@@ -504,7 +522,7 @@ export function LoginPage() {
 
           {/* Copyright */}
           <div style={{ paddingBottom: '20px', textAlign: 'center' }}>
-            <p style={{ fontSize: '12px', color: '#777587' }}>
+            <p style={{ fontSize: '12px', color: isDark ? '#6B7280' : '#777587' }}>
               &copy; 2026 Toowix. ALL RIGHTS RESERVED.
             </p>
           </div>

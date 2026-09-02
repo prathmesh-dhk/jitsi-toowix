@@ -22,10 +22,13 @@ import {
   Check,
   CalendarPlus,
   Link as LinkIcon,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
+import { useTheme } from '../lib/theme';
 
 interface IMeeting {
   id: string;
@@ -39,6 +42,7 @@ interface IMeeting {
 
 export function DashboardPage() {
   const navigate = useNavigate();
+  const { isDark, toggleTheme } = useTheme();
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -207,9 +211,15 @@ export function DashboardPage() {
       {/* =========================================================================
           SideNavBar (from Google Stitch)
           ========================================================================= */}
-      <aside className={`dashboard-sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}>
+      <aside
+        className={`dashboard-sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}
+        style={{
+          backgroundColor: isDark ? '#0E1526' : '#FFFFFF',
+          borderRight: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+        }}
+      >
         {/* Header / Logo Area */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 16px 8px', borderBottom: '1px solid #F3F4F6', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 16px 8px', borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <img
               src="/public/assets/toowix-logo.png"
@@ -241,8 +251,8 @@ export function DashboardPage() {
             >
               T
             </div>
-            <span style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B', letterSpacing: '-0.3px' }}>
-              Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
+            <span style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', letterSpacing: '-0.3px' }}>
+              Toowix <span style={{ color: isDark ? '#818CF8' : '#4F46E5' }}>Meet</span>
             </span>
           </div>
 
@@ -251,6 +261,7 @@ export function DashboardPage() {
             onClick={() => setSidebarOpen(false)}
             className="dashboard-sidebar-close-btn"
             title="Close menu"
+            style={{ color: isDark ? '#9CA3AF' : '#6B7280' }}
           >
             <X size={20} />
           </button>
@@ -258,187 +269,70 @@ export function DashboardPage() {
 
         {/* Navigation Items */}
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
-          <button
-            onClick={() => {
-              setActiveTab('home');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'home' ? 600 : 500,
-              color: activeTab === 'home' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'home' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'home' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Home size={18} />
-            <span>Home</span>
-          </button>
+          {[
+            { key: 'home', label: 'Home', icon: <Home size={18} />, action: () => { setActiveTab('home'); setSidebarOpen(false); } },
+            { key: 'schedule', label: 'Schedule', icon: <Calendar size={18} />, action: () => { setActiveTab('schedule'); setShowNewMeetingModal(true); setSidebarOpen(false); } },
+            { key: 'upcoming', label: 'Upcoming', icon: <Clock size={18} />, action: () => { setActiveTab('upcoming'); setSidebarOpen(false); } },
+            { key: 'past', label: 'Past Meetings', icon: <History size={18} />, action: () => { setActiveTab('past'); setSidebarOpen(false); } },
+            { key: 'recordings', label: 'Recordings', icon: <Video size={18} />, action: () => { setActiveTab('recordings'); setSidebarOpen(false); } },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={item.action}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: activeTab === item.key ? 600 : 500,
+                color: activeTab === item.key ? (isDark ? '#818CF8' : '#4F46E5') : (isDark ? '#9CA3AF' : '#4B5563'),
+                backgroundColor: activeTab === item.key ? (isDark ? 'rgba(99, 102, 241, 0.15)' : '#EEF2FF') : 'transparent',
+                borderLeft: activeTab === item.key ? `4px solid ${isDark ? '#818CF8' : '#4F46E5'}` : '4px solid transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
 
-          <button
-            onClick={() => {
-              setActiveTab('schedule');
-              setShowNewMeetingModal(true);
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'schedule' ? 600 : 500,
-              color: activeTab === 'schedule' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'schedule' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'schedule' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Calendar size={18} />
-            <span>Schedule</span>
-          </button>
+          <div style={{ height: '1px', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', margin: '8px 0' }} />
 
-          <button
-            onClick={() => {
-              setActiveTab('upcoming');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'upcoming' ? 600 : 500,
-              color: activeTab === 'upcoming' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'upcoming' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'upcoming' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Clock size={18} />
-            <span>Upcoming</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('past');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'past' ? 600 : 500,
-              color: activeTab === 'past' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'past' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'past' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <History size={18} />
-            <span>Past Meetings</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('recordings');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'recordings' ? 600 : 500,
-              color: activeTab === 'recordings' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'recordings' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'recordings' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Video size={18} />
-            <span>Recordings</span>
-          </button>
-
-          <div style={{ height: '1px', backgroundColor: '#F3F4F6', margin: '8px 0' }} />
-
-          <button
-            onClick={() => {
-              setActiveTab('people');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'people' ? 600 : 500,
-              color: activeTab === 'people' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'people' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'people' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Users size={18} />
-            <span>People</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('teams');
-              setSidebarOpen(false);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: activeTab === 'teams' ? 600 : 500,
-              color: activeTab === 'teams' ? '#4F46E5' : '#4B5563',
-              backgroundColor: activeTab === 'teams' ? '#EEF2FF' : 'transparent',
-              borderLeft: activeTab === 'teams' ? '4px solid #4F46E5' : '4px solid transparent',
-              cursor: 'pointer',
-              textAlign: 'left',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            <Building2 size={18} />
-            <span>Teams</span>
-          </button>
+          {[
+            { key: 'people', label: 'People', icon: <Users size={18} />, action: () => { setActiveTab('people'); setSidebarOpen(false); } },
+            { key: 'teams', label: 'Teams', icon: <Building2 size={18} />, action: () => { setActiveTab('teams'); setSidebarOpen(false); } },
+          ].map((item) => (
+            <button
+              key={item.key}
+              onClick={item.action}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontWeight: activeTab === item.key ? 600 : 500,
+                color: activeTab === item.key ? (isDark ? '#818CF8' : '#4F46E5') : (isDark ? '#9CA3AF' : '#4B5563'),
+                backgroundColor: activeTab === item.key ? (isDark ? 'rgba(99, 102, 241, 0.15)' : '#EEF2FF') : 'transparent',
+                borderLeft: activeTab === item.key ? `4px solid ${isDark ? '#818CF8' : '#4F46E5'}` : '4px solid transparent',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
         </nav>
 
         {/* Sidebar Bottom Footer */}
-        <div style={{ borderTop: '1px solid #F3F4F6', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ borderTop: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <button
             onClick={() => {
               navigate('/login');
@@ -451,7 +345,7 @@ export function DashboardPage() {
               borderRadius: '8px',
               fontSize: '14px',
               fontWeight: 500,
-              color: '#4B5563',
+              color: isDark ? '#9CA3AF' : '#4B5563',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               textAlign: 'left',
@@ -471,7 +365,7 @@ export function DashboardPage() {
               borderRadius: '8px',
               fontSize: '14px',
               fontWeight: 500,
-              color: '#DC2626',
+              color: '#EF4444',
               backgroundColor: 'transparent',
               cursor: 'pointer',
               textAlign: 'left',
@@ -527,8 +421,8 @@ export function DashboardPage() {
             )}
           </div>
 
-          {/* Right: Actions (Search Mobile, Notifications, User Profile) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Right: Actions (Search Mobile, Theme Toggle, Notifications, Help, User Profile) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {/* Mobile Search Toggle Button */}
             <button
               onClick={() => setShowMobileSearch(!showMobileSearch)}
@@ -536,18 +430,41 @@ export function DashboardPage() {
                 width: '36px',
                 height: '36px',
                 borderRadius: '50%',
-                backgroundColor: '#F9FAFB',
-                border: '1px solid #E5E7EB',
+                backgroundColor: isDark ? '#1E293B' : '#F9FAFB',
+                border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#4B5563',
+                color: isDark ? '#9CA3AF' : '#4B5563',
                 cursor: 'pointer',
               }}
               className="block sm:hidden"
               title="Search"
             >
               <Search size={16} />
+            </button>
+
+            {/* Theme Toggle Button (Beside Notification Bell on Left Side) */}
+            <button
+              onClick={toggleTheme}
+              style={{
+                position: 'relative',
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: isDark ? '#1E293B' : '#F9FAFB',
+                border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: isDark ? '#FBBF24' : '#4B5563',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+              }}
+              title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+              aria-label="Toggle dark/light mode"
+            >
+              {isDark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
 
             {/* Notification Bell */}
@@ -557,18 +474,18 @@ export function DashboardPage() {
                 width: '36px',
                 height: '36px',
                 borderRadius: '50%',
-                backgroundColor: '#F9FAFB',
-                border: '1px solid #E5E7EB',
+                backgroundColor: isDark ? '#1E293B' : '#F9FAFB',
+                border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#4B5563',
+                color: isDark ? '#9CA3AF' : '#4B5563',
                 cursor: 'pointer',
               }}
               title="Notifications"
             >
               <Bell size={17} />
-              <span style={{ position: 'absolute', top: '6px', right: '6px', width: '7px', height: '7px', backgroundColor: '#EF4444', borderRadius: '50%', border: '2px solid #FFFFFF' }} />
+              <span style={{ position: 'absolute', top: '6px', right: '6px', width: '7px', height: '7px', backgroundColor: '#EF4444', borderRadius: '50%', border: `2px solid ${isDark ? '#0E1526' : '#FFFFFF'}` }} />
             </button>
 
             {/* Help / Docs */}
@@ -577,12 +494,12 @@ export function DashboardPage() {
                 width: '36px',
                 height: '36px',
                 borderRadius: '50%',
-                backgroundColor: '#F9FAFB',
-                border: '1px solid #E5E7EB',
+                backgroundColor: isDark ? '#1E293B' : '#F9FAFB',
+                border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#4B5563',
+                color: isDark ? '#9CA3AF' : '#4B5563',
                 cursor: 'pointer',
               }}
               className="hidden sm:flex"
@@ -591,7 +508,7 @@ export function DashboardPage() {
               <HelpCircle size={17} />
             </button>
 
-            <div style={{ width: '1px', height: '22px', backgroundColor: '#E5E7EB', margin: '0 2px' }} className="hidden sm:block" />
+            <div style={{ width: '1px', height: '22px', backgroundColor: isDark ? '#1E293B' : '#E5E7EB', margin: '0 2px' }} className="hidden sm:block" />
 
             {/* User Profile Avatar with Dropdown */}
             <div style={{ position: 'relative' }}>
@@ -612,19 +529,19 @@ export function DashboardPage() {
                     width: '34px',
                     height: '34px',
                     borderRadius: '50%',
-                    backgroundColor: '#EEF2FF',
-                    color: '#4F46E5',
+                    backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',
+                    color: isDark ? '#818CF8' : '#4F46E5',
                     fontWeight: 700,
                     fontSize: '13px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    border: '1px solid #C7D2FE',
+                    border: `1px solid ${isDark ? 'rgba(99, 102, 241, 0.4)' : '#C7D2FE'}`,
                   }}
                 >
                   {displayName.charAt(0).toUpperCase()}
                 </div>
-                <ChevronDown size={14} style={{ color: '#6B7280' }} className="hidden sm:block" />
+                <ChevronDown size={14} style={{ color: isDark ? '#9CA3AF' : '#6B7280' }} className="hidden sm:block" />
               </button>
 
               {/* Profile Menu Popup */}
@@ -635,18 +552,37 @@ export function DashboardPage() {
                     right: 0,
                     top: '44px',
                     width: '220px',
-                    backgroundColor: '#FFFFFF',
+                    backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                     borderRadius: '12px',
-                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-                    border: '1px solid #E5E7EB',
+                    boxShadow: isDark ? '0 10px 25px -5px rgba(0, 0, 0, 0.5)' : '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                    border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
                     padding: '8px',
                     zIndex: 100,
                   }}
                 >
-                  <div style={{ padding: '8px 12px', borderBottom: '1px solid #F3F4F6', marginBottom: '4px' }}>
-                    <p style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#141B2B' }}>{currentUser?.name || 'User'}</p>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.email || 'user@toowix.com'}</p>
+                  <div style={{ padding: '8px 12px', borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, marginBottom: '4px' }}>
+                    <p style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>{currentUser?.name || 'User'}</p>
+                    <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentUser?.email || 'user@toowix.com'}</p>
                   </div>
+                  <button
+                    onClick={toggleTheme}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      color: isDark ? '#F9FAFB' : '#4B5563',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    {isDark ? <Sun size={16} color="#FBBF24" /> : <Moon size={16} />}
+                    <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>
+                  </button>
                   <button
                     onClick={handleSignOut}
                     style={{
@@ -674,9 +610,9 @@ export function DashboardPage() {
 
         {/* Mobile Expandable Search Bar */}
         {showMobileSearch && (
-          <div style={{ padding: '10px 16px', backgroundColor: '#FFFFFF', borderBottom: '1px solid #E5E7EB', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ padding: '10px 16px', backgroundColor: isDark ? '#0E1526' : '#FFFFFF', borderBottom: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`, display: 'flex', gap: '8px', alignItems: 'center' }}>
             <div style={{ position: 'relative', flex: 1 }}>
-              <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: isDark ? '#6B7280' : '#9CA3AF' }} />
               <input
                 type="text"
                 value={searchQuery}
@@ -688,8 +624,9 @@ export function DashboardPage() {
                   height: '36px',
                   paddingLeft: '36px',
                   paddingRight: '12px',
-                  backgroundColor: '#F3F4F6',
-                  border: '1px solid transparent',
+                  backgroundColor: isDark ? '#131B2E' : '#F3F4F6',
+                  border: `1px solid ${isDark ? '#1E293B' : 'transparent'}`,
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   borderRadius: '18px',
                   fontSize: '13px',
                   outline: 'none',
@@ -702,7 +639,7 @@ export function DashboardPage() {
                 setShowMobileSearch(false);
                 setSearchQuery('');
               }}
-              style={{ background: 'transparent', color: '#6B7280', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
+              style={{ background: 'transparent', color: isDark ? '#9CA3AF' : '#6B7280', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
             >
               Cancel
             </button>
@@ -716,10 +653,10 @@ export function DashboardPage() {
           {/* Greeting Section */}
           <div className="dashboard-greeting-row">
             <div>
-              <h1 style={{ fontSize: '26px', fontWeight: 800, color: '#141B2B', letterSpacing: '-0.5px', margin: '0 0 6px 0' }}>
+              <h1 style={{ fontSize: '26px', fontWeight: 800, color: isDark ? '#F9FAFB' : '#141B2B', letterSpacing: '-0.5px', margin: '0 0 6px 0' }}>
                 {getGreeting()}, {displayName}
               </h1>
-              <p style={{ fontSize: '14px', color: '#6B7280', margin: 0 }}>
+              <p style={{ fontSize: '14px', color: isDark ? '#9CA3AF' : '#6B7280', margin: 0 }}>
                 You have {allMeetings.length} active rooms and meetings scheduled today
               </p>
             </div>
@@ -731,9 +668,9 @@ export function DashboardPage() {
                 style={{
                   height: '42px',
                   padding: '0 18px',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #4F46E5',
-                  color: '#4F46E5',
+                  backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+                  border: `1px solid ${isDark ? '#6366F1' : '#4F46E5'}`,
+                  color: isDark ? '#818CF8' : '#4F46E5',
                   borderRadius: '8px',
                   fontSize: '14px',
                   fontWeight: 600,
@@ -743,8 +680,8 @@ export function DashboardPage() {
                   gap: '8px',
                   transition: 'background-color 0.15s ease',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EEF2FF')}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#131B2E' : '#FFFFFF')}
               >
                 Join with code
               </button>
@@ -778,9 +715,9 @@ export function DashboardPage() {
 
           {/* Search notice when filtering */}
           {searchQuery && (
-            <div style={{ marginBottom: '20px', padding: '10px 16px', backgroundColor: '#EEF2FF', borderRadius: '8px', color: '#4338CA', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ marginBottom: '20px', padding: '10px 16px', backgroundColor: isDark ? 'rgba(99, 102, 241, 0.15)' : '#EEF2FF', borderRadius: '8px', color: isDark ? '#818CF8' : '#4338CA', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: `1px solid ${isDark ? 'rgba(99, 102, 241, 0.3)' : '#C7D2FE'}` }}>
               <span>Filtering meetings for: <strong>"{searchQuery}"</strong> ({filteredMeetings.length} results)</span>
-              <button onClick={() => setSearchQuery('')} style={{ background: 'transparent', color: '#4F46E5', fontWeight: 600, cursor: 'pointer' }}>Clear</button>
+              <button onClick={() => setSearchQuery('')} style={{ background: 'transparent', color: isDark ? '#818CF8' : '#4F46E5', fontWeight: 600, cursor: 'pointer' }}>Clear</button>
             </div>
           )}
 
@@ -790,12 +727,12 @@ export function DashboardPage() {
           {(!searchQuery || 'Weekly Standup'.toLowerCase().includes(searchQuery.toLowerCase())) && (
             <section style={{ marginBottom: '36px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B', margin: 0 }}>
+                <h2 style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>
                   Upcoming Meetings
                 </h2>
                 <button
                   onClick={() => setActiveTab('upcoming')}
-                  style={{ background: 'transparent', color: '#4F46E5', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+                  style={{ background: 'transparent', color: isDark ? '#818CF8' : '#4F46E5', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
                 >
                   View all <ArrowRight size={14} />
                 </button>
@@ -805,10 +742,10 @@ export function DashboardPage() {
                 {/* LIVE Spotlight Hero Card (from Stitch) */}
                 <div
                   style={{
-                    backgroundColor: '#FFFFFF',
+                    backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                     borderRadius: '16px',
-                    border: '2px solid #4F46E5',
-                    boxShadow: '0 10px 25px -5px rgba(79, 70, 229, 0.08), 0 8px 10px -6px rgba(79, 70, 229, 0.04)',
+                    border: `2px solid ${isDark ? '#6366F1' : '#4F46E5'}`,
+                    boxShadow: isDark ? '0 10px 25px -5px rgba(0, 0, 0, 0.5)' : '0 10px 25px -5px rgba(79, 70, 229, 0.08), 0 8px 10px -6px rgba(79, 70, 229, 0.04)',
                     overflow: 'hidden',
                   }}
                 >
@@ -825,42 +762,42 @@ export function DashboardPage() {
                           gap: '6px',
                           fontSize: '12px',
                           fontWeight: 700,
-                          color: '#DC2626',
-                          backgroundColor: '#FEE2E2',
-                          border: '1px solid #FECACA',
+                          color: '#EF4444',
+                          backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+                          border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
                           padding: '4px 10px',
                           borderRadius: '20px',
                           marginBottom: '12px',
                         }}
                       >
-                        <span style={{ width: '8px', height: '8px', backgroundColor: '#DC2626', borderRadius: '50%' }} />
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
                         LIVE NOW
                       </span>
 
-                      <h3 style={{ fontSize: '22px', fontWeight: 700, color: '#141B2B', margin: '0 0 6px 0', letterSpacing: '-0.3px' }}>
+                      <h3 style={{ fontSize: '22px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 6px 0', letterSpacing: '-0.3px' }}>
                         Weekly Standup
                       </h3>
-                      <p style={{ fontSize: '14px', color: '#6B7280', margin: '0 0 14px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <p style={{ fontSize: '14px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 14px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <Clock size={16} /> 10:00 AM - 10:30 AM &bull; Room: weekly-standup
                       </p>
 
                       {/* Participant Bubble Stack */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#DBEAFE', color: '#1D4ED8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: '2px solid #FFFFFF' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE', color: isDark ? '#93C5FD' : '#1D4ED8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}` }}>
                             SJ
                           </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#E0E7FF', color: '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: '2px solid #FFFFFF', marginLeft: '-8px' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#312E81' : '#E0E7FF', color: isDark ? '#A5B4FC' : '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
                             JD
                           </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#FEF3C7', color: '#B45309', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: '2px solid #FFFFFF', marginLeft: '-8px' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#78350F' : '#FEF3C7', color: isDark ? '#FDE68A' : '#B45309', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
                             AK
                           </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#F3F4F6', color: '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: '2px solid #FFFFFF', marginLeft: '-8px' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', color: isDark ? '#9CA3AF' : '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
                             +4
                           </div>
                         </div>
-                        <span style={{ fontSize: '13px', color: '#4B5563' }}>
+                        <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>
                           Sarah, John, and 5 others in call
                         </span>
                       </div>
@@ -900,9 +837,9 @@ export function DashboardPage() {
                 <div className="dashboard-upcoming-grid">
                   <div
                     style={{
-                      backgroundColor: '#FFFFFF',
+                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                       borderRadius: '12px',
-                      border: '1px solid #E5E7EB',
+                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
                       padding: '16px 20px',
                       display: 'flex',
                       alignItems: 'center',
@@ -912,10 +849,10 @@ export function DashboardPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#3B82F6' }} />
                       <div>
-                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: '#141B2B' }}>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
                           Product Sync: Q3 Roadmap
                         </h4>
-                        <p style={{ margin: 0, fontSize: '12px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <Clock size={13} /> 1:30 PM - 2:30 PM
                         </p>
                       </div>
@@ -924,12 +861,12 @@ export function DashboardPage() {
                       onClick={() => navigate('/meet/product-sync-q3')}
                       style={{
                         padding: '6px 14px',
-                        backgroundColor: '#FFFFFF',
-                        border: '1px solid #E5E7EB',
+                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                         borderRadius: '6px',
                         fontSize: '13px',
                         fontWeight: 600,
-                        color: '#141B2B',
+                        color: isDark ? '#F9FAFB' : '#141B2B',
                         cursor: 'pointer',
                       }}
                     >
@@ -939,9 +876,9 @@ export function DashboardPage() {
 
                   <div
                     style={{
-                      backgroundColor: '#FFFFFF',
+                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                       borderRadius: '12px',
-                      border: '1px solid #E5E7EB',
+                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
                       padding: '16px 20px',
                       display: 'flex',
                       alignItems: 'center',
@@ -951,10 +888,10 @@ export function DashboardPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#10B981' }} />
                       <div>
-                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: '#141B2B' }}>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
                           Design Review
                         </h4>
-                        <p style={{ margin: 0, fontSize: '12px', color: '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <Clock size={13} /> 4:00 PM - 5:00 PM
                         </p>
                       </div>
@@ -963,12 +900,12 @@ export function DashboardPage() {
                       onClick={() => navigate('/meet/design-review')}
                       style={{
                         padding: '6px 14px',
-                        backgroundColor: '#FFFFFF',
-                        border: '1px solid #E5E7EB',
+                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
                         borderRadius: '6px',
                         fontSize: '13px',
                         fontWeight: 600,
-                        color: '#141B2B',
+                        color: isDark ? '#F9FAFB' : '#141B2B',
                         cursor: 'pointer',
                       }}
                     >
@@ -985,12 +922,12 @@ export function DashboardPage() {
               ======================================================================= */}
           <section>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B', margin: 0 }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>
                 {activeTab === 'upcoming' ? 'Upcoming Schedule' : activeTab === 'past' ? 'Past Meeting History' : 'Recent Meetings'}
               </h2>
               <button
                 onClick={() => setActiveTab('home')}
-                style={{ background: 'transparent', color: '#4F46E5', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+                style={{ background: 'transparent', color: isDark ? '#818CF8' : '#4F46E5', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
               >
                 {activeTab === 'home' ? 'View all' : 'Back to all'} <ArrowRight size={14} />
               </button>
@@ -998,51 +935,51 @@ export function DashboardPage() {
 
             <div
               style={{
-                backgroundColor: '#FFFFFF',
+                backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
                 borderRadius: '12px',
-                border: '1px solid #E5E7EB',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                boxShadow: isDark ? '0 1px 3px rgba(0,0,0,0.3)' : '0 1px 3px rgba(0,0,0,0.05)',
                 overflow: 'hidden',
               }}
             >
               {filteredMeetings.length === 0 ? (
-                <div style={{ padding: '40px 20px', textAlign: 'center', color: '#6B7280' }}>
-                  <p style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: '#141B2B' }}>No meetings found</p>
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: isDark ? '#9CA3AF' : '#6B7280' }}>
+                  <p style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>No meetings found</p>
                   <p style={{ margin: 0, fontSize: '13px' }}>Try searching with a different keyword or start a new meeting.</p>
                 </div>
               ) : (
                 <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
                     <thead>
-                      <tr style={{ backgroundColor: '#F9FAFB', borderBottom: '1px solid #E5E7EB' }}>
-                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Meeting Name</th>
-                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Date & Time</th>
-                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Duration</th>
-                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
-                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Actions</th>
+                      <tr style={{ backgroundColor: isDark ? '#0F172A' : '#F9FAFB', borderBottom: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}` }}>
+                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Meeting Name</th>
+                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Date & Time</th>
+                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Duration</th>
+                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
+                        <th style={{ padding: '12px 18px', fontSize: '11px', fontWeight: 600, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'right' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredMeetings.map((meeting) => (
                         <tr
                           key={meeting.id}
-                          style={{ borderBottom: '1px solid #F3F4F6', transition: 'background-color 0.15s ease' }}
-                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#F9FAFB')}
+                          style={{ borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, transition: 'background-color 0.15s ease' }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#F9FAFB')}
                           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                         >
                           <td style={{ padding: '14px 18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                              <div style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: '#EEF2FF', color: '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              <div style={{ width: '34px', height: '34px', borderRadius: '8px', backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF', color: isDark ? '#818CF8' : '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                                 <Video size={16} />
                               </div>
                               <div>
-                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#141B2B' }}>{meeting.name}</p>
-                                <p style={{ margin: 0, fontSize: '11px', color: '#6B7280' }}>Organized by {meeting.organizer}</p>
+                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>{meeting.name}</p>
+                                <p style={{ margin: 0, fontSize: '11px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Organized by {meeting.organizer}</p>
                               </div>
                             </div>
                           </td>
-                          <td style={{ padding: '14px 18px', fontSize: '13px', color: '#4B5563', whiteSpace: 'nowrap' }}>{meeting.dateTime}</td>
-                          <td style={{ padding: '14px 18px', fontSize: '13px', color: '#4B5563' }}>{meeting.duration}</td>
+                          <td style={{ padding: '14px 18px', fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563', whiteSpace: 'nowrap' }}>{meeting.dateTime}</td>
+                          <td style={{ padding: '14px 18px', fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>{meeting.duration}</td>
                           <td style={{ padding: '14px 18px' }}>
                             <span
                               style={{
@@ -1051,9 +988,9 @@ export function DashboardPage() {
                                 borderRadius: '20px',
                                 fontSize: '11px',
                                 fontWeight: 600,
-                                backgroundColor: meeting.type === 'Internal' ? '#EEF2FF' : meeting.type === 'Private' ? '#FEF3C7' : '#F3F4F6',
-                                color: meeting.type === 'Internal' ? '#4F46E5' : meeting.type === 'Private' ? '#D97706' : '#4B5563',
-                                border: `1px solid ${meeting.type === 'Internal' ? '#C7D2FE' : meeting.type === 'Private' ? '#FDE68A' : '#E5E7EB'}`,
+                                backgroundColor: meeting.type === 'Internal' ? (isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF') : meeting.type === 'Private' ? (isDark ? 'rgba(245, 158, 11, 0.2)' : '#FEF3C7') : (isDark ? '#1E293B' : '#F3F4F6'),
+                                color: meeting.type === 'Internal' ? (isDark ? '#818CF8' : '#4F46E5') : meeting.type === 'Private' ? (isDark ? '#FBBF24' : '#D97706') : (isDark ? '#9CA3AF' : '#4B5563'),
+                                border: `1px solid ${meeting.type === 'Internal' ? (isDark ? 'rgba(99, 102, 241, 0.4)' : '#C7D2FE') : meeting.type === 'Private' ? (isDark ? 'rgba(245, 158, 11, 0.4)' : '#FDE68A') : (isDark ? '#334155' : '#E5E7EB')}`,
                               }}
                             >
                               {meeting.type}
@@ -1064,12 +1001,12 @@ export function DashboardPage() {
                               onClick={() => navigate(`/meet/${meeting.roomSlug}`)}
                               style={{
                                 padding: '5px 12px',
-                                backgroundColor: '#EEF2FF',
-                                border: '1px solid #C7D2FE',
+                                backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',
+                                border: `1px solid ${isDark ? 'rgba(99, 102, 241, 0.4)' : '#C7D2FE'}`,
                                 borderRadius: '6px',
                                 fontSize: '12px',
                                 fontWeight: 600,
-                                color: '#4F46E5',
+                                color: isDark ? '#818CF8' : '#4F46E5',
                                 cursor: 'pointer',
                               }}
                             >
@@ -1095,32 +1032,33 @@ export function DashboardPage() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
             zIndex: 100,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             padding: '16px',
-            backdropFilter: 'blur(2px)',
+            backdropFilter: 'blur(4px)',
           }}
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
               borderRadius: '16px',
               maxWidth: '440px',
               width: '100%',
               padding: '24px',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: isDark ? '0 20px 25px -5px rgba(0, 0, 0, 0.6)' : '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              border: `1px solid ${isDark ? '#1E293B' : 'transparent'}`,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#141B2B' }}>Join a Meeting</h3>
-              <button onClick={() => setShowJoinModal(false)} style={{ background: 'transparent', color: '#9CA3AF', cursor: 'pointer' }}>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Join a Meeting</h3>
+              <button onClick={() => setShowJoinModal(false)} style={{ background: 'transparent', color: isDark ? '#9CA3AF' : '#6B7280', cursor: 'pointer' }}>
                 <X size={20} />
               </button>
             </div>
-            <p style={{ fontSize: '13px', color: '#6B7280', margin: '0 0 16px 0' }}>
+            <p style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 16px 0' }}>
               Enter the room ID, meeting code, or paste the meeting invite link.
             </p>
             <form onSubmit={handleJoinWithCode}>
@@ -1135,7 +1073,9 @@ export function DashboardPage() {
                   height: '42px',
                   padding: '0 14px',
                   borderRadius: '8px',
-                  border: '1px solid #D1D5DB',
+                  border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                  backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                  color: isDark ? '#F9FAFB' : '#141B2B',
                   fontSize: '14px',
                   marginBottom: '20px',
                   outline: 'none',
@@ -1149,9 +1089,9 @@ export function DashboardPage() {
                   style={{
                     padding: '8px 16px',
                     borderRadius: '8px',
-                    border: '1px solid #E5E7EB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#4B5563',
+                    border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                    backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                    color: isDark ? '#F9FAFB' : '#4B5563',
                     fontSize: '13px',
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -1188,33 +1128,34 @@ export function DashboardPage() {
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
             zIndex: 100,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             padding: '16px',
-            backdropFilter: 'blur(2px)',
+            backdropFilter: 'blur(4px)',
           }}
         >
           <div
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
               borderRadius: '16px',
               maxWidth: '460px',
               width: '100%',
               padding: '24px',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              boxShadow: isDark ? '0 20px 25px -5px rgba(0, 0, 0, 0.6)' : '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              border: `1px solid ${isDark ? '#1E293B' : 'transparent'}`,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#141B2B' }}>New Meeting</h3>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>New Meeting</h3>
               <button
                 onClick={() => {
                   setShowNewMeetingModal(false);
                   setCreatedRoomLink(null);
                 }}
-                style={{ background: 'transparent', color: '#9CA3AF', cursor: 'pointer' }}
+                style={{ background: 'transparent', color: isDark ? '#9CA3AF' : '#6B7280', cursor: 'pointer' }}
               >
                 <X size={20} />
               </button>
@@ -1231,21 +1172,21 @@ export function DashboardPage() {
                     gap: '14px',
                     padding: '14px',
                     borderRadius: '10px',
-                    border: '1px solid #E5E7EB',
-                    backgroundColor: '#FFFFFF',
+                    border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
                     cursor: 'pointer',
                     textAlign: 'left',
                     transition: 'all 0.15s ease',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EEF2FF')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#EEF2FF')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#0F172A' : '#FFFFFF')}
                 >
-                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: '#EEF2FF', color: '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF', color: isDark ? '#818CF8' : '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Video size={20} />
                   </div>
                   <div>
-                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: '#141B2B' }}>Start an instant meeting</h4>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#6B7280' }}>Launch an immediate video meeting in your browser</p>
+                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Start an instant meeting</h4>
+                    <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Launch an immediate video meeting in your browser</p>
                   </div>
                 </button>
 
@@ -1258,21 +1199,21 @@ export function DashboardPage() {
                     gap: '14px',
                     padding: '14px',
                     borderRadius: '10px',
-                    border: '1px solid #E5E7EB',
-                    backgroundColor: '#FFFFFF',
+                    border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
                     cursor: 'pointer',
                     textAlign: 'left',
                     transition: 'all 0.15s ease',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EEF2FF')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#EEF2FF')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#0F172A' : '#FFFFFF')}
                 >
-                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: '#ECFDF5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: isDark ? 'rgba(16, 185, 129, 0.2)' : '#ECFDF5', color: isDark ? '#34D399' : '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <LinkIcon size={20} />
                   </div>
                   <div>
-                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: '#141B2B' }}>Create a meeting for later</h4>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#6B7280' }}>Get a shareable link that you can send to people</p>
+                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Create a meeting for later</h4>
+                    <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Get a shareable link that you can send to people</p>
                   </div>
                 </button>
 
@@ -1287,31 +1228,31 @@ export function DashboardPage() {
                     gap: '14px',
                     padding: '14px',
                     borderRadius: '10px',
-                    border: '1px solid #E5E7EB',
-                    backgroundColor: '#FFFFFF',
+                    border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                    backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
                     cursor: 'pointer',
                     textAlign: 'left',
                     transition: 'all 0.15s ease',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#EEF2FF')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#FFFFFF')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#1E293B' : '#EEF2FF')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#0F172A' : '#FFFFFF')}
                 >
-                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: '#FEF3C7', color: '#D97706', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '8px', backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#FEF3C7', color: isDark ? '#FBBF24' : '#D97706', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <CalendarPlus size={20} />
                   </div>
                   <div>
-                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: '#141B2B' }}>Schedule in calendar</h4>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#6B7280' }}>Plan a recurring or upcoming scheduled meeting</p>
+                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Schedule in calendar</h4>
+                    <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Plan a recurring or upcoming scheduled meeting</p>
                   </div>
                 </button>
               </div>
             ) : (
               <div>
-                <p style={{ fontSize: '13px', color: '#6B7280', margin: '0 0 14px 0' }}>
+                <p style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 14px 0' }}>
                   Here is your meeting link. Copy and send it to people you want to meet with:
                 </p>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#F3F4F6', padding: '10px 14px', borderRadius: '8px', marginBottom: '20px' }}>
-                  <span style={{ fontSize: '13px', color: '#141B2B', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: isDark ? '#0F172A' : '#F3F4F6', border: `1px solid ${isDark ? '#1E293B' : 'transparent'}`, padding: '10px 14px', borderRadius: '8px', marginBottom: '20px' }}>
+                  <span style={{ fontSize: '13px', color: isDark ? '#F9FAFB' : '#141B2B', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {createdRoomLink}
                   </span>
                   <button
@@ -1343,9 +1284,9 @@ export function DashboardPage() {
                     style={{
                       padding: '8px 16px',
                       borderRadius: '8px',
-                      border: '1px solid #E5E7EB',
-                      backgroundColor: '#FFFFFF',
-                      color: '#4B5563',
+                      border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                      backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                      color: isDark ? '#F9FAFB' : '#4B5563',
                       fontSize: '13px',
                       fontWeight: 600,
                       cursor: 'pointer',

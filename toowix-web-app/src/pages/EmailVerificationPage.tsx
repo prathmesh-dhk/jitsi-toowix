@@ -1,14 +1,16 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Mail, CheckCircle2, AlertCircle, Loader2, ArrowLeft } from 'lucide-react';
+import { Mail, CheckCircle2, AlertCircle, Loader2, ArrowLeft, Sun, Moon } from 'lucide-react';
 import { sendEmailVerification } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const TOOWIX_LOGO_URL = '/assets/toowix-logo.png';
 
 export function EmailVerificationPage() {
+  const { isDark, toggleTheme } = useTheme();
   const [email, setEmail] = useState('your email address');
   const [isResending, setIsResending] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
@@ -103,7 +105,7 @@ export function EmailVerificationPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#F1F3FF', // surface-container-low
+        backgroundColor: isDark ? '#0B0F19' : '#F1F3FF', // surface-container-low
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         padding: '24px',
       }}
@@ -114,32 +116,57 @@ export function EmailVerificationPage() {
           flexDirection: 'column',
           width: '100%',
           maxWidth: '500px',
-          backgroundColor: '#FFFFFF',
+          backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+          border: `1px solid ${isDark ? '#1E293B' : 'rgba(0, 0, 0, 0.03)'}`,
           borderRadius: '32px',
-          boxShadow: '0 25px 50px -12px rgba(37, 38, 94, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.03)',
+          boxShadow: isDark
+            ? '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+            : '0 25px 50px -12px rgba(37, 38, 94, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.03)',
           overflow: 'hidden',
           padding: '48px 40px 32px 40px',
           textAlign: 'center',
         }}
       >
-        {/* Brand Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '32px' }}>
-          <img
-            alt="Toowix Logo"
-            src={TOOWIX_LOGO_URL}
-            style={{ width: '36px', height: '36px', objectFit: 'contain' }}
-          />
-          <span
+        {/* Brand Header & Theme Toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '32px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <img
+              alt="Toowix Logo"
+              src={TOOWIX_LOGO_URL}
+              style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+            />
+            <span
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: '20px',
+                fontWeight: 600,
+                color: isDark ? '#F9FAFB' : '#141B2B',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              Toowix Meet
+            </span>
+          </div>
+
+          {/* Theme Toggle Button */}
+          <button
+            onClick={toggleTheme}
             style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: '20px',
-              fontWeight: 600,
-              color: '#141B2B',
-              letterSpacing: '-0.01em',
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              backgroundColor: isDark ? '#1E293B' : '#F3F4F6',
+              border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: isDark ? '#FBBF24' : '#4B5563',
+              cursor: 'pointer',
             }}
+            title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           >
-            Toowix Meet
-          </span>
+            {isDark ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
         </div>
 
         {/* Circular Email Icon */}
@@ -148,12 +175,12 @@ export function EmailVerificationPage() {
             width: '64px',
             height: '64px',
             borderRadius: '50%',
-            backgroundColor: '#EEF2FF',
+            backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             margin: '0 auto 24px auto',
-            color: '#4F46E5',
+            color: isDark ? '#818CF8' : '#4F46E5',
           }}
         >
           <Mail size={30} />
@@ -166,7 +193,7 @@ export function EmailVerificationPage() {
             fontWeight: 700,
             lineHeight: '32px',
             letterSpacing: '-0.02em',
-            color: '#141B2B',
+            color: isDark ? '#F9FAFB' : '#141B2B',
             marginBottom: '10px',
           }}
         >
@@ -177,12 +204,12 @@ export function EmailVerificationPage() {
             fontSize: '14px',
             fontWeight: 400,
             lineHeight: '22px',
-            color: '#777587',
+            color: isDark ? '#9CA3AF' : '#777587',
             marginBottom: '24px',
           }}
         >
           We've sent a verification link to <br />
-          <strong style={{ color: '#141B2B', fontWeight: 600 }}>{email}</strong>
+          <strong style={{ color: isDark ? '#F9FAFB' : '#141B2B', fontWeight: 600 }}>{email}</strong>
         </p>
 
         {/* Feedback Alert */}
@@ -196,9 +223,9 @@ export function EmailVerificationPage() {
               padding: '10px 14px',
               borderRadius: '8px',
               marginBottom: '20px',
-              backgroundColor: feedback.type === 'success' ? '#ECFDF5' : '#FEF2F2',
-              border: `1px solid ${feedback.type === 'success' ? '#A7F3D0' : '#FECACA'}`,
-              color: feedback.type === 'success' ? '#065F46' : '#991B1B',
+              backgroundColor: feedback.type === 'success' ? (isDark ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5') : (isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEF2F2'),
+              border: `1px solid ${feedback.type === 'success' ? (isDark ? 'rgba(16, 185, 129, 0.3)' : '#A7F3D0') : (isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA')}`,
+              color: feedback.type === 'success' ? (isDark ? '#34D399' : '#065F46') : (isDark ? '#F87171' : '#991B1B'),
               fontSize: '13px',
               lineHeight: '18px',
             }}
@@ -253,7 +280,7 @@ export function EmailVerificationPage() {
             style={{
               background: 'none',
               border: 'none',
-              color: '#4F46E5',
+              color: isDark ? '#818CF8' : '#4F46E5',
               fontSize: '14px',
               fontWeight: 500,
               cursor: isResending ? 'not-allowed' : 'pointer',
@@ -261,14 +288,14 @@ export function EmailVerificationPage() {
               textDecoration: 'none',
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#4338CA')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#4F46E5')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#818CF8' : '#4F46E5')}
           >
             {isResending ? 'Resending email...' : 'Resend verification email'}
           </button>
         </div>
 
         {/* Spam Hint */}
-        <p style={{ fontSize: '12px', color: '#777587', marginTop: '16px', marginBottom: '24px' }}>
+        <p style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#777587', marginTop: '16px', marginBottom: '24px' }}>
           Didn't receive it? Check your spam folder.
         </p>
 
@@ -284,14 +311,14 @@ export function EmailVerificationPage() {
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              color: '#141B2B',
+              color: isDark ? '#F9FAFB' : '#141B2B',
               fontSize: '14px',
               fontWeight: 500,
               textDecoration: 'none',
               cursor: 'pointer',
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#4F46E5')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#141B2B')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#F9FAFB' : '#141B2B')}
           >
             <ArrowLeft size={16} />
             Back to Sign In
@@ -300,7 +327,7 @@ export function EmailVerificationPage() {
 
         {/* Footer Copyright */}
         <div style={{ marginTop: '32px' }}>
-          <p style={{ fontSize: '12px', color: '#777587' }}>
+          <p style={{ fontSize: '12px', color: isDark ? '#6B7280' : '#777587' }}>
             &copy; 2026 Toowix. ALL RIGHTS RESERVED.
           </p>
         </div>
