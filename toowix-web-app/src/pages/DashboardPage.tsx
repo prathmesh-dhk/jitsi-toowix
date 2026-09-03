@@ -377,7 +377,7 @@ export function DashboardPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 16px 8px', borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <img
-              src="/public/assets/toowix-logo.png"
+              src="/assets/toowix-logo.png"
               alt="Toowix Logo"
               style={{ width: '32px', height: '32px', objectFit: 'contain' }}
               onError={(e) => {
