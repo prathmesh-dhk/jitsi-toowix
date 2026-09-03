@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { User } from '../models/User';
 import { Meeting } from '../models/Meeting';
@@ -9,6 +11,74 @@ import { notifyCompany, notifyUser } from '../notifications/createNotification';
 const resolveUser = async (req: AuthenticatedRequest) => {
   if (!req.firebaseUid) return null;
   return User.findOne({ firebaseUid: req.firebaseUid });
+};
+
+const canViewRecording = (recording: any, user: any) =>
+  user.role === 'SUPER_ADMIN' ||
+  String(recording.createdBy?._id || recording.createdBy) === String(user._id) ||
+  (recording.companyId && String(recording.companyId?._id || recording.companyId) === String(user.companyId)) ||
+  (recording.sharedWith || []).includes(user.email.toLowerCase());
+
+/**
+ * GET /api/recordings/:id/stream
+ * Streams the recording's video file directly from the shared Jibri storage
+ * volume (mounted read-only into this container), with HTTP Range support so
+ * the browser <video> element can seek/play instantly instead of needing a
+ * full download first. Same visibility rule as the list endpoint.
+ */
+export const streamRecordingHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = await resolveUser(req);
+    if (!user) {
+      res.status(404).json({ error: 'User profile not found' });
+      return;
+    }
+
+    const recording = await Recording.findById(req.params.id);
+    if (!recording || !recording.fileUrl) {
+      res.status(404).json({ error: 'Recording not found' });
+      return;
+    }
+
+    if (!canViewRecording(recording, user)) {
+      res.status(403).json({ error: 'You do not have access to this recording' });
+      return;
+    }
+
+    const root = path.resolve(process.env.RECORDINGS_STORAGE_PATH || '/recordings-storage');
+    const filePath = path.resolve(root, recording.fileUrl);
+    if (!filePath.startsWith(root + path.sep)) {
+      res.status(400).json({ error: 'Invalid recording path' });
+      return;
+    }
+
+    const stat = await fs.promises.stat(filePath).catch(() => null);
+    if (!stat) {
+      res.status(404).json({ error: 'Recording file is no longer available' });
+      return;
+    }
+
+    const range = req.headers.range;
+    if (!range) {
+      res.writeHead(200, { 'Content-Length': stat.size, 'Content-Type': 'video/mp4' });
+      fs.createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(startStr, 10);
+    const end = endStr ? parseInt(endStr, 10) : stat.size - 1;
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': 'video/mp4',
+    });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } catch (error: any) {
+    console.error('[Recordings] Error streaming recording:', error.message);
+    res.status(500).json({ error: 'Failed to stream recording' });
+  }
 };
 
 /**

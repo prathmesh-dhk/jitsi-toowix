@@ -340,7 +340,7 @@ export function MeetingRoomPage() {
               'microphone', 'camera',
               ...(meetingInfoRef.current?.allowScreenShare === false ? [] : ['desktop']),
               'chat', 'raisehand', 'reactions',
-              'closedcaptions', 'select-background',
+              'closedcaptions', 'select-background', 'recording',
               'participants-pane', 'tileview', 'invite', 'settings', 'hangup',
             ],
           },

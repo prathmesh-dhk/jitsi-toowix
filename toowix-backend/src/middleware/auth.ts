@@ -17,13 +17,16 @@ export const verifyFirebaseToken = async (
   next: NextFunction
 ): Promise<void> => {
   const authHeader = req.headers.authorization;
+  // A <video> tag can't attach an Authorization header, so the streaming route accepts
+  // the token as ?token=... too. Every other route still requires the header.
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if ((!authHeader || !authHeader.startsWith('Bearer ')) && !queryToken) {
     res.status(401).json({ error: 'Missing or invalid Authorization header' });
     return;
   }
 
-  const idToken = authHeader.split('Bearer ')[1];
+  const idToken = queryToken || authHeader!.split('Bearer ')[1];
 
   try {
     const auth = getFirebaseAuth();

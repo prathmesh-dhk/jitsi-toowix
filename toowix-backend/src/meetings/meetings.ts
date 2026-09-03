@@ -47,13 +47,15 @@ export const getMeetingByRoomSlugHandler = async (req: Request, res: Response): 
     const accessAllowed = !inviteRestricted
       || (!!requestEmail && (requestEmail === organizerEmail || meeting.invitees!.includes(requestEmail)));
 
-    let autoRecording = false;
+    // Records by default (companies can opt out via their meeting policy); standalone
+    // meetings (no company) have no policy to opt out with, so they default to on too.
+    let autoRecording = true;
     let requireLobbyPolicy = false;
     let allowScreenShare = true;
     let micLockEnabled = false;
     if (meeting.companyId) {
       const company = await Company.findById(meeting.companyId).select('meetingPolicy');
-      autoRecording = !!company?.meetingPolicy?.autoRecording;
+      autoRecording = company?.meetingPolicy?.autoRecording !== false;
       requireLobbyPolicy = !!company?.meetingPolicy?.requireLobby;
       allowScreenShare = company?.meetingPolicy?.allowScreenShare !== false;
       micLockEnabled = !!company?.meetingPolicy?.micLockEnabled;

@@ -120,6 +120,7 @@ export function RecordingsPanel() {
   const [loading, setLoading] = useState(true);
   const [openMenu, setOpenMenu] = useState<{ id: string; kind: 'actions' | 'downloads' } | null>(null);
   const [selectedRecording, setSelectedRecording] = useState<IRecording | null>(null);
+  const [playerUrl, setPlayerUrl] = useState<string | null>(null);
 
   const cachedUser = (() => {
     try { return JSON.parse(localStorage.getItem('toowix_user') || '{}'); } catch { return {}; }
@@ -152,7 +153,17 @@ export function RecordingsPanel() {
     ...(recording.archiveUrl ? [{ label: 'Download all files — ZIP', icon: <Download size={15} />, detail: formatSize(recording.archiveSizeBytes || 0), onClick: () => downloadFile(recording.archiveUrl, `${recording.name}.zip`) }] : []),
   ];
 
-  const playRecording = (recording: IRecording) => recording.fileUrl ? window.open(recording.fileUrl, '_blank', 'noopener,noreferrer') : window.alert('No video file is available for this recording.');
+  const playRecording = async (recording: IRecording) => {
+    if (!recording.fileUrl) {
+      window.alert('No video file is available for this recording.');
+      return;
+    }
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return;
+    // A <video> element can't send an Authorization header, so the token travels
+    // as a query param here -- the backend's streaming route accepts either.
+    setPlayerUrl(`${BACKEND_URL}/api/recordings/${recording.id}/stream?token=${encodeURIComponent(token)}`);
+  };
 
   const renameRecording = async (recording: IRecording) => {
     const name = window.prompt('Recording name', recording.name)?.trim();
@@ -428,6 +439,16 @@ export function RecordingsPanel() {
           </div>
         </div>
       </div>
+      {playerUrl && (
+        <div role="dialog" aria-modal="true" aria-label="Recording playback" style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onMouseDown={(event) => event.target === event.currentTarget && setPlayerUrl(null)}>
+          <div style={{ width: 'min(960px, 92vw)' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+              <button type="button" aria-label="Close player" onClick={() => setPlayerUrl(null)} style={{ width: '34px', height: '34px', border: 'none', borderRadius: '8px', background: '#FFFFFF', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={17} /></button>
+            </div>
+            <video src={playerUrl} controls autoPlay style={{ width: '100%', maxHeight: '80vh', borderRadius: '8px', backgroundColor: '#000' }} />
+          </div>
+        </div>
+      )}
       {selectedRecording && (
         <div role="dialog" aria-modal="true" aria-label={`${selectedRecording.name} recording details`} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.38)' }} onMouseDown={(event) => event.target === event.currentTarget && setSelectedRecording(null)}>
           <aside style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(480px, 94vw)', background: '#FFFFFF', boxShadow: '-10px 0 30px rgba(15,23,42,.18)', padding: '24px', boxSizing: 'border-box' }}>
