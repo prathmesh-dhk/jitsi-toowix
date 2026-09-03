@@ -282,7 +282,7 @@ export default function App() {
     <ThemeProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
+          <Route path="/" element={<HomePage />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
