@@ -97,7 +97,7 @@ twa/*.apk
 twa/*.aab
 twa/assetlinks.json
 
-tsconfig.json
+/tsconfig.json
 
 # React Native SDK
 #
@@ -151,7 +151,7 @@ twa/*.apk
 twa/*.aab
 twa/assetlinks.json
 
-tsconfig.json
+/tsconfig.json
 
 # React Native SDK
 #
