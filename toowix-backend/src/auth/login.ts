@@ -1,9 +1,34 @@
+import crypto from 'crypto';
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { User, IUserDocument } from '../models/User';
 import { Company, ICompanyDocument } from '../models/Company';
+import { Session } from '../models/Session';
 import { generateJitsiToken } from './jitsi-token';
 import { getFirebaseAuth } from '../config/firebase';
+import { parseUserAgent } from '../utils/parseUserAgent';
+
+/** Records a real active-session entry for this login, so Settings > Security > Active
+ * Sessions reflects genuine sign-ins instead of being empty/fabricated. Returns an opaque
+ * token the client stores to identify "this" session for the current/revoke UI. */
+const recordSession = async (userId: any, req: AuthenticatedRequest): Promise<string> => {
+  const sessionToken = crypto.randomBytes(24).toString('hex');
+  const ua = String(req.headers['user-agent'] || '');
+  const { browser, os } = parseUserAgent(ua);
+  try {
+    await Session.create({
+      userId,
+      sessionToken,
+      userAgent: ua,
+      browser,
+      os,
+      ipAddress: req.ip || 'Unknown',
+    });
+  } catch (err: any) {
+    console.error('[Login Gate] Failed to record session:', err.message);
+  }
+  return sessionToken;
+};
 
 export type LoginGateReasonCode =
   | 'INVALID_CREDENTIALS'
@@ -120,11 +145,13 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
       user.lastActiveAt = new Date();
       await user.save();
+      const sessionToken = await recordSession(user._id, req);
       res.json({
         status: 'ACTIVE',
         user,
         company: null,
         jitsiToken,
+        sessionToken,
       });
       return;
     }
@@ -168,11 +195,13 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
       user.lastActiveAt = new Date();
       await user.save();
+      const sessionToken = await recordSession(user._id, req);
       res.json({
         status: 'ACTIVE',
         user,
         company: null,
         jitsiToken,
+        sessionToken,
       });
       return;
     }
@@ -260,11 +289,13 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     user.lastActiveAt = new Date();
     await user.save();
+    const sessionToken = await recordSession(user._id, req);
     res.json({
       status: 'ACTIVE',
       user,
       company,
       jitsiToken,
+      sessionToken,
     });
   } catch (error: any) {
     console.error('[Login Gate] Error evaluating login gate:', error.message);

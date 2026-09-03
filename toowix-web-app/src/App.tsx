@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom';
 import { Video, Plus, Keyboard, ShieldCheck, Users, Sparkles } from 'lucide-react';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from './lib/meeting-id';
 
@@ -268,6 +268,14 @@ import { SignupPage } from './pages/SignupPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { EmailVerificationPage } from './pages/EmailVerificationPage';
 import { ThemeProvider } from './lib/theme';
+import { SettingsPage } from './pages/SettingsPage';
+import { ProfileSection } from './components/settings/ProfileSection';
+import { GeneralSection } from './components/settings/GeneralSection';
+import { MeetingsSection } from './components/settings/MeetingsSection';
+import { RecordingSection } from './components/settings/RecordingSection';
+import { NotificationsSection } from './components/settings/NotificationsSection';
+import { SecuritySection } from './components/settings/SecuritySection';
+import { StorageSection } from './components/settings/StorageSection';
 
 export default function App() {
   return (
@@ -284,6 +292,16 @@ export default function App() {
           <Route path="/register" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/verify-email" element={<EmailVerificationPage />} />
+          <Route path="/settings" element={<SettingsPage />}>
+            <Route index element={<Navigate to="/settings/profile" replace />} />
+            <Route path="profile" element={<ProfileSection />} />
+            <Route path="general" element={<GeneralSection />} />
+            <Route path="meetings" element={<MeetingsSection />} />
+            <Route path="recording" element={<RecordingSection />} />
+            <Route path="notifications" element={<NotificationsSection />} />
+            <Route path="security" element={<SecuritySection />} />
+            <Route path="storage" element={<StorageSection />} />
+          </Route>
         </Routes>
       </BrowserRouter>
     </ThemeProvider>

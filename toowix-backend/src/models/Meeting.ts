@@ -22,8 +22,18 @@ export interface IMeeting {
   scheduledAt?: Date | null;
   durationMinutes?: number | null;
   cancelledAt?: Date | null;
+  notified60?: boolean;
+  notified10?: boolean;
+  notifiedNow?: boolean;
   actualStartedAt?: Date | null;
   actualEndedAt?: Date | null;
+  description?: string | null;
+  invitees?: string[];
+  recurrence?: {
+    frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+    seriesId: string;
+    until?: Date | null;
+  } | null;
   participants?: IMeetingParticipant[];
   resources?: {
     recordingUrl?: string | null;
@@ -85,8 +95,21 @@ const MeetingSchema = new Schema<IMeetingDocument>(
       type: Date,
       default: null,
     },
+    notified60: { type: Boolean, default: false },
+    notified10: { type: Boolean, default: false },
+    notifiedNow: { type: Boolean, default: false },
     actualStartedAt: { type: Date, default: null },
     actualEndedAt: { type: Date, default: null },
+    description: { type: String, default: null, trim: true, maxlength: 2000 },
+    invitees: { type: [String], default: undefined }, // undefined (not []) means "no invitee restriction" for non-Private types
+    recurrence: {
+      type: {
+        frequency: { type: String, enum: ['DAILY', 'WEEKLY', 'MONTHLY'] },
+        seriesId: { type: String },
+        until: { type: Date, default: null },
+      },
+      default: null,
+    },
     participants: {
       type: [{
         name: { type: String, required: true },
@@ -124,6 +147,7 @@ const MeetingSchema = new Schema<IMeetingDocument>(
 
 MeetingSchema.index({ companyId: 1, createdAt: -1 });
 MeetingSchema.index({ createdBy: 1, createdAt: -1 });
+MeetingSchema.index({ 'recurrence.seriesId': 1 });
 
 export const Meeting: Model<IMeetingDocument> =
   mongoose.models.Meeting || mongoose.model<IMeetingDocument>('Meeting', MeetingSchema);

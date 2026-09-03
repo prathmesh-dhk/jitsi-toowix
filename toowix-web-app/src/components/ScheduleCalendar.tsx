@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Users, Video } from 'lucide-react';
+import { sanitizeCustomMeetingId } from '../lib/meeting-id';
 
 export interface IScheduleMeeting {
   id: string;
@@ -16,11 +17,21 @@ interface IScheduleCalendarProps {
     scheduledAt: string;
     durationMinutes: number;
     type: 'Internal' | 'Guest' | 'Private';
+    roomSlug?: string;
+    description?: string;
+    invitees?: string[];
+    recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null;
   }) => Promise<void>;
 }
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const RECURRENCE_OPTIONS: { value: 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'; label: string }[] = [
+  { value: 'NONE', label: "Doesn't repeat" },
+  { value: 'DAILY', label: 'Daily' },
+  { value: 'WEEKLY', label: 'Weekly' },
+  { value: 'MONTHLY', label: 'Monthly' },
+];
 
 const sameDay = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -32,8 +43,14 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
   const [time, setTime] = useState('10:00');
   const [duration, setDuration] = useState(30);
   const [type, setType] = useState<'Internal' | 'Guest' | 'Private'>('Internal');
+  const [description, setDescription] = useState('');
+  const [customId, setCustomId] = useState('');
+  const [inviteesText, setInviteesText] = useState('');
+  const [recurrence, setRecurrence] = useState<'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'>('NONE');
+  const [recurrenceUntil, setRecurrenceUntil] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
@@ -56,14 +73,26 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
     setTime('10:00');
     setDuration(30);
     setType('Internal');
+    setDescription('');
+    setCustomId('');
+    setInviteesText('');
+    setRecurrence('NONE');
+    setRecurrenceUntil('');
+    setScheduleError(null);
   };
 
   const handleSchedule = async () => {
     if (!selectedDate || !name.trim() || submitting) return;
+    setScheduleError(null);
     setSubmitting(true);
     const [hh, mm] = time.split(':').map(Number);
     const scheduledAt = new Date(selectedDate);
     scheduledAt.setHours(hh, mm, 0, 0);
+
+    const cleanCustomId = customId.trim() ? sanitizeCustomMeetingId(customId.trim()) : undefined;
+    const invitees = type === 'Private'
+      ? inviteesText.split(',').map((e) => e.trim()).filter(Boolean)
+      : undefined;
 
     try {
       await onSchedule({
@@ -71,9 +100,15 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
         scheduledAt: scheduledAt.toISOString(),
         durationMinutes: duration,
         type,
+        roomSlug: cleanCustomId,
+        description: description.trim() || undefined,
+        invitees,
+        recurrence: recurrence !== 'NONE' ? { frequency: recurrence, until: recurrenceUntil ? new Date(recurrenceUntil).toISOString() : undefined } : null,
       });
       setSubmitted(true);
       setTimeout(() => setSubmitted(false), 1800);
+    } catch (err: any) {
+      setScheduleError(err?.message || 'Could not schedule meeting.');
     } finally {
       setSubmitting(false);
     }
@@ -88,41 +123,44 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
         <p style={{ fontSize: '14px', color: '#6B7280', margin: 0 }}>Plan a meeting and manage your calendar.</p>
       </div>
 
-      <div style={{ display: 'flex', gap: '28px', alignItems: 'flex-start', position: 'relative', width: '100%', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start', position: 'relative', width: '100%', flexWrap: 'nowrap' }}>
       {/* Calendar */}
       <div
         style={{
-          flex: '1 1 690px',
-          minWidth: '620px',
+          flex: '1 1 auto',
+          minWidth: 0,
+          maxWidth: '760px',
           backgroundColor: '#FFFFFF',
           borderRadius: '16px',
           border: '1px solid #E5E7EB',
-          padding: '26px',
+          padding: '22px',
           boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '22px' }}>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#141B2B' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+          <h2 style={{ margin: 0, fontSize: '19px', fontWeight: 700, color: '#141B2B' }}>
             {viewDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
           </h2>
           <div style={{ display: 'flex', gap: '6px' }}>
             <button
               onClick={() => setViewDate(new Date(year, month - 1, 1))}
-              style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >
-              <ChevronLeft size={16} />
+              <ChevronLeft size={15} />
             </button>
             <button
               onClick={() => setViewDate(new Date())}
-              style={{ padding: '0 12px', height: '32px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#4B5563' }}
+              style={{ padding: '0 11px', height: '30px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#4B5563' }}
             >
               Today
             </button>
             <button
               onClick={() => setViewDate(new Date(year, month + 1, 1))}
-              style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >
-              <ChevronRight size={16} />
+              <ChevronRight size={15} />
             </button>
           </div>
         </div>
@@ -142,11 +180,11 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
               key={wd}
               style={{
                 textAlign: 'center',
-                fontSize: '11px',
+                fontSize: '10px',
                 fontWeight: 700,
                 letterSpacing: '0.04em',
                 color: '#6B7280',
-                padding: '10px 0',
+                padding: '9px 0',
                 backgroundColor: '#F9FAFB',
                 borderBottom: '1px solid #E5E7EB',
                 borderRight: '1px solid #E5E7EB',
@@ -161,7 +199,7 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(7, 1fr)',
-            gridAutoRows: '104px',
+            gridAutoRows: '90px',
             border: '1px solid #E5E7EB',
             borderRadius: '0 0 8px 8px',
             overflow: 'hidden',
@@ -198,15 +236,15 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
                   flexDirection: 'column',
                   alignItems: 'stretch',
                   justifyContent: 'flex-start',
-                  padding: '9px',
-                  gap: '5px',
+                  padding: '8px',
+                  gap: '4px',
                   transition: 'background-color 0.12s ease',
                   minWidth: 0,
                 }}
               >
                 <span
                   style={{
-                    fontSize: '14px',
+                    fontSize: '13px',
                     fontWeight: isToday ? 700 : 500,
                     color: isToday ? '#4F46E5' : '#141B2B',
                     textAlign: 'left',
@@ -221,7 +259,7 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
                       key={m.id}
                       style={{
                         display: 'block',
-                        fontSize: '11px',
+                        fontSize: '10px',
                         fontWeight: 600,
                         color: '#3730A3',
                         backgroundColor: '#EEF2FF',
@@ -252,8 +290,8 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
       {/* Side Panel -- always visible, fixed width, defaults to today */}
       <div
         style={{
-          width: '390px',
-          flex: '0 1 390px',
+          width: '360px',
+          flex: '0 0 360px',
         }}
       >
         <div
@@ -347,6 +385,74 @@ export function ScheduleCalendar({ meetings, onSchedule }: IScheduleCalendarProp
                   <option value="Private">Private</option>
                 </select>
               </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Description (optional)</label>
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="What's this meeting about?"
+                  rows={3}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Custom meeting ID (optional)</label>
+                <input
+                  type="text"
+                  value={customId}
+                  onChange={(e) => setCustomId(e.target.value)}
+                  placeholder="e.g. weekly-standup"
+                  style={{ width: '100%', height: '44px', padding: '0 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
+                />
+                <p style={{ fontSize: '11px', color: '#9CA3AF', margin: '4px 0 0' }}>Leave blank to auto-generate a random meeting link.</p>
+              </div>
+
+              {type === 'Private' && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Invitee emails</label>
+                  <textarea
+                    value={inviteesText}
+                    onChange={(e) => setInviteesText(e.target.value)}
+                    placeholder="jane@company.com, sam@company.com"
+                    rows={2}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                  <p style={{ fontSize: '11px', color: '#9CA3AF', margin: '4px 0 0' }}>Only these emails (plus you) will be able to join this private meeting.</p>
+                </div>
+              )}
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Repeat</label>
+                <select
+                  value={recurrence}
+                  onChange={(e) => setRecurrence(e.target.value as any)}
+                  style={{ width: '100%', height: '44px', padding: '0 10px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none', background: '#fff' }}
+                >
+                  {RECURRENCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {recurrence !== 'NONE' && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Repeat until (optional, max 12 occurrences without one)</label>
+                  <input
+                    type="date"
+                    value={recurrenceUntil}
+                    onChange={(e) => setRecurrenceUntil(e.target.value)}
+                    style={{ width: '100%', height: '44px', padding: '0 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
+                  />
+                </div>
+              )}
+
+              {scheduleError && (
+                <div style={{ padding: '10px 12px', borderRadius: '8px', background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', fontSize: '12px' }}>
+                  {scheduleError}
+                </div>
+              )}
 
               <button
                 onClick={handleSchedule}

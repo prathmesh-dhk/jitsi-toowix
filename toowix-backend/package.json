@@ -2,10 +2,10 @@
   "name": "toowix-backend",
   "version": "1.0.0",
   "description": "Toowix Meet SaaS Backend Service (MongoDB Atlas + Firebase Auth + Jitsi Integration)",
-  "main": "dist/index.js",
+  "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "db:migrate": "ts-node migrations/runner.ts",
     "db:indexes": "ts-node src/db/initIndexes.ts",

@@ -24,6 +24,7 @@ export interface IRecording {
   folder?: string;
   allowDownload?: boolean;
   allowShare?: boolean;
+  sharedWith?: string[]; // specific emails granted access, in addition to owner/company admins
   createdAt: Date;
   updatedAt: Date;
 }
@@ -89,6 +90,7 @@ const RecordingSchema = new Schema<IRecordingDocument>(
     folder: { type: String, default: '', trim: true },
     allowDownload: { type: Boolean, default: false },
     allowShare: { type: Boolean, default: false },
+    sharedWith: { type: [String], default: [] },
   },
   {
     timestamps: true,

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Mail, CheckCircle2, AlertCircle, Loader2, ArrowLeft, Sun, Moon } from 'lucide-react';
-import { sendEmailVerification } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { useTheme } from '../lib/theme';
 
@@ -29,13 +28,21 @@ export function EmailVerificationPage() {
     }
   }, [location]);
 
-  // Resend Firebase verification email
+  // Resend our own Toowix-branded verification email (not Firebase's default one)
   const handleResendEmail = async () => {
     setFeedback(null);
     setIsResending(true);
     try {
       if (auth.currentUser) {
-        await sendEmailVerification(auth.currentUser);
+        const idToken = await auth.currentUser.getIdToken();
+        const response = await fetch(`${BACKEND_URL}/api/auth/send-verification-email`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to resend verification email.');
+        }
         setFeedback({
           type: 'success',
           message: 'Verification email resent! Please check your inbox and spam folder.',

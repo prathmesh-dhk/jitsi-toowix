@@ -44,12 +44,17 @@ import companyRoutes from './routes/company.routes';
 import meetingRoutes from './routes/meeting.routes';
 import recordingRoutes from './routes/recording.routes';
 import teamRoutes from './routes/team.routes';
+import notificationRoutes from './routes/notification.routes';
+import { startMeetingReminderScheduler } from './notifications/meetingReminders';
+import settingsRoutes from './routes/settings.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/meetings', meetingRoutes);
 app.use('/api/recordings', recordingRoutes);
 app.use('/api/team', teamRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {
@@ -85,6 +90,7 @@ async function bootstrap() {
       console.log(`[Toowix Backend] Server running on http://localhost:${PORT}`);
       console.log(`[Toowix Backend] Health check available at http://localhost:${PORT}/health`);
     });
+    startMeetingReminderScheduler();
   } catch (error) {
     console.error('[Toowix Backend] Fatal initialization error:', error);
     process.exit(1);

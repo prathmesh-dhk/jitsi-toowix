@@ -43,6 +43,9 @@ export function LoginPage() {
         if (data.company) {
           localStorage.setItem('toowix_company', JSON.stringify(data.company));
         }
+        if (data.sessionToken) {
+          localStorage.setItem('toowix_session_token', data.sessionToken);
+        }
 
         navigate('/dashboard');
         return;

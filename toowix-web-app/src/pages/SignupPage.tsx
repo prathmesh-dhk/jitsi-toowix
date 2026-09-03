@@ -4,7 +4,6 @@ import { AlertCircle, CheckCircle2, Loader2, Sun, Moon } from 'lucide-react';
 import {
   createUserWithEmailAndPassword,
   updateProfile,
-  sendEmailVerification,
   signInWithPopup,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
@@ -126,12 +125,15 @@ export function SignupPage() {
       // Update Firebase Profile
       await updateProfile(userCredential.user, { displayName: fullName });
 
-      // Send Verification Email
-      await sendEmailVerification(userCredential.user);
-
       // Sync with MongoDB
       const idToken = await userCredential.user.getIdToken();
       await handleBackendSignup(idToken, fullName);
+
+      // Send our own Toowix-branded verification email (not Firebase's default one)
+      await fetch(`${BACKEND_URL}/api/auth/send-verification-email`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${idToken}` },
+      }).catch((err) => console.warn('[Signup] Could not send verification email:', err));
 
       if (!inviteId) await handleCompanyRegister(idToken, companyName.trim());
 
