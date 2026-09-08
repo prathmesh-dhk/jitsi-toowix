@@ -40,7 +40,7 @@ body {
     overflow: hidden;
     overflow: clip;
     color: #F1F1F1;
-    background: #040404; // should match DEFAULT_BACKGROUND from interface_config
+    background: #202124; // Google Meet dark charcoal
 }
 
 /**
@@ -112,35 +112,27 @@ form {
 }
 
 .watermark {
-    display: block;
+    display: none !important;
     position: absolute;
-    top: 15;
-    width: $watermarkWidth;
-    height: $watermarkHeight;
-    background-size: contain;
-    background-repeat: no-repeat;
-    z-index: $watermarkZ;
+    width: 0 !important;
+    height: 0 !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    visibility: hidden !important;
 }
 
 .leftwatermark {
-    max-width: 140px;
-    max-height:70px;
-    left: 32px;
-    top: 32px;
-    background-position: center left;
-    background-repeat: no-repeat;
-    background-size: contain;
-
-    &.no-margin {
-        left:0;
-        top:0;
-    }
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    visibility: hidden !important;
 }
 
 .rightwatermark {
-    right: 32px;
-    top: 32px;
-    background-position: center right;
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    visibility: hidden !important;
 }
 
 .poweredby {

@@ -70,6 +70,7 @@
 #largeVideoContainer {
     overflow: hidden;
     text-align: center;
+    border-radius: $borderRadius !important;
 
     &.transition {
         transition: width 1s, height 1s, top 1s;
@@ -221,16 +222,17 @@
 
 #dominantSpeakerAvatarContainer,
 .dynamic-shadow {
-    width: 200px;
-    height: 200px;
+    width: 96px;
+    height: 96px;
 }
 
 #dominantSpeakerAvatarContainer {
-    top: 50px;
+    top: 102px;
     margin: auto;
     position: relative;
     overflow: hidden;
     visibility: inherit;
+    border-radius: 50%;
 }
 
 .dynamic-shadow {
@@ -238,7 +240,7 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    margin: -100px 0 0 -100px;
+    margin: -48px 0 0 -48px;
     transition: box-shadow 0.3s ease;
 }
 

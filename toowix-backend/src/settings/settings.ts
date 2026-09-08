@@ -328,9 +328,9 @@ export const deactivateAccountHandler = async (req: AuthenticatedRequest, res: R
 };
 
 /**
- * GET /api/settings/security/sessions?currentSessionToken=xxx
+ * GET /api/settings/security/sessions
  * Real active-session list, sourced from Session records created at each login-gate
- * success. currentSessionToken (from the client's own localStorage) marks which row is
+ * success. X-Toowix-Session (already verified by middleware) marks which row is
  * "this device" -- Firebase doesn't expose that natively, so the client has to tell us.
  * IP addresses are shown in full only to the session's own owner (nobody else can query
  * another user's sessions anyway, since this always scopes to req.firebaseUid).
@@ -347,7 +347,7 @@ export const listSessionsHandler = async (req: AuthenticatedRequest, res: Respon
       .sort({ lastSeenAt: -1 })
       .limit(25);
 
-    const currentToken = req.query.currentSessionToken as string | undefined;
+    const currentToken = req.get('X-Toowix-Session');
 
     res.json({
       sessions: sessions.map((s) => ({
@@ -369,15 +369,7 @@ export const listSessionsHandler = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
-/**
- * POST /api/settings/security/sessions/:id/revoke
- * Removes one session from the list. Note (disclosed in the UI too): Firebase does not
- * support revoking a single refresh token -- only ALL of a user's tokens at once
- * (admin.auth().revokeRefreshTokens). So this marks the record revoked (it disappears
- * from "Active Sessions" and its owner can no longer be impersonated via this DB row),
- * but if you need to actually force that device to re-authenticate, use "Sign out all
- * other sessions" instead, which does call revokeRefreshTokens for real.
- */
+/** Revokes this user's selected application session. Middleware rejects its next request. */
 export const revokeSessionHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = await resolveUser(req);
@@ -399,11 +391,7 @@ export const revokeSessionHandler = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
-/**
- * POST /api/settings/security/sessions/revoke-all-others
- * Real, hard revocation: calls Firebase's revokeRefreshTokens so every OTHER active
- * browser session is forced to re-authenticate. Marks all other Session rows revoked too.
- */
+/** Revoke other application sessions while preserving the authenticated current session. */
 export const revokeOtherSessionsHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = await resolveUser(req);
@@ -411,19 +399,12 @@ export const revokeOtherSessionsHandler = async (req: AuthenticatedRequest, res:
       res.status(404).json({ error: 'User profile not found' });
       return;
     }
-    const currentToken = req.body.currentSessionToken as string | undefined;
+    const currentToken = req.get('X-Toowix-Session');
 
     await Session.updateMany(
       { userId: user._id, revokedAt: null, ...(currentToken ? { sessionToken: { $ne: currentToken } } : {}) },
       { revokedAt: new Date() }
     );
-
-    try {
-      const auth = getFirebaseAuth();
-      await auth.revokeRefreshTokens(user.firebaseUid);
-    } catch (fbErr: any) {
-      console.warn('[Settings] Could not revoke Firebase refresh tokens:', fbErr.message);
-    }
 
     res.json({ message: 'Other sessions signed out' });
   } catch (error: any) {

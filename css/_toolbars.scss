@@ -103,39 +103,27 @@
     margin: 8px 0;
 }
 
-div.hangup-button {
-    background-color: #CB2233;
-
-    @media (hover: hover) and (pointer: fine) {
-        &:hover {
-            background-color: #E04757;
-        }
-
-        &:active {
-            background-color: #A21B29;
-        }
-    }
-
-    svg {
-        fill: #fff;
-    }
-}
-
+div.hangup-button,
 div.hangup-menu-button {
-    background-color: #CB2233;
+    background-color: #ea4335 !important;
+    border-radius: 28px !important;
+    min-width: 56px;
+    transition: background-color 0.15s ease, transform 0.1s ease;
 
     @media (hover: hover) and (pointer: fine) {
         &:hover {
-            background-color: #E04757;
+            background-color: #d93025 !important;
+            transform: scale(1.04);
         }
 
         &:active {
-            background-color: #A21B29;
+            background-color: #b3261e !important;
+            transform: scale(0.98);
         }
     }
 
     svg {
-        fill: #fff;
+        fill: #fff !important;
     }
 }
 

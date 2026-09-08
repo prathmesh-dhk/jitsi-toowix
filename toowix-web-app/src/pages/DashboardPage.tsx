@@ -24,7 +24,9 @@ import {
   Link as LinkIcon,
   Sun,
   Moon,
+  Share2,
 } from 'lucide-react';
+import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
@@ -46,7 +48,7 @@ interface IMeeting {
   organizer: string;
   dateTime: string;
   duration: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   roomSlug: string;
   isFuture: boolean;
   scheduledAtIso: string | null;
@@ -57,6 +59,10 @@ interface IMeeting {
   organizerEmail?: string;
   organizerAvatarUrl?: string;
   organizerTeam?: string;
+  description?: string;
+  invitees?: string[];
+  passcode?: string | null;
+  rsvps?: Array<{ email: string; status: 'accepted' | 'declined' | 'pending'; respondedAt?: string | Date }>;
   status: 'Scheduled' | 'Completed' | 'Cancelled' | 'Ended';
   actualStartTime?: string;
   actualEndTime?: string;
@@ -69,13 +75,15 @@ interface IMeeting {
     notesUrl?: string;
     recordingAllowDownload?: boolean;
   };
+  notes?: string;
+  sharedFiles?: any[];
 }
 
 interface IApiMeeting {
   id: string;
   name: string;
   roomSlug: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   scheduledAt: string | null;
   durationMinutes: number | null;
   createdAt: string;
@@ -85,6 +93,12 @@ interface IApiMeeting {
   actualEndedAt?: string | null;
   participants?: any[];
   resources?: IMeeting['resources'];
+  notes?: string;
+  sharedFiles?: any[];
+  description?: string;
+  invitees?: string[];
+  passcode?: string | null;
+  rsvps?: Array<{ email: string; status: 'accepted' | 'declined' | 'pending'; respondedAt?: string | Date }>;
 }
 
 const formatMeetingDateTime = (iso: string) => {
@@ -135,6 +149,12 @@ const mapApiMeeting = (meeting: IApiMeeting): IMeeting => {
       attendanceStatus: participant.attendanceStatus,
     })),
     resources: meeting.resources,
+    notes: (meeting as any).notes,
+    sharedFiles: (meeting as any).sharedFiles,
+    description: meeting.description,
+    invitees: meeting.invitees,
+    passcode: meeting.passcode,
+    rsvps: meeting.rsvps,
   };
 };
 
@@ -152,6 +172,7 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'people' | 'teams'>('home');
   const [copiedLink, setCopiedLink] = useState(false);
   const [createdRoomLink, setCreatedRoomLink] = useState<string | null>(null);
+  const [showDashboardShareModal, setShowDashboardShareModal] = useState(false);
 
   const [allMeetings, setAllMeetings] = useState<IMeeting[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(true);
@@ -160,7 +181,7 @@ export function DashboardPage() {
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) return;
-      const response = await fetch(`${BACKEND_URL}/api/meetings`, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch(`${BACKEND_URL}/api/meetings`, { headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` } });
       const data = await response.json();
       if (response.ok && Array.isArray(data.meetings)) setAllMeetings(data.meetings.map(mapApiMeeting));
     } catch (error) {
@@ -176,18 +197,24 @@ export function DashboardPage() {
     type: IMeeting['type'] = 'Internal',
     scheduledAt?: string,
     durationMinutes?: number,
-    extra?: { description?: string; invitees?: string[]; recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null }
+    extra?: {
+      description?: string;
+      invitees?: string[];
+      passcode?: string | null;
+      recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null;
+    }
   ) => {
     const token = await auth.currentUser?.getIdToken();
     if (!token) throw new Error('You must be signed in to schedule a meeting.');
     const response = await fetch(`${BACKEND_URL}/api/meetings`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ name, roomSlug, type, scheduledAt, durationMinutes, ...extra }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to schedule meeting.');
     fetchMeetings();
+    return data.meeting;
   };
 
   const handleScheduleMeeting = async (data: {
@@ -198,15 +225,21 @@ export function DashboardPage() {
     roomSlug?: string;
     description?: string;
     invitees?: string[];
+    passcode?: string | null;
     recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null;
   }) => {
-    await persistMeeting(
+    return await persistMeeting(
       data.name,
       data.roomSlug || generateUniqueMeetingId(),
       data.type,
       data.scheduledAt,
       data.durationMinutes,
-      { description: data.description, invitees: data.invitees, recurrence: data.recurrence }
+      {
+        description: data.description,
+        invitees: data.invitees,
+        passcode: data.passcode,
+        recurrence: data.recurrence,
+      }
     );
   };
 
@@ -231,6 +264,9 @@ export function DashboardPage() {
           avatarUrl: user.photoURL || prev?.avatarUrl,
         }));
         fetchMeetings();
+      } else {
+        setCurrentUser(null);
+        navigate('/login', { replace: true });
       }
     });
 
@@ -250,16 +286,18 @@ export function DashboardPage() {
     navigate('/login');
   };
 
-  const handleStartInstantMeeting = () => {
+  const handleStartInstantMeeting = async () => {
     const roomId = generateUniqueMeetingId();
-    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal').catch((err) => console.error('[Dashboard] Failed to save meeting:', err));
-    navigate(`/meet/${roomId}`);
+    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal'); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
+    navigate(`/meet/${roomId}`, { state: { participation: "account" } });
   };
 
-  const handleCreateMeetingForLater = () => {
+  const handleCreateMeetingForLater = async () => {
     const roomId = generateUniqueMeetingId();
     const url = `${window.location.origin}/meet/${roomId}`;
-    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal').catch((err) => console.error('[Dashboard] Failed to save meeting:', err));
+    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal'); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
     setCreatedRoomLink(url);
   };
 
@@ -281,7 +319,7 @@ export function DashboardPage() {
       input = input.substring(input.lastIndexOf('/meet/') + 6);
     }
     const cleanRoom = sanitizeCustomMeetingId(input);
-    navigate(`/meet/${cleanRoom}`);
+    navigate(`/meet/${cleanRoom}`, { state: { participation: "account" } });
   };
 
   // Determine greeting based on current hour
@@ -315,43 +353,6 @@ export function DashboardPage() {
     }
     return matchesSearch;
   });
-
-  // Live/upcoming spotlight (Home tab) -- derived from the same allMeetings feed as the
-  // Upcoming tab, instead of hardcoded sample cards.
-  const nowMs = Date.now();
-  const isMeetingLiveNow = (m: IMeeting) => {
-    if (!m.scheduledAtIso || m.status === 'Cancelled') return false;
-    const start = new Date(m.scheduledAtIso).getTime();
-    const end = start + (m.durationMinutes || 60) * 60000;
-    return start <= nowMs && nowMs < end;
-  };
-  const liveMeetings = allMeetings
-    .filter(isMeetingLiveNow)
-    .sort((a, b) => new Date(a.scheduledAtIso as string).getTime() - new Date(b.scheduledAtIso as string).getTime());
-  const upcomingSorted = allMeetings
-    .filter((m) => m.isFuture && m.scheduledAtIso)
-    .sort((a, b) => new Date(a.scheduledAtIso as string).getTime() - new Date(b.scheduledAtIso as string).getTime());
-  const heroMeeting = liveMeetings[0] || upcomingSorted[0] || null;
-  const heroIsLive = !!liveMeetings[0];
-  const secondaryMeetings = (heroIsLive ? upcomingSorted : upcomingSorted.slice(1)).slice(0, 2);
-  const liveInCallParticipants = (heroMeeting?.participants || []).filter((p: any) => p.joinedAt && !p.leftAt);
-  const spotlightMeetings = [heroMeeting, ...secondaryMeetings].filter(Boolean) as IMeeting[];
-  const spotlightVisible = !searchQuery || spotlightMeetings.some(
-    (m) => m.name.toLowerCase().includes(searchQuery.toLowerCase()) || m.organizer.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const meetingTimeRange = (m: IMeeting): string => {
-    if (!m.scheduledAtIso) return '';
-    const start = new Date(m.scheduledAtIso);
-    const startLabel = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    if (!m.durationMinutes) return startLabel;
-    const end = new Date(start.getTime() + m.durationMinutes * 60000);
-    return `${startLabel} - ${end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-  };
-  const avatarPalette = [
-    { bg: isDark ? '#1E3A8A' : '#DBEAFE', fg: isDark ? '#93C5FD' : '#1D4ED8' },
-    { bg: isDark ? '#312E81' : '#E0E7FF', fg: isDark ? '#A5B4FC' : '#4338CA' },
-    { bg: isDark ? '#78350F' : '#FEF3C7', fg: isDark ? '#FDE68A' : '#B45309' },
-  ];
 
   return (
     <div className="dashboard-layout">
@@ -789,7 +790,22 @@ export function DashboardPage() {
         <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}`}>
           {activeTab === 'schedule' ? (
             <ScheduleCalendar
-              meetings={allMeetings.map((meeting) => ({ id: meeting.id, name: meeting.name, scheduledAt: meeting.scheduledAtIso, roomSlug: meeting.roomSlug, type: meeting.type }))}
+              meetings={allMeetings.map((meeting) => ({
+                id: meeting.id,
+                name: meeting.name,
+                scheduledAt: meeting.scheduledAtIso,
+                roomSlug: meeting.roomSlug,
+                type: meeting.type,
+                description: meeting.description,
+                invitees: meeting.invitees,
+                passcode: meeting.passcode,
+                rsvps: meeting.rsvps as any,
+                organizer: meeting.organizer,
+                organizerEmail: meeting.organizerEmail,
+                organizerAvatarUrl: meeting.organizerAvatarUrl,
+                durationMinutes: meeting.durationMinutes,
+              }))}
+              currentUser={currentUser}
               onSchedule={handleScheduleMeeting}
             />
           ) : activeTab === 'recordings' ? (
@@ -815,6 +831,8 @@ export function DashboardPage() {
                 organizerTeam: meeting.organizerTeam,
                 participants: meeting.participants,
                 resources: meeting.resources,
+                notes: (meeting as any).notes,
+                sharedFiles: (meeting as any).sharedFiles,
                 canManage: canManageMeeting(meeting),
                 canDownloadRecording: canManageMeeting(meeting) || meeting.resources?.recordingAllowDownload === true,
               }))}
@@ -928,7 +946,7 @@ export function DashboardPage() {
           {/* =======================================================================
               Upcoming Meetings Section
               ======================================================================= */}
-          {spotlightVisible && (
+          {(!searchQuery || 'Weekly Standup'.toLowerCase().includes(searchQuery.toLowerCase())) && (
             <section style={{ marginBottom: '36px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>
@@ -942,15 +960,8 @@ export function DashboardPage() {
                 </button>
               </div>
 
-              {!meetingsLoading && !heroMeeting ? (
-                <div style={{ backgroundColor: isDark ? '#131B2E' : '#FFFFFF', border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`, borderRadius: '12px', padding: '32px 20px', textAlign: 'center' }}>
-                  <p style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>No upcoming meetings</p>
-                  <p style={{ margin: 0, fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Schedule one to see it here.</p>
-                </div>
-              ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* Spotlight Hero Card: live meeting if one is in progress, else the next upcoming meeting */}
-                {heroMeeting && (
+                {/* LIVE Spotlight Hero Card (from Stitch) */}
                 <div
                   style={{
                     backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
@@ -965,101 +976,59 @@ export function DashboardPage() {
 
                   <div className="dashboard-spotlight-card-content">
                     <div className="dashboard-spotlight-left">
-                      {/* Live Badge (only when the meeting is actually in progress right now) */}
-                      {heroIsLive ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            color: '#EF4444',
-                            backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
-                            border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
-                            padding: '4px 10px',
-                            borderRadius: '20px',
-                            marginBottom: '12px',
-                          }}
-                        >
-                          <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
-                          LIVE NOW
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            color: isDark ? '#818CF8' : '#4F46E5',
-                            backgroundColor: isDark ? 'rgba(99, 102, 241, 0.15)' : '#EEF2FF',
-                            border: `1px solid ${isDark ? 'rgba(99, 102, 241, 0.3)' : '#C7D2FE'}`,
-                            padding: '4px 10px',
-                            borderRadius: '20px',
-                            marginBottom: '12px',
-                          }}
-                        >
-                          NEXT UP
-                        </span>
-                      )}
+                      {/* Live Badge */}
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          color: '#EF4444',
+                          backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+                          border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
+                          padding: '4px 10px',
+                          borderRadius: '20px',
+                          marginBottom: '12px',
+                        }}
+                      >
+                        <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
+                        LIVE NOW
+                      </span>
 
                       <h3 style={{ fontSize: '22px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 6px 0', letterSpacing: '-0.3px' }}>
-                        {heroMeeting.name}
+                        Weekly Standup
                       </h3>
                       <p style={{ fontSize: '14px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 14px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Clock size={16} /> {meetingTimeRange(heroMeeting)} &bull; Room: {heroMeeting.roomSlug}
+                        <Clock size={16} /> 10:00 AM - 10:30 AM &bull; Room: weekly-standup
                       </p>
 
-                      {/* Participant Bubble Stack (real in-call attendees, live meetings only) */}
-                      {heroIsLive && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          {liveInCallParticipants.length > 0 ? (
-                            <>
-                              <div style={{ display: 'flex', alignItems: 'center' }}>
-                                {liveInCallParticipants.slice(0, 3).map((p: any, i: number) => (
-                                  <div
-                                    key={p.email || p.name || i}
-                                    style={{
-                                      width: '30px', height: '30px', borderRadius: '50%',
-                                      backgroundColor: avatarPalette[i % avatarPalette.length].bg,
-                                      color: avatarPalette[i % avatarPalette.length].fg,
-                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                      fontSize: '11px', fontWeight: 700,
-                                      border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`,
-                                      marginLeft: i === 0 ? 0 : '-8px',
-                                    }}
-                                  >
-                                    {initialsOf(p.name || p.email || '?')}
-                                  </div>
-                                ))}
-                                {liveInCallParticipants.length > 3 && (
-                                  <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', color: isDark ? '#9CA3AF' : '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
-                                    +{liveInCallParticipants.length - 3}
-                                  </div>
-                                )}
-                              </div>
-                              <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>
-                                {liveInCallParticipants.length === 1
-                                  ? `${liveInCallParticipants[0].name || liveInCallParticipants[0].email} in call`
-                                  : `${liveInCallParticipants[0].name || liveInCallParticipants[0].email} and ${liveInCallParticipants.length - 1} other${liveInCallParticipants.length - 1 === 1 ? '' : 's'} in call`}
-                              </span>
-                            </>
-                          ) : (
-                            <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>No one has joined yet</span>
-                          )}
+                      {/* Participant Bubble Stack */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE', color: isDark ? '#93C5FD' : '#1D4ED8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}` }}>
+                            SJ
+                          </div>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#312E81' : '#E0E7FF', color: isDark ? '#A5B4FC' : '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
+                            JD
+                          </div>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#78350F' : '#FEF3C7', color: isDark ? '#FDE68A' : '#B45309', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
+                            AK
+                          </div>
+                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', color: isDark ? '#9CA3AF' : '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
+                            +4
+                          </div>
                         </div>
-                      )}
-                      {!heroIsLive && (
-                        <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>Organized by {heroMeeting.organizer}</span>
-                      )}
+                        <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>
+                          Sarah, John, and 5 others in call
+                        </span>
+                      </div>
                     </div>
 
                     {/* Join Action CTA */}
                     <div>
                       <button
-                        onClick={() => navigate(`/meet/${heroMeeting.roomSlug}`)}
+                        onClick={() => navigate('/meet/weekly-standup', { state: { participation: "account" } })}
                         className="dashboard-spotlight-btn"
                         style={{
                           padding: '12px 32px',
@@ -1085,56 +1054,88 @@ export function DashboardPage() {
                     </div>
                   </div>
                 </div>
-                )}
 
                 {/* Secondary Upcoming Row */}
-                {secondaryMeetings.length > 0 && (
                 <div className="dashboard-upcoming-grid">
-                  {secondaryMeetings.map((m, i) => (
-                    <div
-                      key={m.id}
+                  <div
+                    style={{
+                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+                      borderRadius: '12px',
+                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                      padding: '16px 20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#3B82F6' }} />
+                      <div>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
+                          Product Sync: Q3 Roadmap
+                        </h4>
+                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Clock size={13} /> 1:30 PM - 2:30 PM
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => navigate('/meet/product-sync-q3', { state: { participation: "account" } })}
                       style={{
-                        backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
-                        borderRadius: '12px',
-                        border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
-                        padding: '16px 20px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
+                        padding: '6px 14px',
+                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        color: isDark ? '#F9FAFB' : '#141B2B',
+                        cursor: 'pointer',
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: i % 2 === 0 ? '#3B82F6' : '#10B981' }} />
-                        <div>
-                          <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
-                            {m.name}
-                          </h4>
-                          <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <Clock size={13} /> {meetingTimeRange(m)}
-                          </p>
-                        </div>
+                      Join
+                    </button>
+                  </div>
+
+                  <div
+                    style={{
+                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+                      borderRadius: '12px',
+                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                      padding: '16px 20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#10B981' }} />
+                      <div>
+                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
+                          Design Review
+                        </h4>
+                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Clock size={13} /> 4:00 PM - 5:00 PM
+                        </p>
                       </div>
-                      <button
-                        onClick={() => navigate(`/meet/${m.roomSlug}`)}
-                        style={{
-                          padding: '6px 14px',
-                          backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-                          border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
-                          borderRadius: '6px',
-                          fontSize: '13px',
-                          fontWeight: 600,
-                          color: isDark ? '#F9FAFB' : '#141B2B',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Join
-                      </button>
                     </div>
-                  ))}
+                    <button
+                      onClick={() => navigate('/meet/design-review', { state: { participation: "account" } })}
+                      style={{
+                        padding: '6px 14px',
+                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        color: isDark ? '#F9FAFB' : '#141B2B',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Join
+                    </button>
+                  </div>
                 </div>
-                )}
               </div>
-              )}
             </section>
           )}
 
@@ -1219,7 +1220,7 @@ export function DashboardPage() {
                           </td>
                           <td style={{ padding: '14px 18px', textAlign: 'right' }}>
                             <button
-                              onClick={() => navigate(`/meet/${meeting.roomSlug}`)}
+                              onClick={() => navigate(`/meet/${meeting.roomSlug}`, { state: { participation: "account" } })}
                               style={{
                                 padding: '5px 12px',
                                 backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',
@@ -1497,6 +1498,34 @@ export function DashboardPage() {
                     {copiedLink ? <Check size={14} /> : <Copy size={14} />}
                     {copiedLink ? 'Copied!' : 'Copy'}
                   </button>
+                  <button
+                    onClick={() => setShowDashboardShareModal(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 12px',
+                      backgroundColor: '#1E1B4B',
+                      border: '1px solid #4F46E5',
+                      color: '#A5B4FC',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#4F46E5';
+                      e.currentTarget.style.color = '#FFFFFF';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1E1B4B';
+                      e.currentTarget.style.color = '#A5B4FC';
+                    }}
+                  >
+                    <Share2 size={13} />
+                    <span>Share</span>
+                  </button>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                   <button
@@ -1542,6 +1571,20 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+      {/* Google Meet style Share Joining Info Modal */}
+      <ShareMeetingModal
+        isOpen={showDashboardShareModal}
+        onClose={() => setShowDashboardShareModal(false)}
+        meeting={
+          createdRoomLink
+            ? {
+                name: `${currentUser?.name || 'My'}'s Meeting`,
+                meetingUrl: createdRoomLink,
+                hostName: currentUser?.name || 'Organizer',
+              }
+            : null
+        }
+      />
     </div>
   );
 }

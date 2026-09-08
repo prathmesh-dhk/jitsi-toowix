@@ -37,7 +37,7 @@ export function EmailVerificationPage() {
         const idToken = await auth.currentUser.getIdToken();
         const response = await fetch(`${BACKEND_URL}/api/auth/send-verification-email`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${idToken}` },
+          headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
         });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
@@ -78,7 +78,7 @@ export function EmailVerificationPage() {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
+              'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}`,
             },
           });
           setFeedback({

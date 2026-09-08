@@ -97,6 +97,7 @@ export const runAuthTests = async (): Promise<void> => {
     await company.save();
 
     const jitsiToken = generateJitsiToken({
+      room: 'regression-room',
       user: {
         id: String(user._id),
         name: user.fullName,
@@ -111,7 +112,7 @@ export const runAuthTests = async (): Promise<void> => {
     });
 
     console.log(`[PASS] Login Gate PASSED! Jitsi Meeting JWT Token successfully issued.`);
-    console.log(`       Token: ${jitsiToken.substring(0, 35)}...`);
+    console.log('[PASS] Signed token generated (value omitted).');
 
     // 10. Tue-BE-3: Test Forgot Password (Generic response simulation)
     console.log('\n10. Testing Tue-BE-3: Forgot Password Generic Response...');

@@ -63,7 +63,7 @@ export function SignupPage() {
   const handleBackendSignup = async (idToken: string, name: string) => {
     const response = await fetch(`${BACKEND_URL}/api/auth/signup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
       body: JSON.stringify({ fullName: name, inviteId }),
     });
     const data = await response.json();
@@ -74,7 +74,7 @@ export function SignupPage() {
   const handleCompanyRegister = async (idToken: string, name: string) => {
     const response = await fetch(`${BACKEND_URL}/api/companies/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+      headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
       body: JSON.stringify({ name }),
     });
     const data = await response.json();
@@ -132,7 +132,7 @@ export function SignupPage() {
       // Send our own Toowix-branded verification email (not Firebase's default one)
       await fetch(`${BACKEND_URL}/api/auth/send-verification-email`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${idToken}` },
+        headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
       }).catch((err) => console.warn('[Signup] Could not send verification email:', err));
 
       if (!inviteId) await handleCompanyRegister(idToken, companyName.trim());

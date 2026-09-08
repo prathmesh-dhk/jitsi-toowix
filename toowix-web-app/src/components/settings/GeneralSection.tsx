@@ -13,7 +13,7 @@ async function policyRequest<T>(path: string, options: RequestInit = {}): Promis
   const idToken = await auth.currentUser?.getIdToken();
   const response = await fetch(`${BACKEND_URL}/api/companies${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}), ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...(idToken ? { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } : {}), ...(options.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Request failed');

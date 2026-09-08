@@ -46,7 +46,6 @@ import recordingRoutes from './routes/recording.routes';
 import teamRoutes from './routes/team.routes';
 import notificationRoutes from './routes/notification.routes';
 import { startMeetingReminderScheduler } from './notifications/meetingReminders';
-import { startRecordingRetentionScheduler } from './recordings/retention';
 import settingsRoutes from './routes/settings.routes';
 
 app.use('/api/auth', authRoutes);
@@ -92,7 +91,6 @@ async function bootstrap() {
       console.log(`[Toowix Backend] Health check available at http://localhost:${PORT}/health`);
     });
     startMeetingReminderScheduler();
-    startRecordingRetentionScheduler();
   } catch (error) {
     console.error('[Toowix Backend] Fatal initialization error:', error);
     process.exit(1);

@@ -6,6 +6,10 @@ export interface IRecording {
   createdBy: Types.ObjectId;
   name: string;
   recordedAt: Date;
+  durationSeconds?: number;
+  recordingSessionId?: string;
+  status?: 'Processing' | 'Ready' | 'Failed';
+  failureReason?: string;
   durationMinutes: number;
   sizeBytes: number;
   fileUrl?: string | null;
@@ -61,6 +65,10 @@ const RecordingSchema = new Schema<IRecordingDocument>(
       required: true,
       index: true,
     },
+    durationSeconds: { type: Number, min: 0 },
+    recordingSessionId: { type: String },
+    status: { type: String, enum: ['Processing', 'Ready', 'Failed'], default: 'Processing' },
+    failureReason: { type: String },
     durationMinutes: {
       type: Number,
       required: true,
@@ -105,6 +113,7 @@ const RecordingSchema = new Schema<IRecordingDocument>(
   }
 );
 
+RecordingSchema.index({ recordingSessionId: 1 }, { unique: true, sparse: true });
 RecordingSchema.index({ companyId: 1, recordedAt: -1 });
 RecordingSchema.index({ createdBy: 1, recordedAt: -1 });
 

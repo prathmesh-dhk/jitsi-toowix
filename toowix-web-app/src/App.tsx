@@ -1,3 +1,5 @@
+import { AccountGuard } from './components/AccountGuard';
+import { MeetingEndedPage } from './pages/MeetingEndedPage';
 import React, { useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom';
 import { Video, Plus, Keyboard, ShieldCheck, Users, Sparkles } from 'lucide-react';
@@ -8,7 +10,7 @@ function HomePage() {
   const navigate = useNavigate();
 
   const handleStartInstant = () => {
-    const newRoomId = generateUniqueMeetingId();
+    const newRoomId = `instant-${generateUniqueMeetingId()}`;
     navigate(`/meet/${newRoomId}`);
   };
 
@@ -276,6 +278,8 @@ import { RecordingSection } from './components/settings/RecordingSection';
 import { NotificationsSection } from './components/settings/NotificationsSection';
 import { SecuritySection } from './components/settings/SecuritySection';
 import { StorageSection } from './components/settings/StorageSection';
+import { RsvpPage } from './pages/RsvpPage';
+import { RecordingWatchPage } from './pages/RecordingWatchPage';
 
 export default function App() {
   return (
@@ -283,7 +287,11 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/rsvp" element={<RsvpPage />} />
+          <Route path="/recordings/:id" element={<RecordingWatchPage />} />
+          <Route path="/recording/:id" element={<RecordingWatchPage />} />
+          <Route element={<AccountGuard />}><Route path="/dashboard" element={<DashboardPage />} /></Route>
+          <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
           <Route path="/login" element={<LoginPage />} />
@@ -292,6 +300,7 @@ export default function App() {
           <Route path="/register" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/verify-email" element={<EmailVerificationPage />} />
+          <Route element={<AccountGuard />}>
           <Route path="/settings" element={<SettingsPage />}>
             <Route index element={<Navigate to="/settings/profile" replace />} />
             <Route path="profile" element={<ProfileSection />} />
@@ -301,6 +310,7 @@ export default function App() {
             <Route path="notifications" element={<NotificationsSection />} />
             <Route path="security" element={<SecuritySection />} />
             <Route path="storage" element={<StorageSection />} />
+          </Route>
           </Route>
         </Routes>
       </BrowserRouter>
