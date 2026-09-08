@@ -2,17 +2,25 @@
     display: inline-block;
     position: relative;
     background-size: contain;
+    background-color: #3c4043;
     border: 2px solid transparent;
-    border-radius: $borderRadius;
-    margin: 0 2px;
+    border-radius: $borderRadius !important;
+    margin: 6px;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+
+    &.active-speaker {
+        border: 3px solid #1a73e8 !important;
+        box-shadow: 0 0 16px rgba(26, 115, 232, 0.45);
+    }
 
     &:hover {
-        cursor: hand;
+        cursor: pointer;
     }
 
     & > video {
-        cursor: hand;
-        border-radius: $borderRadius;
+        cursor: pointer;
+        border-radius: $borderRadius !important;
         object-fit: cover;
         overflow: hidden;
     }
@@ -20,5 +28,17 @@
     .presence-label {
         position: absolute;
         z-index: $zindex3;
+    }
+
+    // Google Meet style participant display name pill
+    .displayname {
+        background: rgba(32, 33, 36, 0.75);
+        backdrop-filter: blur(4px);
+        border-radius: 8px;
+        padding: 4px 10px;
+        font-weight: 500;
+        font-size: 13px;
+        color: #FFFFFF;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
 }

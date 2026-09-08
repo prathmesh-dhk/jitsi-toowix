@@ -6,6 +6,10 @@ export interface IRecording {
   createdBy: Types.ObjectId;
   name: string;
   recordedAt: Date;
+  durationSeconds?: number;
+  recordingSessionId?: string;
+  status?: 'Processing' | 'Ready' | 'Failed';
+  failureReason?: string;
   durationMinutes: number;
   sizeBytes: number;
   fileUrl?: string | null;
@@ -24,6 +28,7 @@ export interface IRecording {
   folder?: string;
   allowDownload?: boolean;
   allowShare?: boolean;
+  sharedWith?: string[]; // specific emails granted access, in addition to owner/company admins
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +65,10 @@ const RecordingSchema = new Schema<IRecordingDocument>(
       required: true,
       index: true,
     },
+    durationSeconds: { type: Number, min: 0 },
+    recordingSessionId: { type: String },
+    status: { type: String, enum: ['Processing', 'Ready', 'Failed'], default: 'Processing' },
+    failureReason: { type: String },
     durationMinutes: {
       type: Number,
       required: true,
@@ -89,6 +98,7 @@ const RecordingSchema = new Schema<IRecordingDocument>(
     folder: { type: String, default: '', trim: true },
     allowDownload: { type: Boolean, default: false },
     allowShare: { type: Boolean, default: false },
+    sharedWith: { type: [String], default: [] },
   },
   {
     timestamps: true,
@@ -103,6 +113,7 @@ const RecordingSchema = new Schema<IRecordingDocument>(
   }
 );
 
+RecordingSchema.index({ recordingSessionId: 1 }, { unique: true, sparse: true });
 RecordingSchema.index({ companyId: 1, recordedAt: -1 });
 RecordingSchema.index({ createdBy: 1, recordedAt: -1 });
 

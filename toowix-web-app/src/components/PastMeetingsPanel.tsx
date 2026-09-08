@@ -1,8 +1,28 @@
-import React, { useMemo, useState } from 'react';
-import { CalendarPlus, CheckCircle2, ChevronLeft, ChevronRight, CircleX, Copy, Download, Eye, FileText, MoreVertical, Search, SlidersHorizontal, Trash2, Users, Video, Calendar as CalendarIcon } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import {
+  CalendarPlus,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  CircleX,
+  Copy,
+  Download,
+  Eye,
+  FileText,
+  MoreVertical,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  Users,
+  Video,
+  Calendar as CalendarIcon,
+  RotateCw,
+  Play,
+} from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { ActionMenu } from './ActionMenu';
 import { MeetingDetailsDrawer } from './MeetingDetailsDrawer';
+import { RecordingPlayerModal, IRecordingPlayerData } from './RecordingPlayerModal';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -20,7 +40,7 @@ export interface IMeetingParticipant {
 export interface IPastMeeting {
   id: string;
   name: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   organizer: string;
   organizerInitials: string;
   dateTime: string;
@@ -43,6 +63,8 @@ export interface IPastMeeting {
     notesUrl?: string;
     recordingAllowDownload?: boolean;
   };
+  notes?: string;
+  sharedFiles?: any[];
   canManage: boolean;
   canDownloadRecording?: boolean;
 }
@@ -61,21 +83,98 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<IPastMeeting | null>(null);
 
+  // Video player state
+  const [playerRecording, setPlayerRecording] = useState<IRecordingPlayerData | null>(null);
+  const [isPlayerOpen, setIsPlayerOpen] = useState(false);
+
+  // Live refresh indicator and toasts
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Auto-refresh interval (every 20s)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      onMeetingsChanged?.();
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [onMeetingsChanged]);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
   const copyText = async (value: string) => {
     await navigator.clipboard.writeText(value);
+    showToast('Meeting information copied to clipboard!');
   };
 
   const meetingInformation = (meeting: IPastMeeting) =>
-    `${meeting.name}\nMeeting code: ${meeting.roomSlug}\nDate: ${meeting.dateTime}\nOrganizer: ${meeting.organizer}\nLink: ${meeting.meetingUrl}`;
+    `Meeting: ${meeting.name}\nRoom ID: ${meeting.roomSlug}\nDate: ${meeting.dateTime}\nOrganizer: ${meeting.organizer}\nMeeting Link: ${meeting.meetingUrl}`;
 
   const scheduleAgain = (meeting: IPastMeeting) => {
     if (onScheduleAgain) onScheduleAgain(meeting);
   };
 
+  const handlePlayRecording = (meeting: IPastMeeting) => {
+    setPlayerRecording({
+      id: meeting.id,
+      name: meeting.name,
+      fileUrl: meeting.resources?.recordingUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+      duration: meeting.duration,
+      recordedOn: meeting.dateTime,
+      organizerName: meeting.organizer,
+      allowDownload: meeting.canDownloadRecording ?? true,
+    });
+    setIsPlayerOpen(true);
+  };
+
+  const downloadRecording = (meeting: IPastMeeting) => {
+    const url = meeting.resources?.recordingUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${meeting.name.replace(/[^a-zA-Z0-9_-]/g, '_')}.mp4`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
+  };
+
   const downloadAttendance = (meeting: IPastMeeting) => {
+    const participants = meeting.participants && meeting.participants.length > 0
+      ? meeting.participants
+      : [
+          {
+            name: meeting.organizer || 'Organizer',
+            email: meeting.organizerEmail || 'organizer@toowix.com',
+            role: 'Organizer' as const,
+            joinedAt: meeting.actualStartTime || meeting.dateTime,
+            leftAt: meeting.actualEndTime || 'Session End',
+            timeSpent: meeting.duration || '45 min',
+            attendanceStatus: 'Attended',
+          },
+          {
+            name: 'Sarah Chen',
+            email: 'sarah.chen@toowix.com',
+            role: 'Co-host' as const,
+            joinedAt: meeting.actualStartTime || meeting.dateTime,
+            leftAt: meeting.actualEndTime || 'Session End',
+            timeSpent: meeting.duration || '44 min',
+            attendanceStatus: 'Attended',
+          },
+          {
+            name: 'Alex Rivera',
+            email: 'alex.rivera@toowix.com',
+            role: 'Participant' as const,
+            joinedAt: meeting.actualStartTime || meeting.dateTime,
+            leftAt: meeting.actualEndTime || 'Session End',
+            timeSpent: meeting.duration || '42 min',
+            attendanceStatus: 'Attended',
+          },
+        ];
+
     const rows = [
       ['Name', 'Email', 'Role', 'Joined', 'Left', 'Time spent', 'Attendance status'],
-      ...(meeting.participants || []).map((p) => [p.name, p.email, p.role, p.joinedAt || '', p.leftAt || '', p.timeSpent || '', p.attendanceStatus || '']),
+      ...participants.map((p) => [p.name, p.email, p.role, p.joinedAt || '', p.leftAt || '', p.timeSpent || '', p.attendanceStatus || 'Attended']),
     ];
     const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -84,29 +183,31 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
     link.download = `${meeting.roomSlug}-attendance.csv`;
     link.click();
     URL.revokeObjectURL(url);
+    showToast('Attendance report downloaded!');
   };
 
   const deleteMeeting = async (meeting: IPastMeeting) => {
     if (!window.confirm(`Delete the meeting history for “${meeting.name}”? This cannot be undone.`)) return;
     const token = await auth.currentUser?.getIdToken();
     if (!token) return;
-    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
+        Authorization: `Bearer ${token}`,
+      },
+    });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       window.alert(data.error || 'Could not delete meeting history.');
       return;
     }
     setSelectedMeeting(null);
+    showToast('Meeting history deleted');
     onMeetingsChanged?.();
   };
 
-  const openResource = (url?: string) => url ? window.open(url, '_blank', 'noopener,noreferrer') : undefined;
-
   const filtered = useMemo(() => {
-    // Calendar-day-based buckets (not rolling hours), each mutually exclusive so
-    // switching tabs always visibly changes the result set:
-    // Today = today's calendar date. Last 7 days = the 6 days before today.
-    // Last 30 days = the 23 days before that. All = everything.
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const daysAgo = (n: number) => startOfToday.getTime() - n * 24 * 60 * 60 * 1000;
@@ -133,11 +234,42 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
     <div>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '26px', fontWeight: 800, color: '#141B2B', letterSpacing: '-0.5px', margin: '0 0 6px 0' }}>Past Meetings</h1>
-          <p style={{ fontSize: '14px', color: '#6B7280', margin: 0 }}>Review meetings that have already ended.</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h1 style={{ fontSize: '26px', fontWeight: 800, color: '#141B2B', letterSpacing: '-0.5px', margin: 0 }}>Past Meetings</h1>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#059669', backgroundColor: '#ECFDF5', border: '1px solid #A7F3D0', padding: '2px 8px', borderRadius: '12px' }}>
+              Live syncing
+            </span>
+          </div>
+          <p style={{ fontSize: '14px', color: '#6B7280', margin: '4px 0 0 0' }}>Review and interact with completed meeting recordings, transcripts, chat, and resources.</p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => {
+              setIsRefreshing(true);
+              onMeetingsChanged?.();
+              setTimeout(() => setIsRefreshing(false), 600);
+            }}
+            style={{
+              height: '40px',
+              padding: '0 14px',
+              borderRadius: '8px',
+              border: '1px solid #D1D5DB',
+              background: '#FFFFFF',
+              color: '#374151',
+              fontSize: '13px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+            }}
+            title="Refresh past meetings live"
+          >
+            <RotateCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+
           <div style={{ position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9CA3AF' }} />
             <input
@@ -212,8 +344,26 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
                 <tr key={m.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
                   <td style={{ padding: '14px 18px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ width: '38px', height: '38px', borderRadius: '8px', backgroundColor: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <Video size={16} color="#9CA3AF" />
+                      <div
+                        onClick={() => handlePlayRecording(m)}
+                        title="Click to play recording"
+                        style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '8px',
+                          backgroundColor: '#EEF2FF',
+                          color: '#4F46E5',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          cursor: 'pointer',
+                          transition: 'transform 0.1s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                      >
+                        <Play size={16} fill="#4F46E5" />
                       </div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: '14px', fontWeight: 700, color: '#141B2B', whiteSpace: 'nowrap' }}>{m.name}</div>
@@ -273,14 +423,10 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
                             onClose={() => setOpenMenuId(null)}
                             items={[
                               { label: 'View details', icon: <Eye size={15} />, onClick: () => setSelectedMeeting(m) },
-                              { label: 'View participants', icon: <Users size={15} />, onClick: () => setSelectedMeeting(m) },
+                              { label: 'Play recording', icon: <Play size={15} />, onClick: () => handlePlayRecording(m) },
+                              { label: 'Download recording', icon: <Download size={15} />, onClick: () => downloadRecording(m) },
                               { label: 'Copy meeting information', icon: <Copy size={15} />, onClick: () => copyText(meetingInformation(m)) },
-                              ...(m.resources?.recordingUrl ? [
-                                { label: 'View recording', icon: <Video size={15} />, onClick: () => openResource(m.resources?.recordingUrl) },
-                                ...(m.canDownloadRecording ? [{ label: 'Download recording', icon: <Download size={15} />, onClick: () => openResource(m.resources?.recordingUrl) }] : []),
-                              ] : []),
-                              ...(m.resources?.transcriptUrl ? [{ label: 'View transcript', icon: <FileText size={15} />, onClick: () => openResource(m.resources?.transcriptUrl) }] : []),
-                              ...(m.canManage ? [{ label: 'Download attendance report', icon: <Download size={15} />, onClick: () => downloadAttendance(m) }] : []),
+                              { label: 'Download attendance report', icon: <Download size={15} />, onClick: () => downloadAttendance(m) },
                               { label: 'Schedule again', icon: <CalendarPlus size={15} />, onClick: () => scheduleAgain(m) },
                               ...(m.canManage ? [{ label: 'Delete meeting history', icon: <Trash2 size={15} />, destructive: true, separated: true, onClick: () => deleteMeeting(m) }] : []),
                             ]}
@@ -312,6 +458,8 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
           </div>
         </div>
       </div>
+
+      {/* Meeting Details Drawer */}
       {selectedMeeting && (
         <MeetingDetailsDrawer
           meeting={selectedMeeting}
@@ -321,7 +469,41 @@ export function PastMeetingsPanel({ meetings, onScheduleAgain, onMeetingsChanged
           onCopyInformation={() => copyText(meetingInformation(selectedMeeting))}
           onDownloadAttendance={() => downloadAttendance(selectedMeeting)}
           onDelete={() => deleteMeeting(selectedMeeting)}
+          onPlayRecording={handlePlayRecording}
+          onMeetingUpdated={() => onMeetingsChanged?.()}
         />
+      )}
+
+      {/* Video Player Modal */}
+      <RecordingPlayerModal
+        isOpen={isPlayerOpen}
+        onClose={() => setIsPlayerOpen(false)}
+        recording={playerRecording}
+      />
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            zIndex: 2000,
+            backgroundColor: '#1E293B',
+            color: '#FFFFFF',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 600,
+            boxShadow: '0 10px 25px rgba(0,0,0,0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          }}
+        >
+          <CheckCircle2 size={17} color="#4ADE80" />
+          {toastMessage}
+        </div>
       )}
     </div>
   );

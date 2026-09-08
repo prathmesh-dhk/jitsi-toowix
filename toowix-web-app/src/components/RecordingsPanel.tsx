@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Download, Edit3, Eye, FileAudio, FileText, FolderInput, LockKeyhole, MoreVertical, Play, Search, Share2, SlidersHorizontal, Trash2, Video, Clock, Database, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Copy, Download, Edit3, Eye, FileAudio, FileText, FolderInput, LockKeyhole, MoreVertical, Play, Search, Share2, SlidersHorizontal, Trash2, Video, Clock, Database, ChevronLeft, ChevronRight, X, Check } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { ActionMenu, IActionMenuItem } from './ActionMenu';
+import { ShareRecordingModal } from './ShareRecordingModal';
+import { RecordingPlayerModal } from './RecordingPlayerModal';
+import { RecordingDetailsModal } from './RecordingDetailsModal';
 
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
@@ -32,12 +35,15 @@ interface IRecording {
   folder?: string;
   allowDownload?: boolean;
   allowShare?: boolean;
+  sharedWith?: string[];
 }
 
 interface IApiRecording {
   id: string;
   name: string;
   recordedAt: string;
+  durationSeconds?: number;
+  status?: string;
   durationMinutes: number;
   sizeBytes: number;
   createdBy?: { _id?: string; id?: string; fullName?: string; email?: string } | string;
@@ -57,6 +63,7 @@ interface IApiRecording {
   folder?: string;
   allowDownload?: boolean;
   allowShare?: boolean;
+  sharedWith?: string[];
 }
 
 const initialsOf = (name: string) =>
@@ -67,11 +74,9 @@ const initialsOf = (name: string) =>
     .map((p) => p[0]?.toUpperCase())
     .join('') || '?';
 
-const formatDuration = (minutes: number) => {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h > 0) return `${h} hr ${m} min`;
-  return `${m} min`;
+const formatDuration = (minutes: number, preciseSeconds?: number) => {
+  const seconds = Math.max(0, Math.round(preciseSeconds ?? minutes * 60));
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
 const formatSize = (bytes: number) => {
@@ -89,11 +94,11 @@ const mapApiRecording = (r: IApiRecording): IRecording => {
     organizerName,
     recordedOn: new Date(r.recordedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
       ', ' + new Date(r.recordedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-    duration: formatDuration(r.durationMinutes),
+    duration: r.status === 'Ready' ? formatDuration(r.durationMinutes, r.durationSeconds) : (r.status || 'Unverified'),
     size: formatSize(r.sizeBytes),
     sizeBytes: r.sizeBytes,
     ownerId: typeof r.createdBy === 'object' ? r.createdBy?._id || r.createdBy?.id : r.createdBy,
-    fileUrl: r.fileUrl,
+    fileUrl: r.status === 'Ready' ? r.fileUrl : undefined,
     audioUrl: r.audioUrl,
     audioSizeBytes: r.audioSizeBytes,
     transcriptUrl: r.transcriptUrl,
@@ -107,8 +112,9 @@ const mapApiRecording = (r: IApiRecording): IRecording => {
     archiveUrl: r.archiveUrl,
     archiveSizeBytes: r.archiveSizeBytes,
     folder: r.folder,
-    allowDownload: r.allowDownload,
+    allowDownload: r.status === 'Ready' && r.allowDownload,
     allowShare: r.allowShare,
+    sharedWith: r.sharedWith || [],
   };
 };
 
@@ -120,6 +126,14 @@ export function RecordingsPanel() {
   const [loading, setLoading] = useState(true);
   const [openMenu, setOpenMenu] = useState<{ id: string; kind: 'actions' | 'downloads' } | null>(null);
   const [selectedRecording, setSelectedRecording] = useState<IRecording | null>(null);
+  const [playingRecording, setPlayingRecording] = useState<IRecording | null>(null);
+  const [shareModalRecording, setShareModalRecording] = useState<IRecording | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
 
   const cachedUser = (() => {
     try { return JSON.parse(localStorage.getItem('toowix_user') || '{}'); } catch { return {}; }
@@ -152,56 +166,102 @@ export function RecordingsPanel() {
     ...(recording.archiveUrl ? [{ label: 'Download all files — ZIP', icon: <Download size={15} />, detail: formatSize(recording.archiveSizeBytes || 0), onClick: () => downloadFile(recording.archiveUrl, `${recording.name}.zip`) }] : []),
   ];
 
-  const playRecording = (recording: IRecording) => recording.fileUrl ? window.open(recording.fileUrl, '_blank', 'noopener,noreferrer') : window.alert('No video file is available for this recording.');
+  const playRecording = (recording: IRecording) => {
+    setPlayingRecording(recording);
+  };
+
+  const copyRecordingLink = async (recording: IRecording) => {
+    const url = `${window.location.origin}/recordings/${recording.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Recording link copied to clipboard!');
+    } catch (e) {
+      console.error('Failed to copy link:', e);
+    }
+  };
 
   const renameRecording = async (recording: IRecording) => {
-    const name = window.prompt('Recording name', recording.name)?.trim();
+    const name = window.prompt('Rename recording to:', recording.name)?.trim();
     if (!name || name === recording.name) return;
-    const token = await auth.currentUser?.getIdToken();
-    const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name }) });
-    if (response.ok) setRecordings((items) => items.map((item) => item.id === recording.id ? { ...item, name } : item));
-    else window.alert('Could not rename the recording.');
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name }),
+      });
+      if (response.ok) {
+        setRecordings((items) => items.map((item) => (item.id === recording.id ? { ...item, name } : item)));
+        showToast(`Renamed to "${name}"`);
+      } else {
+        window.alert('Could not rename the recording.');
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const moveRecording = async (recording: IRecording) => {
-    const folder = window.prompt('Move to folder', recording.folder || '')?.trim();
+    const folder = window.prompt('Move to folder:', recording.folder || '')?.trim();
     if (folder === undefined) return;
-    const token = await auth.currentUser?.getIdToken();
-    const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ folder }) });
-    if (response.ok) setRecordings((items) => items.map((item) => item.id === recording.id ? { ...item, folder } : item));
-    else window.alert('Could not move the recording.');
-  };
-
-  const shareRecording = async (recording: IRecording) => {
-    const url = recording.fileUrl || `${window.location.origin}/recordings/${recording.id}`;
-    if (navigator.share) await navigator.share({ title: recording.name, url });
-    else {
-      await navigator.clipboard.writeText(url);
-      window.alert('Recording link copied.');
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ folder }),
+      });
+      if (response.ok) {
+        setRecordings((items) => items.map((item) => (item.id === recording.id ? { ...item, folder } : item)));
+        showToast(folder ? `Moved to folder "${folder}"` : 'Removed from folder');
+      } else {
+        window.alert('Could not move the recording.');
+      }
+    } catch (e) {
+      console.error(e);
     }
   };
 
   const deleteRecording = async (recording: IRecording) => {
-    if (!window.confirm(`Delete “${recording.name}”? This cannot be undone.`)) return;
-    const token = await auth.currentUser?.getIdToken();
-    const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-    if (response.ok) setRecordings((items) => items.filter((item) => item.id !== recording.id));
-    else window.alert('Could not delete the recording.');
+    if (!window.confirm(`Delete "${recording.name}"? This cannot be undone.`)) return;
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const response = await fetch(`${BACKEND_URL}/api/recordings/${recording.id}`, {
+        method: 'DELETE',
+        headers: {
+          'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (response.ok) {
+        setRecordings((items) => items.filter((item) => item.id !== recording.id));
+        setStats((prev) => ({ ...prev, count: Math.max(0, prev.count - 1) }));
+        showToast('Recording deleted');
+      } else {
+        window.alert('Could not delete the recording.');
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const recordingMenu = (recording: IRecording): IActionMenuItem[] => [
     { label: 'Play recording', icon: <Play size={15} />, onClick: () => playRecording(recording) },
     { label: 'Open recording details', icon: <Eye size={15} />, onClick: () => setSelectedRecording(recording) },
-    { label: 'Copy recording link', icon: <Copy size={15} />, onClick: () => navigator.clipboard.writeText(recording.fileUrl || `${window.location.origin}/recordings/${recording.id}`) },
-    ...(canShare(recording) ? [{ label: 'Share recording', icon: <Share2 size={15} />, onClick: () => shareRecording(recording) }] : []),
-    ...(canManage(recording) ? [{ label: 'Rename recording', icon: <Edit3 size={15} />, onClick: () => renameRecording(recording) }] : []),
-    ...(canDownload(recording) && recording.fileUrl ? [{ label: 'Download video', icon: <Download size={15} />, onClick: () => downloadFile(recording.fileUrl, `${recording.name}.mp4`) }] : []),
-    ...(canDownload(recording) && recording.audioUrl ? [{ label: 'Download audio', icon: <FileAudio size={15} />, onClick: () => downloadFile(recording.audioUrl, `${recording.name}.mp3`) }] : []),
-    ...(recording.transcriptUrl ? [{ label: 'View transcript', icon: <FileText size={15} />, onClick: () => window.open(recording.transcriptUrl, '_blank', 'noopener,noreferrer') }] : []),
-    ...(canDownload(recording) && recording.transcriptUrl ? [{ label: 'Download transcript', icon: <Download size={15} />, onClick: () => downloadFile(recording.transcriptUrl, `${recording.name}-transcript.${(recording.transcriptFormat || 'TXT').toLowerCase()}`) }] : []),
+    { label: 'Copy recording link', icon: <Copy size={15} />, onClick: () => copyRecordingLink(recording) },
+    { label: 'Share recording', icon: <Share2 size={15} />, onClick: () => setShareModalRecording(recording) },
+    { label: 'Rename recording', icon: <Edit3 size={15} />, onClick: () => renameRecording(recording) },
     { label: 'Move to folder', icon: <FolderInput size={15} />, onClick: () => moveRecording(recording) },
-    ...(canManage(recording) ? [{ label: 'Manage access', icon: <LockKeyhole size={15} />, onClick: () => window.alert('Access controls are set by the recording owner or workspace admin.') }] : []),
-    ...(canManage(recording) ? [{ label: 'Delete recording', icon: <Trash2 size={15} />, destructive: true, separated: true, onClick: () => deleteRecording(recording) }] : []),
+    { label: 'Manage access', icon: <LockKeyhole size={15} />, onClick: () => setShareModalRecording(recording) },
+    { label: 'Delete recording', icon: <Trash2 size={15} />, destructive: true, separated: true, onClick: () => deleteRecording(recording) },
   ];
 
   useEffect(() => {
@@ -210,7 +270,7 @@ export function RecordingsPanel() {
         const idToken = await auth.currentUser?.getIdToken();
         if (!idToken) return;
         const response = await fetch(`${BACKEND_URL}/api/recordings`, {
-          headers: { Authorization: `Bearer ${idToken}` },
+          headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
         });
         const data = await response.json();
         if (response.ok) {
@@ -333,9 +393,12 @@ export function RecordingsPanel() {
               {filtered.map((rec) => (
                 <tr key={rec.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
                   <td style={{ padding: '14px 18px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ width: '52px', height: '38px', borderRadius: '6px', backgroundColor: '#F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <Play size={14} color="#9CA3AF" fill="#9CA3AF" />
+                    <div
+                      onClick={() => playRecording(rec)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}
+                    >
+                      <div style={{ width: '52px', height: '38px', borderRadius: '6px', backgroundColor: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#4F46E5' }}>
+                        <Play size={14} fill="#4F46E5" />
                       </div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: '14px', fontWeight: 700, color: '#141B2B', whiteSpace: 'nowrap' }}>{rec.name}</div>
@@ -428,23 +491,70 @@ export function RecordingsPanel() {
           </div>
         </div>
       </div>
-      {selectedRecording && (
-        <div role="dialog" aria-modal="true" aria-label={`${selectedRecording.name} recording details`} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,.38)' }} onMouseDown={(event) => event.target === event.currentTarget && setSelectedRecording(null)}>
-          <aside style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 'min(480px, 94vw)', background: '#FFFFFF', boxShadow: '-10px 0 30px rgba(15,23,42,.18)', padding: '24px', boxSizing: 'border-box' }}>
-            <button type="button" onClick={() => setSelectedRecording(null)} aria-label="Close details" style={{ position: 'absolute', right: '18px', top: '18px', width: '34px', height: '34px', border: '1px solid #E5E7EB', borderRadius: '8px', background: '#FFFFFF', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={17} /></button>
-            <div style={{ fontSize: '12px', color: '#6B7280' }}>Recording details</div>
-            <h2 style={{ margin: '5px 50px 22px 0', fontSize: '21px', color: '#111827' }}>{selectedRecording.name}</h2>
-            {[
-              ['Organizer', selectedRecording.organizerName],
-              ['Recorded on', selectedRecording.recordedOn],
-              ['Duration', selectedRecording.duration],
-              ['Video size', selectedRecording.size],
-              ['Folder', selectedRecording.folder || 'No folder'],
-              ['Transcript', selectedRecording.transcriptUrl ? `${selectedRecording.transcriptFormat || 'TXT'} available` : 'No transcript available'],
-              ['Captions', selectedRecording.captionsUrl ? `${selectedRecording.captionsFormat || 'VTT'} available` : 'No captions available'],
-              ['Meeting chat', selectedRecording.chatUrl ? 'Available' : 'No meeting chat available'],
-            ].map(([label, value]) => <div key={label} style={{ padding: '12px 0', borderBottom: '1px solid #F3F4F6' }}><div style={{ fontSize: '11px', color: '#6B7280', textTransform: 'uppercase' }}>{label}</div><div style={{ fontSize: '13px', color: '#111827', fontWeight: 600, marginTop: '3px' }}>{value}</div></div>)}
-          </aside>
+
+      {/* 1. In-App Video Player Modal */}
+      <RecordingPlayerModal
+        isOpen={!!playingRecording}
+        onClose={() => setPlayingRecording(null)}
+        recording={playingRecording}
+        onShare={() => {
+          const rec = playingRecording;
+          setPlayingRecording(null);
+          setShareModalRecording(rec);
+        }}
+      />
+
+      {/* 2. Rich Recording Details Modal */}
+      <RecordingDetailsModal
+        isOpen={!!selectedRecording}
+        onClose={() => setSelectedRecording(null)}
+        recording={selectedRecording}
+        onPlay={(rec) => {
+          setSelectedRecording(null);
+          setPlayingRecording(rec);
+        }}
+        onShare={(rec) => {
+          setSelectedRecording(null);
+          setShareModalRecording(rec);
+        }}
+        onDownload={downloadFile}
+      />
+
+      {/* 3. Google Drive-Style Share Recording Modal */}
+      <ShareRecordingModal
+        isOpen={!!shareModalRecording}
+        onClose={() => setShareModalRecording(null)}
+        recording={shareModalRecording}
+        onUpdated={(up) => {
+          setRecordings((items) =>
+            items.map((it) => (it.id === shareModalRecording?.id ? { ...it, ...up } : it))
+          );
+        }}
+      />
+
+      {/* Floating Action Toast */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            right: '24px',
+            backgroundColor: '#1E293B',
+            color: '#FFFFFF',
+            padding: '10px 18px',
+            borderRadius: '10px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '13px',
+            fontWeight: 600,
+            zIndex: 2000,
+            animation: 'toowixFadeIn 0.2s ease',
+          }}
+        >
+          <Check size={16} color="#34D399" />
+          <span>{toastMessage}</span>
         </div>
       )}
     </div>

@@ -34,6 +34,7 @@ export const registerCompanyHandler = async (req: AuthenticatedRequest, res: Res
       return;
     }
 
+    if (user.status !== 'ACTIVE' || user.forcePasswordReset) { res.status(403).json({ error: 'Account is not authorized' }); return; }
     if (user.companyId) {
       res.status(400).json({ error: 'User is already associated with a company workspace' });
       return;

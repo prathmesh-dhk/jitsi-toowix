@@ -1,5 +1,7 @@
+import { AccountGuard } from './components/AccountGuard';
+import { MeetingEndedPage } from './pages/MeetingEndedPage';
 import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom';
 import { Video, Plus, Keyboard, ShieldCheck, Users, Sparkles } from 'lucide-react';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from './lib/meeting-id';
 
@@ -8,7 +10,7 @@ function HomePage() {
   const navigate = useNavigate();
 
   const handleStartInstant = () => {
-    const newRoomId = generateUniqueMeetingId();
+    const newRoomId = `instant-${generateUniqueMeetingId()}`;
     navigate(`/meet/${newRoomId}`);
   };
 
@@ -268,14 +270,28 @@ import { SignupPage } from './pages/SignupPage';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
 import { EmailVerificationPage } from './pages/EmailVerificationPage';
 import { ThemeProvider } from './lib/theme';
+import { SettingsPage } from './pages/SettingsPage';
+import { ProfileSection } from './components/settings/ProfileSection';
+import { GeneralSection } from './components/settings/GeneralSection';
+import { MeetingsSection } from './components/settings/MeetingsSection';
+import { RecordingSection } from './components/settings/RecordingSection';
+import { NotificationsSection } from './components/settings/NotificationsSection';
+import { SecuritySection } from './components/settings/SecuritySection';
+import { StorageSection } from './components/settings/StorageSection';
+import { RsvpPage } from './pages/RsvpPage';
+import { RecordingWatchPage } from './pages/RecordingWatchPage';
 
 export default function App() {
   return (
     <ThemeProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/rsvp" element={<RsvpPage />} />
+          <Route path="/recordings/:id" element={<RecordingWatchPage />} />
+          <Route path="/recording/:id" element={<RecordingWatchPage />} />
+          <Route element={<AccountGuard />}><Route path="/dashboard" element={<DashboardPage />} /></Route>
+          <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
           <Route path="/login" element={<LoginPage />} />
@@ -284,6 +300,18 @@ export default function App() {
           <Route path="/register" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/verify-email" element={<EmailVerificationPage />} />
+          <Route element={<AccountGuard />}>
+          <Route path="/settings" element={<SettingsPage />}>
+            <Route index element={<Navigate to="/settings/profile" replace />} />
+            <Route path="profile" element={<ProfileSection />} />
+            <Route path="general" element={<GeneralSection />} />
+            <Route path="meetings" element={<MeetingsSection />} />
+            <Route path="recording" element={<RecordingSection />} />
+            <Route path="notifications" element={<NotificationsSection />} />
+            <Route path="security" element={<SecuritySection />} />
+            <Route path="storage" element={<StorageSection />} />
+          </Route>
+          </Route>
         </Routes>
       </BrowserRouter>
     </ThemeProvider>

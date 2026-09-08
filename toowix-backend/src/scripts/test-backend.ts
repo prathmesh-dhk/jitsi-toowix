@@ -19,7 +19,7 @@ export const runBackendTests = async (): Promise<void> => {
         email: 'alice@acme.com',
         avatar: 'https://images.toowix.com/avatars/alice.png',
       },
-      room: 'BoardMeetingRoom',
+      room: 'board-meeting-room',
       features: {
         moderator: true,
         recording: true,
@@ -28,11 +28,11 @@ export const runBackendTests = async (): Promise<void> => {
       companyId: 'comp-789',
     });
 
-    console.log(`[PASS] Generated Jitsi JWT: ${testToken.substring(0, 30)}...`);
+    console.log('[PASS] Signed token generated (value omitted).');
 
     const decoded = verifyJitsiToken(testToken);
     if (
-      decoded.room === 'BoardMeetingRoom' &&
+      decoded.room === 'board-meeting-room' &&
       decoded.context?.user?.name === 'Alice Johnson' &&
       decoded.context?.features?.moderator === true
     ) {

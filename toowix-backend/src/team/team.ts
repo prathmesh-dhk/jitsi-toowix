@@ -5,6 +5,7 @@ import { TeamInvite } from '../models/TeamInvite';
 import { User } from '../models/User';
 import { emailConfig } from '../config/email';
 import { sendEmailAsync } from '../email/sender';
+import { notifyUser, notifyCompany } from '../notifications/createNotification';
 
 const resolveUser = async (req: AuthenticatedRequest) => {
   if (!req.firebaseUid) return null;
@@ -150,6 +151,21 @@ export const createTeamInviteHandler = async (req: AuthenticatedRequest, res: Re
       expiresAt: new Date(Date.now() + INVITE_TTL_MS),
     });
     await sendInvite(invite, actingUser.fullName, company.name);
+
+    notifyCompany(
+      actingUser.companyId as any,
+      {
+        category: 'PEOPLE_TEAMS',
+        type: 'USER_INVITE_PENDING',
+        title: 'New user invitation pending',
+        description: `${actingUser.fullName} invited ${fullName} (${email}) to join the team.`,
+        relatedName: fullName,
+        actionLabel: 'View',
+        actionUrl: '/dashboard?tab=teams',
+      },
+      actingUser._id
+    );
+
     res.status(201).json({ invite: await invite.populate('reportsTo', 'fullName email') });
   } catch (error: any) {
     console.error('[Team] Error inviting team user:', error.message);
@@ -185,6 +201,10 @@ export const updateTeamUserHandler = async (req: AuthenticatedRequest, res: Resp
       return;
     }
 
+    const previousRole = target.role;
+    const previousReportsTo = target.reportsTo ? String(target.reportsTo) : null;
+    let reportsToChanged = false;
+
     const effectiveRole = role || target.role;
     if (reportsTo !== undefined || effectiveRole === 'COMPANY_ADMIN') {
       const managerId = effectiveRole === 'COMPANY_ADMIN' ? null : (reportsTo || null);
@@ -201,12 +221,49 @@ export const updateTeamUserHandler = async (req: AuthenticatedRequest, res: Resp
         res.status(400).json({ error: 'A subadmin must report to an admin' });
         return;
       }
+      const newReportsTo = manager?._id ? String(manager._id) : null;
+      reportsToChanged = newReportsTo !== previousReportsTo;
       target.reportsTo = manager?._id || null;
     }
     if (role !== undefined) target.role = role;
     if (status !== undefined && !isInvite) target.status = status;
 
     await target.save();
+
+    if (!isInvite) {
+      const roleLabel = (r: string) => (r === 'COMPANY_ADMIN' ? 'Admin' : r === 'HOST' ? 'Subadmin' : 'User');
+      if (role !== undefined && role !== previousRole) {
+        notifyUser({
+          userId: target._id,
+          companyId: actingUser.companyId,
+          category: 'PEOPLE_TEAMS',
+          type: 'ROLE_CHANGED',
+          title: `Role changed to ${roleLabel(role)}`,
+          description: `${actingUser.fullName} changed your role to ${roleLabel(role)}.`,
+        });
+      }
+      if (reportsToChanged) {
+        notifyUser({
+          userId: target._id,
+          companyId: actingUser.companyId,
+          category: 'PEOPLE_TEAMS',
+          type: 'USER_MOVED_ADMIN',
+          title: 'You were moved to another admin',
+          description: `${actingUser.fullName} reassigned who you report to.`,
+        });
+      }
+      if (status === 'SUSPENDED') {
+        notifyUser({
+          userId: target._id,
+          companyId: actingUser.companyId,
+          category: 'PEOPLE_TEAMS',
+          type: 'USER_DISABLED',
+          title: 'Your account was disabled',
+          description: `${actingUser.fullName} disabled your account access.`,
+        });
+      }
+    }
+
     res.json({ user: await target.populate('reportsTo', 'fullName email') });
   } catch (error: any) {
     console.error('[Team] Error updating team user:', error.message);

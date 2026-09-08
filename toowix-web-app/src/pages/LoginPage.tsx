@@ -29,7 +29,7 @@ export function LoginPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
+          'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}`,
         },
       });
 
@@ -37,11 +37,12 @@ export function LoginPage() {
 
       if (response.ok && data.status === 'ACTIVE') {
         localStorage.setItem('toowix_user', JSON.stringify(data.user));
-        if (data.jitsiToken) {
-          localStorage.setItem('toowix_jitsi_jwt', data.jitsiToken);
-        }
+        localStorage.removeItem('toowix_jitsi_jwt');
         if (data.company) {
           localStorage.setItem('toowix_company', JSON.stringify(data.company));
+        }
+        if (data.sessionToken) {
+          localStorage.setItem('toowix_session_token', data.sessionToken);
         }
 
         navigate('/dashboard');

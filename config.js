@@ -25,6 +25,12 @@ if (subdomain.startsWith('<!--')) {
 var enableJaaS = false;
 
 var config = {
+    // Disable native Jitsi prejoin screen (Toowix lobby is used instead)
+    prejoinConfig: {
+        enabled: false,
+    },
+    prejoinPageEnabled: false,
+
     // Connection
     //
 

@@ -24,7 +24,9 @@ import {
   Link as LinkIcon,
   Sun,
   Moon,
+  Share2,
 } from 'lucide-react';
+import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
@@ -35,6 +37,8 @@ import { PastMeetingsPanel } from '../components/PastMeetingsPanel';
 import { UpcomingMeetingsPanel } from '../components/UpcomingMeetingsPanel';
 import { PeoplePanel } from '../components/PeoplePanel';
 import { TeamsPanel } from '../components/TeamsPanel';
+import { NotificationBell } from '../components/NotificationBell';
+import { NotificationToasts } from '../components/NotificationToasts';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -44,7 +48,7 @@ interface IMeeting {
   organizer: string;
   dateTime: string;
   duration: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   roomSlug: string;
   isFuture: boolean;
   scheduledAtIso: string | null;
@@ -55,6 +59,10 @@ interface IMeeting {
   organizerEmail?: string;
   organizerAvatarUrl?: string;
   organizerTeam?: string;
+  description?: string;
+  invitees?: string[];
+  passcode?: string | null;
+  rsvps?: Array<{ email: string; status: 'accepted' | 'declined' | 'pending'; respondedAt?: string | Date }>;
   status: 'Scheduled' | 'Completed' | 'Cancelled' | 'Ended';
   actualStartTime?: string;
   actualEndTime?: string;
@@ -67,13 +75,15 @@ interface IMeeting {
     notesUrl?: string;
     recordingAllowDownload?: boolean;
   };
+  notes?: string;
+  sharedFiles?: any[];
 }
 
 interface IApiMeeting {
   id: string;
   name: string;
   roomSlug: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   scheduledAt: string | null;
   durationMinutes: number | null;
   createdAt: string;
@@ -83,6 +93,12 @@ interface IApiMeeting {
   actualEndedAt?: string | null;
   participants?: any[];
   resources?: IMeeting['resources'];
+  notes?: string;
+  sharedFiles?: any[];
+  description?: string;
+  invitees?: string[];
+  passcode?: string | null;
+  rsvps?: Array<{ email: string; status: 'accepted' | 'declined' | 'pending'; respondedAt?: string | Date }>;
 }
 
 const formatMeetingDateTime = (iso: string) => {
@@ -133,6 +149,12 @@ const mapApiMeeting = (meeting: IApiMeeting): IMeeting => {
       attendanceStatus: participant.attendanceStatus,
     })),
     resources: meeting.resources,
+    notes: (meeting as any).notes,
+    sharedFiles: (meeting as any).sharedFiles,
+    description: meeting.description,
+    invitees: meeting.invitees,
+    passcode: meeting.passcode,
+    rsvps: meeting.rsvps,
   };
 };
 
@@ -150,6 +172,7 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'people' | 'teams'>('home');
   const [copiedLink, setCopiedLink] = useState(false);
   const [createdRoomLink, setCreatedRoomLink] = useState<string | null>(null);
+  const [showDashboardShareModal, setShowDashboardShareModal] = useState(false);
 
   const [allMeetings, setAllMeetings] = useState<IMeeting[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(true);
@@ -158,7 +181,7 @@ export function DashboardPage() {
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) return;
-      const response = await fetch(`${BACKEND_URL}/api/meetings`, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch(`${BACKEND_URL}/api/meetings`, { headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` } });
       const data = await response.json();
       if (response.ok && Array.isArray(data.meetings)) setAllMeetings(data.meetings.map(mapApiMeeting));
     } catch (error) {
@@ -168,23 +191,56 @@ export function DashboardPage() {
     }
   };
 
-  const persistMeeting = async (name: string, roomSlug: string, type: IMeeting['type'] = 'Internal', scheduledAt?: string, durationMinutes?: number) => {
-    try {
-      const token = await auth.currentUser?.getIdToken();
-      if (!token) return;
-      const response = await fetch(`${BACKEND_URL}/api/meetings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name, roomSlug, type, scheduledAt, durationMinutes }),
-      });
-      if (response.ok) fetchMeetings();
-    } catch (error) {
-      console.error('[Dashboard] Failed to save meeting:', error);
+  const persistMeeting = async (
+    name: string,
+    roomSlug: string,
+    type: IMeeting['type'] = 'Internal',
+    scheduledAt?: string,
+    durationMinutes?: number,
+    extra?: {
+      description?: string;
+      invitees?: string[];
+      passcode?: string | null;
+      recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null;
     }
+  ) => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('You must be signed in to schedule a meeting.');
+    const response = await fetch(`${BACKEND_URL}/api/meetings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, roomSlug, type, scheduledAt, durationMinutes, ...extra }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Failed to schedule meeting.');
+    fetchMeetings();
+    return data.meeting;
   };
 
-  const handleScheduleMeeting = async (data: { name: string; scheduledAt: string; durationMinutes: number; type: IMeeting['type'] }) => {
-    await persistMeeting(data.name, generateUniqueMeetingId(), data.type, data.scheduledAt, data.durationMinutes);
+  const handleScheduleMeeting = async (data: {
+    name: string;
+    scheduledAt: string;
+    durationMinutes: number;
+    type: IMeeting['type'];
+    roomSlug?: string;
+    description?: string;
+    invitees?: string[];
+    passcode?: string | null;
+    recurrence?: { frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'; until?: string } | null;
+  }) => {
+    return await persistMeeting(
+      data.name,
+      data.roomSlug || generateUniqueMeetingId(),
+      data.type,
+      data.scheduledAt,
+      data.durationMinutes,
+      {
+        description: data.description,
+        invitees: data.invitees,
+        passcode: data.passcode,
+        recurrence: data.recurrence,
+      }
+    );
   };
 
   useEffect(() => {
@@ -208,6 +264,9 @@ export function DashboardPage() {
           avatarUrl: user.photoURL || prev?.avatarUrl,
         }));
         fetchMeetings();
+      } else {
+        setCurrentUser(null);
+        navigate('/login', { replace: true });
       }
     });
 
@@ -227,16 +286,18 @@ export function DashboardPage() {
     navigate('/login');
   };
 
-  const handleStartInstantMeeting = () => {
+  const handleStartInstantMeeting = async () => {
     const roomId = generateUniqueMeetingId();
-    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal');
-    navigate(`/meet/${roomId}`);
+    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal'); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
+    navigate(`/meet/${roomId}`, { state: { participation: "account" } });
   };
 
-  const handleCreateMeetingForLater = () => {
+  const handleCreateMeetingForLater = async () => {
     const roomId = generateUniqueMeetingId();
     const url = `${window.location.origin}/meet/${roomId}`;
-    persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal');
+    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal'); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
     setCreatedRoomLink(url);
   };
 
@@ -258,7 +319,7 @@ export function DashboardPage() {
       input = input.substring(input.lastIndexOf('/meet/') + 6);
     }
     const cleanRoom = sanitizeCustomMeetingId(input);
-    navigate(`/meet/${cleanRoom}`);
+    navigate(`/meet/${cleanRoom}`, { state: { participation: "account" } });
   };
 
   // Determine greeting based on current hour
@@ -295,6 +356,8 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard-layout">
+      <NotificationToasts />
+
       {/* Mobile Sidebar Backdrop Overlay */}
       <div
         className={`dashboard-sidebar-backdrop ${sidebarOpen ? 'backdrop-active' : ''}`}
@@ -315,7 +378,7 @@ export function DashboardPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px 16px 8px', borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <img
-              src="/public/assets/toowix-logo.png"
+              src="/assets/toowix-logo.png"
               alt="Toowix Logo"
               style={{ width: '32px', height: '32px', objectFit: 'contain' }}
               onError={(e) => {
@@ -428,7 +491,7 @@ export function DashboardPage() {
         <div style={{ borderTop: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <button
             onClick={() => {
-              navigate('/login');
+              navigate('/settings');
             }}
             style={{
               display: 'flex',
@@ -561,25 +624,7 @@ export function DashboardPage() {
             </button>
 
             {/* Notification Bell */}
-            <button
-              style={{
-                position: 'relative',
-                width: '36px',
-                height: '36px',
-                borderRadius: '50%',
-                backgroundColor: isDark ? '#1E293B' : '#F9FAFB',
-                border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: isDark ? '#9CA3AF' : '#4B5563',
-                cursor: 'pointer',
-              }}
-              title="Notifications"
-            >
-              <Bell size={17} />
-              <span style={{ position: 'absolute', top: '6px', right: '6px', width: '7px', height: '7px', backgroundColor: '#EF4444', borderRadius: '50%', border: `2px solid ${isDark ? '#0E1526' : '#FFFFFF'}` }} />
-            </button>
+            <NotificationBell isDark={isDark} />
 
             {/* Help / Docs */}
             <button
@@ -745,7 +790,22 @@ export function DashboardPage() {
         <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}`}>
           {activeTab === 'schedule' ? (
             <ScheduleCalendar
-              meetings={allMeetings.map((meeting) => ({ id: meeting.id, name: meeting.name, scheduledAt: meeting.scheduledAtIso, roomSlug: meeting.roomSlug, type: meeting.type }))}
+              meetings={allMeetings.map((meeting) => ({
+                id: meeting.id,
+                name: meeting.name,
+                scheduledAt: meeting.scheduledAtIso,
+                roomSlug: meeting.roomSlug,
+                type: meeting.type,
+                description: meeting.description,
+                invitees: meeting.invitees,
+                passcode: meeting.passcode,
+                rsvps: meeting.rsvps as any,
+                organizer: meeting.organizer,
+                organizerEmail: meeting.organizerEmail,
+                organizerAvatarUrl: meeting.organizerAvatarUrl,
+                durationMinutes: meeting.durationMinutes,
+              }))}
+              currentUser={currentUser}
               onSchedule={handleScheduleMeeting}
             />
           ) : activeTab === 'recordings' ? (
@@ -771,6 +831,8 @@ export function DashboardPage() {
                 organizerTeam: meeting.organizerTeam,
                 participants: meeting.participants,
                 resources: meeting.resources,
+                notes: (meeting as any).notes,
+                sharedFiles: (meeting as any).sharedFiles,
                 canManage: canManageMeeting(meeting),
                 canDownloadRecording: canManageMeeting(meeting) || meeting.resources?.recordingAllowDownload === true,
               }))}
@@ -966,7 +1028,7 @@ export function DashboardPage() {
                     {/* Join Action CTA */}
                     <div>
                       <button
-                        onClick={() => navigate('/meet/weekly-standup')}
+                        onClick={() => navigate('/meet/weekly-standup', { state: { participation: "account" } })}
                         className="dashboard-spotlight-btn"
                         style={{
                           padding: '12px 32px',
@@ -1018,7 +1080,7 @@ export function DashboardPage() {
                       </div>
                     </div>
                     <button
-                      onClick={() => navigate('/meet/product-sync-q3')}
+                      onClick={() => navigate('/meet/product-sync-q3', { state: { participation: "account" } })}
                       style={{
                         padding: '6px 14px',
                         backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
@@ -1057,7 +1119,7 @@ export function DashboardPage() {
                       </div>
                     </div>
                     <button
-                      onClick={() => navigate('/meet/design-review')}
+                      onClick={() => navigate('/meet/design-review', { state: { participation: "account" } })}
                       style={{
                         padding: '6px 14px',
                         backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
@@ -1158,7 +1220,7 @@ export function DashboardPage() {
                           </td>
                           <td style={{ padding: '14px 18px', textAlign: 'right' }}>
                             <button
-                              onClick={() => navigate(`/meet/${meeting.roomSlug}`)}
+                              onClick={() => navigate(`/meet/${meeting.roomSlug}`, { state: { participation: "account" } })}
                               style={{
                                 padding: '5px 12px',
                                 backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',
@@ -1436,6 +1498,34 @@ export function DashboardPage() {
                     {copiedLink ? <Check size={14} /> : <Copy size={14} />}
                     {copiedLink ? 'Copied!' : 'Copy'}
                   </button>
+                  <button
+                    onClick={() => setShowDashboardShareModal(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 12px',
+                      backgroundColor: '#1E1B4B',
+                      border: '1px solid #4F46E5',
+                      color: '#A5B4FC',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#4F46E5';
+                      e.currentTarget.style.color = '#FFFFFF';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1E1B4B';
+                      e.currentTarget.style.color = '#A5B4FC';
+                    }}
+                  >
+                    <Share2 size={13} />
+                    <span>Share</span>
+                  </button>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                   <button
@@ -1481,6 +1571,20 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+      {/* Google Meet style Share Joining Info Modal */}
+      <ShareMeetingModal
+        isOpen={showDashboardShareModal}
+        onClose={() => setShowDashboardShareModal(false)}
+        meeting={
+          createdRoomLink
+            ? {
+                name: `${currentUser?.name || 'My'}'s Meeting`,
+                meetingUrl: createdRoomLink,
+                hostName: currentUser?.name || 'Organizer',
+              }
+            : null
+        }
+      />
     </div>
   );
 }

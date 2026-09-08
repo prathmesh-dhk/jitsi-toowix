@@ -9,7 +9,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API
 export interface IUpcomingMeeting {
   id: string;
   name: string;
-  type: 'Internal' | 'Guest' | 'Private';
+  type: 'Personal' | 'Internal' | 'Guest' | 'Private';
   organizer: string;
   organizerInitials: string;
   scheduledAtIso: string;
@@ -83,7 +83,7 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
     if (!name || name === meeting.name) return;
     const token = await auth.currentUser?.getIdToken();
     if (!token) return;
-    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name }) });
+    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` }, body: JSON.stringify({ name }) });
     if (!response.ok) window.alert('Could not update the meeting.');
     else onMeetingsChanged?.();
   };
@@ -92,7 +92,7 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
     if (!window.confirm(`Cancel “${meeting.name}”?`)) return;
     const token = await auth.currentUser?.getIdToken();
     if (!token) return;
-    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${BACKEND_URL}/api/meetings/${meeting.id}/cancel`, { method: 'POST', headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` } });
     if (!response.ok) window.alert('Could not cancel the meeting.');
     else onMeetingsChanged?.();
   };

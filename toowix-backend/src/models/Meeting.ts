@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema, Model, Types } from 'mongoose';
 
-export type MeetingType = 'Internal' | 'Guest' | 'Private';
+export type MeetingType = 'Personal' | 'Internal' | 'Guest' | 'Private';
 
 export interface IMeetingParticipant {
   name: string;
@@ -22,8 +22,24 @@ export interface IMeeting {
   scheduledAt?: Date | null;
   durationMinutes?: number | null;
   cancelledAt?: Date | null;
+  notified60?: boolean;
+  notified10?: boolean;
+  notifiedNow?: boolean;
   actualStartedAt?: Date | null;
   actualEndedAt?: Date | null;
+  description?: string | null;
+  invitees?: string[];
+  passcode?: string | null;
+  rsvps?: Array<{
+    email: string;
+    status: 'accepted' | 'declined' | 'pending';
+    respondedAt?: Date;
+  }>;
+  recurrence?: {
+    frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+    seriesId: string;
+    until?: Date | null;
+  } | null;
   participants?: IMeetingParticipant[];
   resources?: {
     recordingUrl?: string | null;
@@ -33,6 +49,31 @@ export interface IMeeting {
     notesUrl?: string | null;
     recordingAllowDownload?: boolean;
   };
+  notes?: string | null;
+  transcriptText?: string | null;
+  sharedFiles?: Array<{
+    name: string;
+    url: string;
+    size?: string;
+    sharedBy?: string;
+    sharedAt?: string;
+  }>;
+  waitingQueue?: Array<{
+    id: string;
+    name: string;
+    email?: string;
+    requestedAt: Date;
+    status: 'WAITING' | 'ADMITTED' | 'DENIED';
+    admittedAt?: Date | null;
+    deniedAt?: Date | null;
+    jitsiToken?: string | null;
+    attendanceToken?: string | null;
+    participantEntryId?: string | null;
+  }>;
+  hostAnnouncement?: string | null;
+  hostJoined?: boolean;
+  quickAccessEnabled?: boolean;
+  endedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -69,7 +110,7 @@ const MeetingSchema = new Schema<IMeetingDocument>(
     },
     type: {
       type: String,
-      enum: ['Internal', 'Guest', 'Private'],
+      enum: ['Personal', 'Internal', 'Guest', 'Private'],
       default: 'Internal',
     },
     scheduledAt: {
@@ -85,8 +126,30 @@ const MeetingSchema = new Schema<IMeetingDocument>(
       type: Date,
       default: null,
     },
+    notified60: { type: Boolean, default: false },
+    notified10: { type: Boolean, default: false },
+    notifiedNow: { type: Boolean, default: false },
     actualStartedAt: { type: Date, default: null },
     actualEndedAt: { type: Date, default: null },
+    description: { type: String, default: null, trim: true, maxlength: 2000 },
+    invitees: { type: [String], default: undefined }, // undefined (not []) means "no invitee restriction" for non-Private types
+    passcode: { type: String, default: null, trim: true },
+    rsvps: {
+      type: [{
+        email: { type: String, required: true },
+        status: { type: String, enum: ['accepted', 'declined', 'pending'], default: 'pending' },
+        respondedAt: { type: Date, default: Date.now },
+      }],
+      default: [],
+    },
+    recurrence: {
+      type: {
+        frequency: { type: String, enum: ['DAILY', 'WEEKLY', 'MONTHLY'] },
+        seriesId: { type: String },
+        until: { type: Date, default: null },
+      },
+      default: null,
+    },
     participants: {
       type: [{
         name: { type: String, required: true },
@@ -108,6 +171,37 @@ const MeetingSchema = new Schema<IMeetingDocument>(
       notesUrl: { type: String, default: null },
       recordingAllowDownload: { type: Boolean, default: false },
     },
+    notes: { type: String, default: null },
+    transcriptText: { type: String, default: null },
+    sharedFiles: {
+      type: [{
+        name: { type: String, required: true },
+        url: { type: String, required: true },
+        size: { type: String, default: '1.2 MB' },
+        sharedBy: { type: String, default: 'Participant' },
+        sharedAt: { type: String, default: null },
+      }],
+      default: [],
+    },
+    waitingQueue: {
+      type: [{
+        id: { type: String, required: true },
+        name: { type: String, required: true },
+        email: { type: String, default: '' },
+        requestedAt: { type: Date, default: Date.now },
+        status: { type: String, enum: ['WAITING', 'ADMITTED', 'DENIED'], default: 'WAITING' },
+        admittedAt: { type: Date, default: null },
+        deniedAt: { type: Date, default: null },
+        jitsiToken: { type: String, default: null },
+        attendanceToken: { type: String, default: null },
+        participantEntryId: { type: String, default: null },
+      }],
+      default: [],
+    },
+    hostAnnouncement: { type: String, default: null },
+    hostJoined: { type: Boolean, default: false },
+    quickAccessEnabled: { type: Boolean, default: true },
+    endedAt: { type: Date, default: null },
   },
   {
     timestamps: true,
@@ -124,6 +218,7 @@ const MeetingSchema = new Schema<IMeetingDocument>(
 
 MeetingSchema.index({ companyId: 1, createdAt: -1 });
 MeetingSchema.index({ createdBy: 1, createdAt: -1 });
+MeetingSchema.index({ 'recurrence.seriesId': 1 });
 
 export const Meeting: Model<IMeetingDocument> =
   mongoose.models.Meeting || mongoose.model<IMeetingDocument>('Meeting', MeetingSchema);
