@@ -887,8 +887,17 @@ export function MeetingRoomPage() {
   const [isPiPActive, setIsPiPActive] = useState(false);
   const [documentPipActive, setDocumentPipActive] = useState(false);
   const documentPipWindowRef = useRef<any>(null);
-  const pipOpeningRef = useRef(false);
-  const pipTriggerTypeRef = useRef<'manual' | 'auto' | null>(null);
+  // Single source of truth for PiP state -- replaces the previously scattered
+  // pipOpeningRef/pipTriggerTypeRef booleans, which could disagree with each other under
+  // rapid tab switching. phase moves idle -> opening -> open -> closing -> idle; only the
+  // operation holding the current requestId may act as the owner at any given moment
+  // (enforced by openPip/closePip and every native/browser event handler below).
+  const pipLifecycleRef = useRef<{
+    phase: 'idle' | 'opening' | 'open' | 'closing';
+    kind: 'document' | 'video' | null;
+    origin: 'manual' | 'auto' | null;
+    requestId: number;
+  }>({ phase: 'idle', kind: null, origin: null, requestId: 0 });
   const pipCanvasStreamRef = useRef<MediaStream | null>(null);
   const pipUserEnabledRef = useRef(false);
   // Separate from pipUserEnabledRef: this one only ever flips true->stays true for the
@@ -902,13 +911,23 @@ export function MeetingRoomPage() {
   // never notice it on their own, so this points at it. There is no JS API to trigger that
   // permission ourselves; this is the closest thing to it.
   const pipAutoAllowNudgeShownRef = useRef(false);
-  // Bumped on every triggerAutoPiP/handleTogglePiP call. Each async attempt captures its
-  // own id before awaiting; if a newer call started (or the meeting ended) before an
-  // older awaited step resolves, the older attempt sees its id is stale and bails
-  // instead of publishing state or opening a second PiP window.
+  // Bumped by every open/close attempt AND by the visibility-return handler (to invalidate
+  // whatever open attempt might still be in flight). Each async attempt captures its own id
+  // before awaiting; if a newer operation started (or the meeting ended) before an older
+  // awaited step resolves, the older attempt sees its id is stale and bails instead of
+  // publishing state or opening a second PiP window.
   const pipRequestIdRef = useRef(0);
+  // Sole automatic-opening entry point: registered as the Media Session
+  // 'enterpictureinpicture' action handler, which the BROWSER itself invokes when its
+  // Automatic Picture-in-Picture conditions are met
+  // (see https://developer.chrome.com/blog/automatic-picture-in-picture). Because the
+  // browser calls this handler -- not our own script off a visibilitychange listener --
+  // the PiP request made inside it is authorized/gesture-exempt in eligible, permitted
+  // browsers, unlike a script-initiated call from an arbitrary event handler (confirmed via
+  // direct testing: the latter always throws NotAllowedError).
   const triggerAutoPiPRef = useRef<(() => Promise<void>) | null>(null);
   const handleTogglePiPRef = useRef<(() => Promise<void>) | null>(null);
+  const closePipRef = useRef<(() => Promise<void>) | null>(null);
   // Stable indirection so effects that just want to "poke" the PiP stream after doing
   // their own work (e.g. re-acquiring the camera) don't need initPipStream itself in
   // their dependency array -- its identity changes with isScreenSharing/remoteScreenStream,
@@ -1057,6 +1076,32 @@ export function MeetingRoomPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captionsEnabled]);
 
+  // Dev-only PiP diagnostics -- trigger source, lifecycle phase/kind/origin/requestId,
+  // document visibility, active window/video identity, video readiness/track state, and
+  // (when relevant) the exact API error name/message. Never logs credentials, tokens, or
+  // meeting content -- only PiP plumbing state.
+  const logPipDiagnostic = (event: string, details: Record<string, unknown> = {}) => {
+    if (!(import.meta as any).env?.DEV) return;
+    const lc = pipLifecycleRef.current;
+    try {
+      const vid = pipVideoRef.current;
+      const track = pipCanvasStreamRef.current?.getVideoTracks?.()[0];
+      // eslint-disable-next-line no-console
+      console.debug('[PiP]', event, {
+        phase: lc.phase,
+        kind: lc.kind,
+        origin: lc.origin,
+        requestId: lc.requestId,
+        visibility: document.visibilityState,
+        docPipWindowClosed: documentPipWindowRef.current ? Boolean(documentPipWindowRef.current.closed) : null,
+        videoPipElementActive: Boolean((document as any).pictureInPictureElement),
+        videoReadyState: vid?.readyState ?? null,
+        videoTrackState: track?.readyState ?? null,
+        ...details,
+      });
+    } catch {}
+  };
+
   // ── Keep PiP refs in sync with live state ────────────────────────────────
   useEffect(() => { pipRemoteParticipantsRef.current = remoteParticipants; }, [remoteParticipants]);
   useEffect(() => { pipIsScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]);
@@ -1097,33 +1142,47 @@ export function MeetingRoomPage() {
       pipVideoRef.current = vid;
 
       vid.addEventListener('enterpictureinpicture', () => {
-        // Fires whenever PiP actually starts showing, regardless of what caused it -- our
-        // own script's requestPictureInPicture() call succeeding, OR the browser's native
-        // autoPictureInPicture behavior kicking in entirely on its own (which is the ONLY
-        // path that can work without a real click, since browsers reject a script-invoked
-        // requestPictureInPicture() call that isn't backed by a fresh user gesture, even
-        // when it's made from a visibilitychange handler). This keeps React state correct
-        // either way instead of only trusting our own call's promise.
+        // Fires whenever video-element PiP actually starts showing, regardless of what
+        // caused it -- our own openPip() call succeeding, OR the browser re-entering it on
+        // its own after a prior close. Keeps React/lifecycle state correct either way
+        // instead of only trusting our own call's promise.
         setIsPiPActive(true);
-        if (!pipTriggerTypeRef.current) {
-          pipTriggerTypeRef.current = 'auto';
+        const lc = pipLifecycleRef.current;
+        if (lc.phase !== 'open' || lc.kind !== 'video') {
+          lc.phase = 'open';
+          lc.kind = 'video';
+          if (!lc.origin) lc.origin = 'auto';
         }
+        // The leave handler below always stops the canvas draw loop, but nothing was
+        // restarting it on the NEXT entry -- reopening PiP after a close showed a frozen
+        // last frame instead of live content. Restart it here whenever the video's source
+        // is still the synthetic canvas stream.
+        if (pipCanvasStreamRef.current && vid.srcObject === pipCanvasStreamRef.current) {
+          startPipDraw();
+        }
+        logPipDiagnostic('enter', { type: 'video' });
       });
 
       vid.addEventListener('leavepictureinpicture', () => {
         // Native browser close (window X, OS gesture, or programmatic exit) — this fires
         // regardless of how PiP was closed, so it's the single source of truth for
         // "video-element PiP is no longer showing." Canvas drawing must stop here too,
-        // otherwise it keeps running 24/7 against a PiP that's no longer visible (item 2).
+        // otherwise it keeps running 24/7 against a PiP that's no longer visible.
         stopPipDraw();
         setIsPiPActive(false);
         pipAutoTriggeredRef.current = false;
-        pipTriggerTypeRef.current = null;
+        const lc = pipLifecycleRef.current;
+        if (lc.kind === 'video') {
+          lc.phase = 'idle';
+          lc.kind = null;
+          lc.origin = null;
+        }
         // NOTE: intentionally NOT resetting pipUserEnabledRef here. That flag records
         // "has the user ever manually used the PiP button" (gesture provenance, used to
         // decide whether the auto-PiP permission hint should show) — it must survive
         // across PiP close/reopen cycles, or the hint would reappear every single time
         // auto-PiP fails after the very first manual use.
+        logPipDiagnostic('native-close', { type: 'video' });
       });
     }
   };
@@ -1508,9 +1567,13 @@ export function MeetingRoomPage() {
       documentPipWindowRef.current = null;
       setDocumentPipActive(false);
       setIsPiPActive(false);
-      if (pipTriggerTypeRef.current === 'auto') {
-        pipTriggerTypeRef.current = null;
+      const lc = pipLifecycleRef.current;
+      if (lc.kind === 'document') {
+        lc.phase = 'idle';
+        lc.kind = null;
+        lc.origin = null;
       }
+      logPipDiagnostic('native-close', { type: 'document', detectedVia: 'poll' });
       return false;
     }
     return true;
@@ -1575,21 +1638,33 @@ export function MeetingRoomPage() {
     pipWin.document.body.style.overflow = 'hidden';
 
     const onPageHide = () => {
-      // Race protection: only clear state if this closing window is the current active window
+      // Race protection: only clear state if this closing window is the current active
+      // window -- an older window's pagehide firing late must never clear a NEWER window's
+      // state (e.g. rapid close+reopen), which is exactly what this identity check prevents.
       if (documentPipWindowRef.current === pipWin) {
         documentPipWindowRef.current = null;
         setDocumentPipActive(false);
         setIsPiPActive(false);
-        pipTriggerTypeRef.current = null;
+        const lc = pipLifecycleRef.current;
+        if (lc.kind === 'document') {
+          lc.phase = 'idle';
+          lc.kind = null;
+          lc.origin = null;
+        }
+        logPipDiagnostic('native-close', { type: 'document' });
       }
     };
 
     pipWin.addEventListener('pagehide', onPageHide);
 
     documentPipWindowRef.current = pipWin;
-    pipTriggerTypeRef.current = isManual ? 'manual' : 'auto';
+    const lc = pipLifecycleRef.current;
+    lc.phase = 'open';
+    lc.kind = 'document';
+    lc.origin = isManual ? 'manual' : 'auto';
     setDocumentPipActive(true);
     setIsPiPActive(true);
+    logPipDiagnostic('open', { type: 'document', origin: lc.origin });
   };
 
   const initPipStream = useCallback(() => {
@@ -1669,146 +1744,194 @@ export function MeetingRoomPage() {
     if (!hasJoined) return;
     if (isScreenSharing || remoteScreenStream) return;
     if (document.visibilityState !== 'visible') return;
-    if (pipTriggerTypeRef.current !== 'auto') return;
-    if (documentPipWindowRef.current) {
-      try { documentPipWindowRef.current.close(); } catch {}
-      documentPipWindowRef.current = null;
-      setDocumentPipActive(false);
-    }
-    if ((document as any).pictureInPictureElement) {
-      (document as any).exitPictureInPicture().catch(() => {});
-      stopPipDraw();
-    }
-    pipTriggerTypeRef.current = null;
-    setIsPiPActive(false);
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'open' || lc.origin !== 'auto') return;
+    closePipRef.current?.();
   }, [hasJoined, isScreenSharing, remoteScreenStream]);
 
-  // Synchronous Auto-PiP invocation for tab switching
-  const triggerAutoPiP = useCallback(async () => {
-    if (!hasJoinedRef.current) return;
-    if (isDocPipWindowOpen() || isVideoPipActive() || pipOpeningRef.current) return;
-    pipOpeningRef.current = true;
+  // Close whichever PiP type is currently open. Single consolidated close path used by the
+  // manual toggle, the "Return to meeting" button inside Document PiP, the visibility-return
+  // handler, and the screen-share-ended effect above -- one place decides how a close
+  // completes instead of several places each duplicating slightly different logic (which is
+  // how "closing" state used to end up inconsistent between them).
+  const closePip = useCallback(async () => {
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'open') return; // nothing open, or an open/close is already in flight
     const myRequestId = ++pipRequestIdRef.current;
-    // A request is "still current" only while it holds the latest id AND the meeting is
-    // still joined AND the tab is still hidden (came back into view = user wants the
-    // main page, not a freshly-opened PiP window fighting for attention).
-    const isStale = () =>
-      pipRequestIdRef.current !== myRequestId || !hasJoinedRef.current || document.visibilityState === 'visible';
+    const closingKind = lc.kind;
+    lc.phase = 'closing';
+    lc.requestId = myRequestId;
+    const isCurrent = () => pipLifecycleRef.current.requestId === myRequestId;
+    logPipDiagnostic('close-start', { type: closingKind });
 
     try {
-      // 1. Video-element PiP first. Chrome only grants the activation-free "auto PiP"
-      // allowance to requestPictureInPicture() calls made this way; Document PiP's
-      // requestWindow() has NO such allowance and requires a genuine, fresh user gesture
-      // on every single call -- there is no visibilitychange exemption for it. That's why
-      // it used to work on the very first tab switch (riding leftover activation from an
-      // earlier click, e.g. "Join") and reliably fail on every switch after that, since no
-      // new click happens between alt-tabs. Video PiP is therefore the reliable baseline
-      // for repeated auto-triggers; Document PiP is only attempted afterward as a bonus.
-      if ((document as any).pictureInPictureEnabled) {
-        ensurePipElements();
-        const vid = pipVideoRef.current;
-        if (vid) {
-          initPipStream();
-          if (vid.paused) {
-            try { await vid.play(); } catch {}
-          }
-
-          // The priming effect keeps this video fed with a live stream at all times while
-          // in a call, so readyState is almost always already >= 2 here; this wait only
-          // matters right after joining, before the priming effect has had a chance to run.
-          const ready = await ensureVideoReady(vid, 1000);
-          if (ready && !isStale()) {
-            try {
-              const p = (vid as any).requestPictureInPicture();
-              if (p && typeof p.then === 'function') {
-                await p;
-                // A request that completed after the tab became visible again (or after
-                // the meeting was left) must not publish itself as active -- close what we
-                // just opened instead of leaving a stray PiP window nobody asked for.
-                if (isStale()) {
-                  try { await (document as any).exitPictureInPicture(); } catch {}
-                  return;
-                }
-                setIsPiPActive(true);
-                pipTriggerTypeRef.current = 'auto';
-                return;
-              }
-            } catch (videoPipErr: any) {
-              const errName = videoPipErr?.name || '';
-              if (errName === 'NotAllowedError') {
-                // Expected on every auto-trigger unless the browser's native
-                // autoPictureInPicture behavior takes over on its own (see the
-                // enterpictureinpicture listener) -- browsers reject a script call to
-                // requestPictureInPicture() that isn't backed by a fresh user gesture, and
-                // switching tabs does not count as one from the page's perspective. There is
-                // no way to bypass this from code; only a real click (the PiP button) is
-                // guaranteed to work every time.
-                console.info('[PiP Lifecycle] Video PiP NotAllowedError: user gesture required (expected on auto-trigger)');
-                if (!pipHintShownRef.current) {
-                  pipHintShownRef.current = true;
-                  setPipHintToast('Auto PiP needs a browser permission. Use the PiP button once, or enable "Automatic Picture-in-Picture" for this site in your browser settings.');
-                  setTimeout(() => setPipHintToast(null), 7000);
-                }
-              } else if (errName === 'InvalidStateError') {
-                console.warn('[PiP Lifecycle] Video PiP InvalidStateError:', videoPipErr.message);
-              } else {
-                console.warn('[PiP Lifecycle] Video PiP fallback failed:', videoPipErr);
-              }
-            }
-          } else if (!ready) {
-            console.warn('[PiP Lifecycle] Fallback video element not ready (readyState < 2), aborting Video PiP');
-          }
+      if (closingKind === 'video') {
+        try {
+          await (document as any).exitPictureInPicture();
+        } catch (err: any) {
+          logPipDiagnostic('close-error', { type: 'video', errorName: err?.name, errorMessage: err?.message });
         }
+        stopPipDraw();
+      } else if (closingKind === 'document') {
+        try { documentPipWindowRef.current?.close(); } catch {}
       }
+    } finally {
+      // Only finalize to idle if this operation still owns the lifecycle -- a native close
+      // event (leavepictureinpicture / pagehide) may have already raced ahead and reset
+      // state itself, in which case there's nothing left for us to do here.
+      if (isCurrent()) {
+        documentPipWindowRef.current = null;
+        setDocumentPipActive(false);
+        setIsPiPActive(false);
+        lc.phase = 'idle';
+        lc.kind = null;
+        lc.origin = null;
+      }
+      logPipDiagnostic('close-end', { type: closingKind });
+    }
+  }, []);
 
-      if (isStale()) return;
+  useEffect(() => {
+    closePipRef.current = closePip;
+  }, [closePip]);
 
-      // 2. Document Picture-in-Picture (Chrome 116+) as a bonus, best-effort attempt only.
-      // Reached when Video PiP is unavailable or failed; can't be relied on for every
-      // switch (see above), but worth trying in case residual activation is still present.
+  // Single consolidated PiP-opening routine, used for BOTH origins:
+  //  - 'manual': invoked directly from a real click (handleTogglePiP) -- always
+  //    gesture-backed, guaranteed eligible.
+  //  - 'auto': invoked ONLY from the browser-authorized Media Session
+  //    'enterpictureinpicture' action handler (registered in the effect below) -- NOT from
+  //    our own visibilitychange listener. Per
+  //    https://developer.chrome.com/blog/automatic-picture-in-picture, that Media Session
+  //    handler is the officially supported automatic-entry point: the BROWSER decides when
+  //    to invoke it (tab hidden, eligibility/permission conditions met), and because the
+  //    call originates from that browser-invoked context rather than an ordinary page
+  //    script event, it is authorized/exempt where a plain visibilitychange-triggered call
+  //    is not. Confirmed via direct testing: a script call made from our own
+  //    visibilitychange handler reliably throws NotAllowedError; it is not "impossible" for
+  //    the API to auto-open, it was simply the wrong (unauthorized) call site. Only one
+  //    opening/closing operation may own the lifecycle at a time -- phase !== 'idle' refuses
+  //    a second concurrent attempt outright, so rapid tab flips can't produce duplicates.
+  const openPip = useCallback(async (origin: 'manual' | 'auto') => {
+    if (!hasJoinedRef.current) return;
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'idle') return;
+    const myRequestId = ++pipRequestIdRef.current;
+    lc.phase = 'opening';
+    lc.origin = origin;
+    lc.requestId = myRequestId;
+    // "Current" requires holding the latest id, the meeting still being joined, and -- for
+    // auto-origin opens specifically -- the tab still being hidden (returning to the tab
+    // means the user wants the main page, not a freshly-opened PiP window competing for
+    // attention). A manual open has no visibility requirement since it's a direct request.
+    const isCurrent = () =>
+      pipLifecycleRef.current.requestId === myRequestId &&
+      hasJoinedRef.current &&
+      (origin !== 'auto' || document.visibilityState === 'hidden');
+    let opened = false;
+    logPipDiagnostic('open-start', { trigger: origin === 'manual' ? 'manual' : 'media-session' });
+
+    try {
+      // 1. Prefer Document PiP for interactive meeting content where supported -- it
+      // renders the real in-meeting React portal (live tiles, controls) rather than the
+      // synthetic canvas dub Video PiP is limited to. Both a manual click and the
+      // browser-authorized Media Session callback are legitimate, permission-satisfied
+      // contexts to call requestWindow() from.
       if ('documentPictureInPicture' in window) {
         try {
           const pipWin = await (window as any).documentPictureInPicture.requestWindow({
             width: 380,
             height: 500,
           });
-
-          // Race check: a newer request superseded this one, the meeting ended, or the
-          // tab came back into view while we were awaiting requestWindow.
-          if (isStale()) {
+          if (!isCurrent()) {
             try { pipWin.close(); } catch {}
             return;
           }
-
-          setupPipWindow(pipWin, false);
+          setupPipWindow(pipWin, origin === 'manual');
+          opened = true;
+          if (origin === 'manual') maybeShowAutoPipAllowNudge();
           return;
         } catch (docPipErr: any) {
-          const errName = docPipErr?.name || '';
-          const errMsg = docPipErr?.message || String(docPipErr);
-          if (errName === 'NotAllowedError') {
-            // Shown at most once per tab session, regardless of how many auto-trigger
-            // attempts fail afterward (pipHintShownRef, not pipUserEnabledRef -- see decl).
-            if (!pipHintShownRef.current) {
-              pipHintShownRef.current = true;
-              setPipHintToast('Tip: Use Picture-in-Picture button or allow Automatic PiP in Chrome site settings');
-              setTimeout(() => setPipHintToast(null), 6000);
-            }
-          } else if (errName === 'InvalidStateError') {
-            console.warn('[PiP Lifecycle] Document PiP invalid state:', errMsg);
-          } else {
-            console.warn('[PiP Lifecycle] Document PiP requestWindow failed:', docPipErr);
+          logPipDiagnostic('open-error', {
+            type: 'document', origin, errorName: docPipErr?.name, errorMessage: docPipErr?.message,
+          });
+          if (docPipErr?.name === 'NotAllowedError' && origin === 'auto' && !pipHintShownRef.current) {
+            // This browser/session doesn't currently grant Automatic Picture-in-Picture
+            // for this site, or eligibility conditions (active media session playback,
+            // installed-app state, etc.) aren't met right now. Falls through to the Video
+            // PiP fallback below rather than giving up.
+            pipHintShownRef.current = true;
+            setPipHintToast('Automatic Picture-in-Picture isn\'t enabled for this browser/site yet. Use the PiP button, or check your browser\'s Automatic Picture-in-Picture site permission.');
+            setTimeout(() => setPipHintToast(null), 7000);
           }
         }
       }
+
+      if (!isCurrent()) return;
+
+      // 2. Video PiP fallback.
+      if (!(document as any).pictureInPictureEnabled) return;
+      ensurePipElements();
+      const vid = pipVideoRef.current;
+      if (!vid) return;
+      initPipStream();
+      if (vid.paused) {
+        try { await vid.play(); } catch {}
+      }
+      if (!isCurrent()) return;
+
+      // The priming effect keeps this video fed with a live stream at all times while in a
+      // call, so readyState is almost always already >= 2 here -- this only actually waits
+      // right after joining, before priming has had a chance to run. Kept short and skipped
+      // entirely when already ready, since a permission-sensitive request should not be
+      // delayed by a readiness wait when it can be avoided.
+      const ready = vid.readyState >= 2 && vid.videoWidth > 0 ? true : await ensureVideoReady(vid, 500);
+      if (!ready) {
+        logPipDiagnostic('open-error', { type: 'video', origin, reason: 'not-ready', readyState: vid.readyState });
+        return;
+      }
+      if (!isCurrent()) return;
+
+      try {
+        await (vid as any).requestPictureInPicture();
+        if (!isCurrent()) {
+          try { await (document as any).exitPictureInPicture(); } catch {}
+          return;
+        }
+        lc.phase = 'open';
+        lc.kind = 'video';
+        setIsPiPActive(true);
+        opened = true;
+        if (origin === 'manual') maybeShowAutoPipAllowNudge();
+        logPipDiagnostic('open-success', { type: 'video', origin });
+      } catch (videoPipErr: any) {
+        logPipDiagnostic('open-error', {
+          type: 'video', origin, errorName: videoPipErr?.name, errorMessage: videoPipErr?.message,
+        });
+        if (videoPipErr?.name === 'NotAllowedError' && origin === 'auto' && !pipHintShownRef.current) {
+          pipHintShownRef.current = true;
+          setPipHintToast('Automatic Picture-in-Picture isn\'t enabled for this browser/site yet. Use the PiP button, or check your browser\'s Automatic Picture-in-Picture site permission.');
+          setTimeout(() => setPipHintToast(null), 7000);
+        }
+        stopPipDraw();
+      }
     } finally {
-      pipOpeningRef.current = false;
+      if (!opened && isCurrent()) {
+        lc.phase = 'idle';
+        lc.origin = null;
+        lc.kind = null;
+      }
+      logPipDiagnostic('open-end', { opened });
     }
   }, [initPipStream]);
 
   // Nudge the user toward the browser's own native "Always allow Picture-in-Picture" icon
   // in the address bar, right after their first manual (real-click) PiP open -- that's the
   // moment Chromium surfaces it. Skips the nudge entirely if the Permissions API reports
-  // it's already granted (nothing to point at), and never asks twice in one tab session.
+  // it's already granted (nothing to point at); does not treat an unsupported/erroring
+  // query as proof of either denial or approval -- it just falls through to showing the
+  // nudge, since that's the safe default either way. Never asks twice in one tab session.
+  // NOTE: this points the user at a SEPARATE browser permission step ("Always allow") --
+  // it does not claim the manual click itself grants any lasting automatic-PiP permission.
   const maybeShowAutoPipAllowNudge = () => {
     if (pipAutoAllowNudgeShownRef.current) return;
     pipAutoAllowNudgeShownRef.current = true;
@@ -1820,123 +1943,45 @@ export function MeetingRoomPage() {
         // Permission name unsupported in this browser -- still worth showing the nudge,
         // since we can't otherwise tell whether it's already granted.
       }
-      setPipHintToast('Tip: click the Picture-in-Picture icon in your browser\'s address bar and choose "Always allow" so PiP opens automatically on every tab switch.');
+      setPipHintToast('Tip: click the Picture-in-Picture icon in your browser\'s address bar and choose "Always allow" so PiP can open automatically on future tab switches.');
       setTimeout(() => setPipHintToast(null), 8000);
     })();
   };
 
-  // Toggle PiP — called from button click (guaranteed user gesture)
+  // Toggle PiP — called from button click (guaranteed user gesture). Delegates the actual
+  // mechanics to the shared openPip/closePip so the manual and automatic paths run through
+  // exactly one lifecycle implementation instead of two divergent copies of similar logic.
   const handleTogglePiP = useCallback(async () => {
     pipUserEnabledRef.current = true;
     setShowPipEnableCTA(false);
     try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
-    if (pipOpeningRef.current) return;
-    pipOpeningRef.current = true;
-    // Invalidate any in-flight auto-trigger attempt -- a manual click always wins, and
-    // without this an auto attempt that resolves right after could open a second window.
-    const myRequestId = ++pipRequestIdRef.current;
-    const isStale = () => pipRequestIdRef.current !== myRequestId;
-
-    try {
-      // Close whichever PiP type is actually open, regardless of which one the user is
-      // about to request next. Checking both up front (not just Document PiP) is what
-      // stops the toggle from trying to open a *second* PiP window while Video PiP
-      // fallback is already showing.
-      if (isVideoPipActive()) {
-        try {
-          await (document as any).exitPictureInPicture();
-        } catch (exitErr) {
-          console.warn('[PiP Lifecycle] exitPictureInPicture rejected:', exitErr);
-        }
-        stopPipDraw();
-        setIsPiPActive(false);
-        pipTriggerTypeRef.current = null;
-        return;
-      }
-      if (isDocPipWindowOpen()) {
-        try { documentPipWindowRef.current.close(); } catch {}
-        documentPipWindowRef.current = null;
-        setDocumentPipActive(false);
-        setIsPiPActive(false);
-        pipTriggerTypeRef.current = null;
-        return;
-      }
-
-      // 1. Try Document Picture-in-Picture first (Chrome 116+)
-      if ('documentPictureInPicture' in window) {
-        try {
-          const pipWin = await (window as any).documentPictureInPicture.requestWindow({
-            width: 380,
-            height: 500,
-          });
-          if (isStale() || !hasJoinedRef.current) {
-            try { pipWin.close(); } catch {}
-            return;
-          }
-          setupPipWindow(pipWin, true);
-          maybeShowAutoPipAllowNudge();
-          return;
-        } catch (docPipErr: any) {
-          console.warn('[PiP Lifecycle] Document PiP manual request failed, trying Video PiP fallback:', docPipErr);
-        }
-      }
-
-      // 2. Video Picture-in-Picture fallback
-      if (!(document as any).pictureInPictureEnabled) return;
-      if (isStale() || !hasJoinedRef.current) return;
-
-      // Enter Video PiP
-      ensurePipElements();
-      const vid = pipVideoRef.current;
-      if (!vid) return;
-
-      initPipStream();
-      if (vid.paused) {
-        try { await vid.play(); } catch {}
-      }
-
-      const ready = await ensureVideoReady(vid, 1000);
-      if (!ready) {
-        console.warn('[PiP Lifecycle] Manual Video PiP: video element not ready');
-        stopPipDraw();
-        setIsPiPActive(false);
-        return;
-      }
-      if (isStale() || !hasJoinedRef.current) return;
-
-      try {
-        await (vid as any).requestPictureInPicture();
-        if (isStale() || !hasJoinedRef.current) {
-          try { await (document as any).exitPictureInPicture(); } catch {}
-          return;
-        }
-        setIsPiPActive(true);
-        pipTriggerTypeRef.current = 'manual';
-        maybeShowAutoPipAllowNudge();
-      } catch (vidErr: any) {
-        console.warn('[PiP Lifecycle] Manual Video PiP failed:', vidErr);
-        stopPipDraw();
-        setIsPiPActive(false);
-      }
-    } finally {
-      pipOpeningRef.current = false;
+    const lc = pipLifecycleRef.current;
+    if (lc.phase === 'open') {
+      await closePip();
+    } else if (lc.phase === 'idle') {
+      await openPip('manual');
     }
-  }, [initPipStream]);
+    // If phase is 'opening' or 'closing', another operation already owns the lifecycle for
+    // this click -- ignore it rather than fighting that operation (covers rapid double-clicks).
+  }, [openPip, closePip]);
 
   // Keep references to current callbacks so listeners never suffer stale closures
   useEffect(() => {
-    triggerAutoPiPRef.current = triggerAutoPiP;
+    triggerAutoPiPRef.current = () => openPip('auto');
     handleTogglePiPRef.current = handleTogglePiP;
-  }, [triggerAutoPiP, handleTogglePiP]);
+  }, [openPip, handleTogglePiP]);
 
-  // Tab switch listener: auto-enter PiP on hide, auto-exit only if auto-triggered on show
+  // Tab switch listener: cleanup and cancellation ONLY. Automatic OPENING is handled solely
+  // by the Media Session 'enterpictureinpicture' handler registered below -- see the comment
+  // above openPip for why calling the same open routine directly from visibilitychange used
+  // to compete with (and could block) that browser-authorized callback.
   useEffect(() => {
     if (!hasJoined) return;
 
-    // Chrome MediaSession action handlers for interactive controls
     if ('mediaSession' in navigator) {
       try {
         navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, () => {
+          logPipDiagnostic('trigger', { source: 'media-session' });
           triggerAutoPiPRef.current?.();
         });
       } catch {}
@@ -1959,33 +2004,29 @@ export function MeetingRoomPage() {
 
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        triggerAutoPiPRef.current?.();
+        logPipDiagnostic('visibility-hidden', {});
+        // No auto-open call here -- see the comment above this effect and above openPip.
       } else if (document.visibilityState === 'visible') {
-        // Returning to the tab invalidates any auto-trigger that's still mid-flight
-        // (e.g. awaiting requestWindow/requestPictureInPicture) so it can't publish
-        // itself as active a moment later and pop a PiP window right back open.
-        pipRequestIdRef.current++;
+        logPipDiagnostic('visibility-visible', {});
+        const lc = pipLifecycleRef.current;
+        // Invalidate any in-flight opening so it can't publish itself as active a moment
+        // later and pop a window right back open after we've already decided the user
+        // wants the main page. Reset phase directly rather than waiting for the stale
+        // async attempt to notice -- once superseded, that attempt deliberately leaves
+        // lifecycle state alone (see isCurrent() in openPip), so someone has to do it here.
+        if (lc.phase === 'opening') {
+          pipRequestIdRef.current++;
+          lc.phase = 'idle';
+          lc.origin = null;
+          lc.kind = null;
+        }
         // While screen sharing (local or remote) is active, PiP stays open across a return
-        // to the tab -- it's the "priority" view for the shared screen and should stay
-        // constant until the user closes it themselves or the screen share ends, not
-        // vanish the moment they glance back at the meeting tab.
+        // to the tab -- it's the priority view for the shared screen and should stay
+        // constant until the user closes it themselves or sharing ends (handled by the
+        // dedicated effect above), not vanish the moment they glance back at the tab.
         const screenSharePriority = pipIsScreenSharingRef.current || Boolean(pipRemoteScreenStreamRef.current);
-        // User switched back: only close PiP if it was auto-triggered, and not currently
-        // in the screen-share-priority "stay open" case above.
-        if (pipTriggerTypeRef.current === 'auto' && !screenSharePriority) {
-          if (documentPipWindowRef.current) {
-            try { documentPipWindowRef.current.close(); } catch {}
-            documentPipWindowRef.current = null;
-            setDocumentPipActive(false);
-          }
-          if ((document as any).pictureInPictureElement) {
-            (document as any).exitPictureInPicture().catch((err: any) => {
-              console.warn('[PiP Lifecycle] Auto-close exitPictureInPicture rejected:', err);
-            });
-            stopPipDraw();
-          }
-          pipTriggerTypeRef.current = null;
-          setIsPiPActive(false);
+        if (lc.phase === 'open' && lc.origin === 'auto' && !screenSharePriority) {
+          closePipRef.current?.();
         }
       }
     };
@@ -2021,6 +2062,11 @@ export function MeetingRoomPage() {
         pipVideoRef.current = null;
       }
       pipCanvasRef.current = null;
+      // Meeting ended/left -- any open or in-flight PiP was already force-closed above (and
+      // any still-in-flight openPip()/closePip() promise will see hasJoinedRef.current is
+      // now false via isCurrent() and close whatever it produces once it resolves), so the
+      // lifecycle unconditionally resets to idle here.
+      pipLifecycleRef.current = { phase: 'idle', kind: null, origin: null, requestId: pipLifecycleRef.current.requestId };
     };
   }, [hasJoined]);
 
@@ -2438,8 +2484,12 @@ export function MeetingRoomPage() {
 
   const handleEndMeetingForEveryone = async () => {
     setShowEndMeetingModal(false);
+    // HTTP-reliable broadcast (see postRoomSignal) instead of sendEndpointTextMessage
+    // directly -- same BridgeChannel-not-ready problem chat had. This is a courtesy for a
+    // specific "ended by host" message; the native endConference command below is what
+    // actually terminates the conference for everyone regardless of whether this arrives.
     try {
-      jitsiApiRef.current?.executeCommand('sendEndpointTextMessage', '', JSON.stringify({ type: 'MEETING_ENDED_FOR_EVERYONE' }));
+      postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
     } catch {}
     try {
       jitsiApiRef.current?.executeCommand('endConference');
@@ -2810,17 +2860,20 @@ export function MeetingRoomPage() {
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim()) return;
+    const text = chatInput.trim();
     const msg = {
       id: String(Date.now()),
       sender: displayName || 'You',
       time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      text: chatInput.trim(),
+      text,
     };
     setChatMessages((prev) => [...prev, msg]);
     setChatInput('');
-    try {
-      jitsiApiRef.current?.executeCommand('sendEndpointTextMessage', '', msg.text);
-    } catch {}
+    // Routed through postRoomSignal (HTTP to our backend + Jitsi datachannel as a latency
+    // accelerant) instead of only sendEndpointTextMessage directly -- that datachannel relies
+    // on Jitsi's BridgeChannel, which can be unready or unavailable, and had no fallback, so
+    // messages could silently never reach other participants. HTTP always works.
+    postRoomSignal('CHAT_MESSAGE', { text });
   };
 
   const postRoomSignal = useCallback(
@@ -2836,20 +2889,21 @@ export function MeetingRoomPage() {
         payload,
       };
 
+      // HTTP to our own backend is the sole, reliable transport -- this used to ALSO send
+      // via Jitsi's sendEndpointTextMessage (BridgeChannel datachannel) as a latency
+      // accelerant, but that channel isn't always initialized by the time signaling starts
+      // (or may never be, depending on JVB connectivity), and lib-jitsi-meet logs a
+      // "BridgeChannel has not been initialized yet" error internally every time it's
+      // attempted while unready -- that error isn't catchable from here (it's logged deep
+      // inside the library, not thrown back to this call), so it can't be silenced short of
+      // not calling it. HTTP already delivers every signal type reliably (confirmed via
+      // server logs), so the datachannel attempt was pure redundant risk for no real benefit.
       try {
         await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(signalData),
         });
-      } catch {}
-
-      try {
-        jitsiApiRef.current?.executeCommand(
-          'sendEndpointTextMessage',
-          '',
-          JSON.stringify(signalData)
-        );
       } catch {}
     },
     [roomId, displayName]
@@ -2928,7 +2982,9 @@ export function MeetingRoomPage() {
       if (msgId && processedSignalIdsRef.current.has(msgId)) return;
       if (msgId) addProcessedSignalId(msgId);
 
-      if (type === 'SCREEN_SHARE_STARTED') {
+      if (type === 'MEETING_ENDED_FOR_EVERYONE') {
+        leaveMeeting('The host has ended the meeting for everyone.');
+      } else if (type === 'SCREEN_SHARE_STARTED') {
         setRemotePresenterName(payload?.presenter || sender);
         // Viewer sends join request to presenter for per-peer connection
         postRoomSignal('WEBRTC_JOIN_PRESENTATION', {}, payload?.presenterSessionId || senderSessionId);
@@ -3061,6 +3117,24 @@ export function MeetingRoomPage() {
           setHandRaisedToast(`${personName} raised their hand`);
           setTimeout(() => setHandRaisedToast(null), 4000);
         }
+      } else if (type === 'CHAT_MESSAGE') {
+        // HTTP-delivered fallback for chat -- sendEndpointTextMessage (Jitsi's BridgeChannel
+        // datachannel) has no delivery guarantee if the channel isn't initialized yet, and
+        // was the only transport chat had, so messages could silently never reach other
+        // participants. This path always works, since it rides the same signal endpoint
+        // screen-share already relies on. msgId dedup above prevents a double-add on the
+        // rare chance both this and a working datachannel send arrive.
+        const text = typeof payload?.text === 'string' ? payload.text : '';
+        if (!text) return;
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: msgId || String(Date.now()),
+            sender: sender || 'Participant',
+            time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            text,
+          },
+        ]);
       }
     };
 
@@ -5693,13 +5767,7 @@ export function MeetingRoomPage() {
             onToggleHand={handleToggleRaiseHand}
             onReturnToMeeting={() => {
               window.focus();
-              if (documentPipWindowRef.current) {
-                try { documentPipWindowRef.current.close(); } catch {}
-                documentPipWindowRef.current = null;
-                setDocumentPipActive(false);
-                setIsPiPActive(false);
-                pipTriggerTypeRef.current = null;
-              }
+              closePipRef.current?.();
             }}
             onLeaveMeeting={() => leaveMeeting()}
           />,
