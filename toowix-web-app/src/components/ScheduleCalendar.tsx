@@ -80,7 +80,7 @@ export function ScheduleCalendar({
   const [name, setName] = useState('');
   const [time, setTime] = useState('10:00');
   const [duration, setDuration] = useState(30);
-  const [type, setType] = useState<'Personal' | 'Internal' | 'Guest' | 'Private'>('Personal');
+  const [type, setType] = useState<'Personal' | 'Internal' | 'Guest' | 'Private'>('Guest');
   const [description, setDescription] = useState('');
   const [customId, setCustomId] = useState('');
   const [passcode, setPasscode] = useState('');
@@ -186,7 +186,7 @@ export function ScheduleCalendar({
     setName('');
     setTime('10:00');
     setDuration(30);
-    setType('Personal');
+    setType('Guest');
     setDescription('');
     setCustomId('');
     setPasscode('');
@@ -660,17 +660,15 @@ export function ScheduleCalendar({
 
               <div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>
-                  <Users size={12} /> Meeting type
+                  <Users size={12} /> Who can join
                 </label>
                 <select
-                  value={type}
+                  value={type === 'Private' ? 'Private' : 'Guest'}
                   onChange={(e) => setType(e.target.value as any)}
                   style={{ width: '100%', height: '42px', padding: '0 10px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none', background: '#fff' }}
                 >
-                  <option value="Personal">Personal</option>
-                  <option value="Internal">Internal</option>
-                  <option value="Guest">Guest</option>
-                  <option value="Private">Private</option>
+                  <option value="Guest">Public — anyone with the link can join by entering their name</option>
+                  <option value="Private">Private — only invited emails can join</option>
                 </select>
               </div>
 

@@ -22,6 +22,8 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const WebSocket = require('../../node_modules/ws');
 
+const BASE_URL = process.env.TARGET_BASE_URL || 'http://localhost:3000';
+const ROOM_ID = process.env.TARGET_ROOM_ID || 'pip-lifecycle-test';
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), '.pip-lifecycle-test-'));
 let chrome, ws;
 const pending = new Map();
@@ -220,10 +222,10 @@ async function check(label, fn) {
     `,
   });
 
-  console.log('1. Joining meeting on localhost:3000...');
-  await send('Page.navigate', { url: 'http://localhost:3000/meet/pip-lifecycle-test' });
+  console.log(`1. Joining meeting on ${BASE_URL}...`);
+  await send('Page.navigate', { url: `${BASE_URL}/meet/${ROOM_ID}` });
   await until('document.readyState === "complete"');
-  await until('document.body.innerText.includes("Ready to join?")');
+  await until('document.body.innerText.includes("Ready to join?")', 20000);
 
   await evaluate(`
     const input = document.querySelector('input[placeholder*="name"]');
@@ -235,7 +237,7 @@ async function check(label, fn) {
     const btn = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Join Meeting'));
     if (btn) btn.click();
   `);
-  await until('document.body.innerText.includes("pip-lifecycle-test") && !document.body.innerText.includes("Ready to join?")', 10000);
+  await until(`document.body.innerText.includes("${ROOM_ID}") && !document.body.innerText.includes("Ready to join?")`, 15000);
   console.log('   Meeting joined.');
 
   console.log('2. Item 2 regression: visibilitychange ALONE must NOT auto-open PiP');
@@ -374,7 +376,7 @@ async function check(label, fn) {
 
   console.log('9. Conference integrity check');
   await check('meeting still connected after all PiP transitions', async () => {
-    const inMeeting = await evaluate('document.body.innerText.includes("pip-lifecycle-test")');
+    const inMeeting = await evaluate(`document.body.innerText.includes("${ROOM_ID}")`);
     if (!inMeeting) throw new Error('meeting ended/disconnected unexpectedly');
   });
 
