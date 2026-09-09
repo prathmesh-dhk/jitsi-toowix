@@ -159,7 +159,7 @@ export function MeetingEndedPage() {
             maxWidth: '380px',
           }}
         >
-          {reason}
+          {reason} Thank you for joining.
         </p>
 
         {/* 20-Second Accidental Exit Countdown Banner */}

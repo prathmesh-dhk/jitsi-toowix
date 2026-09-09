@@ -1,6 +1,7 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
   Video,
@@ -142,6 +143,665 @@ export function getParticipantColorTheme(identifier: string, forceIndex?: number
   return PARTICIPANT_COLOR_THEMES[Math.abs(hash) % PARTICIPANT_COLOR_THEMES.length];
 }
 
+// Interactive Document Picture-in-Picture window content (Google Meet experience)
+const DocumentPipContent = memo(function DocumentPipContent({
+  isScreenSharing,
+  screenStream,
+  remoteScreenStream,
+  remotePresenterName,
+  inCallVideo,
+  inCallStream,
+  inCallMuted,
+  displayName,
+  isHandRaised,
+  remoteParticipants,
+  roomTitle,
+  onToggleMic,
+  onToggleVideo,
+  onToggleHand,
+  onReturnToMeeting,
+  onLeaveMeeting,
+}: {
+  isScreenSharing: boolean;
+  screenStream: MediaStream | null;
+  remoteScreenStream: MediaStream | null;
+  remotePresenterName: string | null;
+  inCallVideo: boolean;
+  inCallStream: MediaStream | null;
+  inCallMuted: boolean | null;
+  displayName: string;
+  isHandRaised: boolean;
+  remoteParticipants: Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean }>;
+  roomTitle: string;
+  onToggleMic: () => void;
+  onToggleVideo: () => void;
+  onToggleHand: () => void;
+  onReturnToMeeting: () => void;
+  onLeaveMeeting: () => void;
+}) {
+  const activeScreenStream = isScreenSharing ? screenStream : remoteScreenStream;
+  const isPresenting = Boolean(activeScreenStream);
+
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const setScreenVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    screenVideoRef.current = node;
+    if (node) {
+      node.srcObject = activeScreenStream;
+      if (activeScreenStream) {
+        node.play().catch(() => {});
+      }
+    }
+  }, [activeScreenStream]);
+
+  const setLocalVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    localVideoRef.current = node;
+    if (node) {
+      if (inCallVideo && inCallStream) {
+        node.srcObject = inCallStream;
+        node.play().catch(() => {});
+      } else {
+        node.srcObject = null;
+      }
+    }
+  }, [inCallVideo, inCallStream]);
+
+  // Reactive binding for screen presentation stream
+  useEffect(() => {
+    if (screenVideoRef.current) {
+      screenVideoRef.current.srcObject = activeScreenStream;
+      if (activeScreenStream) {
+        screenVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [activeScreenStream]);
+
+  // Reactive binding for live camera stream
+  useEffect(() => {
+    if (localVideoRef.current) {
+      if (inCallVideo && inCallStream) {
+        localVideoRef.current.srcObject = inCallStream;
+        localVideoRef.current.play().catch(() => {});
+      } else {
+        localVideoRef.current.srcObject = null;
+      }
+    }
+  }, [inCallVideo, inCallStream]);
+
+  const userInitial = (displayName || 'You').trim().charAt(0).toUpperCase() || 'U';
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+        backgroundColor: '#1E1F21',
+        color: '#FFFFFF',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        userSelect: 'none',
+        fontFamily: "'Google Sans', Roboto, sans-serif",
+      }}
+    >
+      {/* Top Header with Meeting Title and Return to Tab */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 12px',
+          backgroundColor: 'rgba(0, 0, 0, 0.45)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+          zIndex: 20,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+          <span style={{ fontSize: '12px' }}>🟢</span>
+          <span
+            style={{
+              fontSize: '12px',
+              fontWeight: 600,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: '220px',
+              color: '#E8EAED',
+            }}
+          >
+            {roomTitle}
+          </span>
+        </div>
+        <button
+          onClick={onReturnToMeeting}
+          title="Return to meeting tab"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            background: 'rgba(138, 180, 248, 0.15)',
+            border: '1px solid rgba(138, 180, 248, 0.3)',
+            borderRadius: '12px',
+            padding: '4px 10px',
+            color: '#8AB4F8',
+            fontSize: '11px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          Back to tab
+        </button>
+      </div>
+
+      {/* Main Video Stage */}
+      <div
+        style={{
+          flex: 1,
+          position: 'relative',
+          backgroundColor: '#000000',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {isPresenting ? (
+          /* PRESENTATION MODE: Shared screen prominent + floating self-view thumbnail */
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#000000',
+            }}
+          >
+            <video
+              ref={setScreenVideoNode}
+              autoPlay
+              playsInline
+              muted
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            />
+
+            {/* Floating Presenter Pill Badge */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '8px',
+                left: '8px',
+                backgroundColor: 'rgba(0, 0, 0, 0.72)',
+                backdropFilter: 'blur(4px)',
+                padding: '4px 10px',
+                borderRadius: '8px',
+                fontSize: '11px',
+                fontWeight: 500,
+                color: '#8AB4F8',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                zIndex: 10,
+              }}
+            >
+              <span>🖥 {isScreenSharing ? 'You are presenting' : `${remotePresenterName || 'Participant'} is presenting`}</span>
+            </div>
+
+            {/* Corner floating self-view participant tile */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '10px',
+                right: '10px',
+                width: '110px',
+                height: '70px',
+                borderRadius: '10px',
+                backgroundColor: '#202124',
+                overflow: 'hidden',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                zIndex: 15,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {inCallVideo && inCallStream ? (
+                <video
+                  ref={setLocalVideoNode}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1A73E8',
+                    color: '#FFFFFF',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {userInitial}
+                </div>
+              )}
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '3px',
+                  left: '4px',
+                  fontSize: '9px',
+                  color: '#FFFFFF',
+                  backgroundColor: 'rgba(0,0,0,0.6)',
+                  padding: '1px 4px',
+                  borderRadius: '3px',
+                  maxWidth: '90px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                You {inCallMuted ? '(Muted)' : ''}
+              </div>
+            </div>
+          </div>
+        ) : remoteParticipants.length === 0 ? (
+          /* SOLO PARTICIPANT STAGE */
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: '#202124',
+            }}
+          >
+            {inCallVideo && inCallStream ? (
+              <video
+                ref={setLocalVideoNode}
+                autoPlay
+                playsInline
+                muted
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '12px',
+                }}
+              >
+                <div
+                  style={{
+                    width: '68px',
+                    height: '68px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1A73E8',
+                    color: '#FFFFFF',
+                    fontSize: '26px',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                  }}
+                >
+                  {userInitial}
+                </div>
+              </div>
+            )}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '8px',
+                left: '8px',
+                fontSize: '11px',
+                color: '#FFFFFF',
+                backgroundColor: 'rgba(0,0,0,0.6)',
+                padding: '3px 8px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <span>{displayName || 'You'} (You)</span>
+              {inCallMuted && <span style={{ color: '#F87171' }}>● Muted</span>}
+            </div>
+            {isHandRaised && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '8px',
+                  right: '8px',
+                  backgroundColor: '#1A73E8',
+                  borderRadius: '50%',
+                  padding: '4px 6px',
+                  fontSize: '13px',
+                }}
+              >
+                ✋
+              </div>
+            )}
+          </div>
+        ) : (
+          /* MULTI PARTICIPANT GRID */
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'grid',
+              gridTemplateColumns: remoteParticipants.length === 1 ? '1fr 1fr' : 'repeat(2, 1fr)',
+              gap: '6px',
+              padding: '6px',
+              boxSizing: 'border-box',
+            }}
+          >
+            {/* Local Participant Tile */}
+            <div
+              style={{
+                position: 'relative',
+                borderRadius: '10px',
+                backgroundColor: '#2D2E30',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+            >
+              {inCallVideo && inCallStream ? (
+                <video
+                  ref={setLocalVideoNode}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1A73E8',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '17px',
+                    fontWeight: 600,
+                  }}
+                >
+                  {userInitial}
+                </div>
+              )}
+              <span
+                style={{
+                  position: 'absolute',
+                  bottom: '4px',
+                  left: '6px',
+                  fontSize: '10px',
+                  color: '#FFFFFF',
+                  backgroundColor: 'rgba(0,0,0,0.55)',
+                  padding: '2px 5px',
+                  borderRadius: '4px',
+                }}
+              >
+                You {inCallMuted ? '(Muted)' : ''}
+              </span>
+              {isHandRaised && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '4px',
+                    right: '4px',
+                    backgroundColor: '#1A73E8',
+                    borderRadius: '50%',
+                    padding: '2px 4px',
+                    fontSize: '11px',
+                  }}
+                >
+                  ✋
+                </span>
+              )}
+            </div>
+
+            {/* Remote Participants (up to 3) */}
+            {remoteParticipants.slice(0, 3).map((p, idx) => {
+              const theme = getParticipantColorTheme(p.name, idx + 1);
+              const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
+              return (
+                <div
+                  key={p.id || idx}
+                  style={{
+                    position: 'relative',
+                    borderRadius: '10px',
+                    backgroundColor: theme.tileBg,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '50%',
+                      backgroundColor: theme.avatarBg,
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '16px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {initial}
+                  </div>
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: '4px',
+                      left: '6px',
+                      fontSize: '10px',
+                      color: '#FFFFFF',
+                      backgroundColor: 'rgba(0,0,0,0.55)',
+                      padding: '2px 5px',
+                      borderRadius: '4px',
+                      maxWidth: '120px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {p.name.length > 12 ? p.name.slice(0, 11) + '…' : p.name}
+                  </span>
+                  {p.raisedHand && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '4px',
+                        right: '4px',
+                        backgroundColor: '#1A73E8',
+                        borderRadius: '50%',
+                        padding: '2px 4px',
+                        fontSize: '11px',
+                      }}
+                    >
+                      ✋
+                    </span>
+                  )}
+                  {p.muted && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '4px',
+                        left: '4px',
+                        backgroundColor: 'rgba(0,0,0,0.6)',
+                        borderRadius: '50%',
+                        width: '18px',
+                        height: '18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '10px',
+                        color: '#F87171',
+                      }}
+                    >
+                      ✕
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Interactive Bottom Controls Bar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '10px',
+          padding: '10px 12px',
+          backgroundColor: '#1E1F21',
+          borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+          zIndex: 20,
+        }}
+      >
+        {/* Mic Toggle */}
+        <button
+          onClick={onToggleMic}
+          title={inCallMuted ? 'Turn on microphone' : 'Turn off microphone'}
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '50%',
+            backgroundColor: inCallMuted ? '#EA4335' : '#3C4043',
+            color: '#FFFFFF',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          {inCallMuted ? <MicOff size={16} /> : <Mic size={16} />}
+        </button>
+
+        {/* Camera Toggle */}
+        <button
+          onClick={onToggleVideo}
+          title={inCallVideo ? 'Turn off camera' : 'Turn on camera'}
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '50%',
+            backgroundColor: inCallVideo ? '#3C4043' : '#EA4335',
+            color: '#FFFFFF',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          {inCallVideo ? <Video size={16} /> : <VideoOff size={16} />}
+        </button>
+
+        {/* Raise Hand Toggle */}
+        <button
+          onClick={onToggleHand}
+          title={isHandRaised ? 'Lower hand' : 'Raise hand'}
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '50%',
+            backgroundColor: isHandRaised ? '#1A73E8' : '#3C4043',
+            color: '#FFFFFF',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          <Hand size={16} />
+        </button>
+
+        {/* Return to Meeting Tab */}
+        <button
+          onClick={onReturnToMeeting}
+          title="Return to meeting tab"
+          style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: '50%',
+            backgroundColor: '#3C4043',
+            color: '#8AB4F8',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          <ArrowLeft size={16} />
+        </button>
+
+        {/* Leave Meeting Button */}
+        <button
+          onClick={onLeaveMeeting}
+          title="Leave meeting"
+          style={{
+            width: '44px',
+            height: '38px',
+            borderRadius: '19px',
+            backgroundColor: '#EA4335',
+            color: '#FFFFFF',
+            border: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 6px rgba(234, 67, 53, 0.4)',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
+          <Phone size={16} style={{ transform: 'rotate(135deg)' }} />
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export function MeetingRoomPage() {
   const { isDark, toggleTheme } = useTheme();
   const { roomId = 'lounge' } = useParams();
@@ -196,6 +856,7 @@ export function MeetingRoomPage() {
   // Duration Timer in meeting
   const [meetingSeconds, setMeetingSeconds] = useState(0);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
   const [remoteParticipants, setRemoteParticipants] = useState<
     Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean }>
@@ -214,9 +875,69 @@ export function MeetingRoomPage() {
   const speechRecognitionRef = useRef<any>(null);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [handRaisedToast, setHandRaisedToast] = useState<string | null>(null);
+  const [pipHintToast, setPipHintToast] = useState<string | null>(null);
+  // One-time "Enable Auto Picture-in-Picture" onboarding banner. Browsers reject a
+  // script's PiP request that isn't backed by a real click (confirmed: NotAllowedError on
+  // every tab-switch auto-attempt) -- there is no way to fake that click from code. This
+  // banner exists to GET that one real click out of the way proactively, framed as an
+  // opt-in, instead of leaving auto-PiP silently broken until the user happens to discover
+  // and click the PiP button on their own. Persisted in localStorage so it only ever asks
+  // once per browser, not once per meeting.
+  const [showPipEnableCTA, setShowPipEnableCTA] = useState(false);
   const [isPiPActive, setIsPiPActive] = useState(false);
-  const pipUserEnabledRef = useRef(false); // true after user clicks PiP button (satisfies gesture requirement)
+  const [documentPipActive, setDocumentPipActive] = useState(false);
+  const documentPipWindowRef = useRef<any>(null);
+  // Single source of truth for PiP state -- replaces the previously scattered
+  // pipOpeningRef/pipTriggerTypeRef booleans, which could disagree with each other under
+  // rapid tab switching. phase moves idle -> opening -> open -> closing -> idle; only the
+  // operation holding the current requestId may act as the owner at any given moment
+  // (enforced by openPip/closePip and every native/browser event handler below).
+  const pipLifecycleRef = useRef<{
+    phase: 'idle' | 'opening' | 'open' | 'closing';
+    kind: 'document' | 'video' | null;
+    origin: 'manual' | 'auto' | null;
+    requestId: number;
+  }>({ phase: 'idle', kind: null, origin: null, requestId: 0 });
+  const pipCanvasStreamRef = useRef<MediaStream | null>(null);
+  const pipUserEnabledRef = useRef(false);
+  // Separate from pipUserEnabledRef: this one only ever flips true->stays true for the
+  // life of the tab, purely to gate the "only once" permission hint toast. Reusing
+  // pipUserEnabledRef for this was the actual bug -- it gets read/written for gesture
+  // provenance too, so the hint kept reappearing on every failed auto-trigger.
+  const pipHintShownRef = useRef(false);
+  // Shown at most once per tab session, right after the FIRST successful manual PiP open
+  // (real click). That's the exact moment Chromium browsers surface their own native
+  // "Always allow Picture-in-Picture for this site" icon in the address bar -- most people
+  // never notice it on their own, so this points at it. There is no JS API to trigger that
+  // permission ourselves; this is the closest thing to it.
+  const pipAutoAllowNudgeShownRef = useRef(false);
+  // Bumped by every open/close attempt AND by the visibility-return handler (to invalidate
+  // whatever open attempt might still be in flight). Each async attempt captures its own id
+  // before awaiting; if a newer operation started (or the meeting ended) before an older
+  // awaited step resolves, the older attempt sees its id is stale and bails instead of
+  // publishing state or opening a second PiP window.
+  const pipRequestIdRef = useRef(0);
+  // Sole automatic-opening entry point: registered as the Media Session
+  // 'enterpictureinpicture' action handler, which the BROWSER itself invokes when its
+  // Automatic Picture-in-Picture conditions are met
+  // (see https://developer.chrome.com/blog/automatic-picture-in-picture). Because the
+  // browser calls this handler -- not our own script off a visibilitychange listener --
+  // the PiP request made inside it is authorized/gesture-exempt in eligible, permitted
+  // browsers, unlike a script-initiated call from an arbitrary event handler (confirmed via
+  // direct testing: the latter always throws NotAllowedError).
+  const triggerAutoPiPRef = useRef<(() => Promise<void>) | null>(null);
+  const handleTogglePiPRef = useRef<(() => Promise<void>) | null>(null);
+  const closePipRef = useRef<(() => Promise<void>) | null>(null);
+  // Stable indirection so effects that just want to "poke" the PiP stream after doing
+  // their own work (e.g. re-acquiring the camera) don't need initPipStream itself in
+  // their dependency array -- its identity changes with isScreenSharing/remoteScreenStream,
+  // and depending on it directly was re-running unrelated effects (item 3: camera
+  // reacquisition) every time anyone started/stopped screen sharing.
+  const initPipStreamRef = useRef<() => void>(() => {});
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showOtherWaysModal, setShowOtherWaysModal] = useState(false);
+  const localParticipantIdRef = useRef<string>('local');
+  const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [quickAccessEnabled, setQuickAccessEnabled] = useState(true);
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; time: string; text: string }>>([
@@ -224,15 +945,38 @@ export function MeetingRoomPage() {
   ]);
   const [chatInput, setChatInput] = useState('');
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const inCallStreamRef = useRef<MediaStream | null>(null);
+  const [inCallStream, setInCallStream] = useState<MediaStream | null>(null);
   const inCallVideoRef = useRef<HTMLVideoElement | null>(null);
   const presentationVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
   const [recordingToast, setRecordingToast] = useState<string | null>(null);
   const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [remotePresenterName, setRemotePresenterName] = useState<string | null>(null);
   const remotePresentationVideoRef = useRef<HTMLVideoElement | null>(null);
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const sessionIdRef = useRef<string>(
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).substring(2, 11) + '-' + Date.now().toString(36)
+  );
+  const processedSignalIdsRef = useRef<Set<string>>(new Set());
+  // Signal dedup cache is unbounded time and never cleared for the life of the call,
+  // so a long meeting with active screen-share signaling would otherwise grow it forever.
+  // Cap it and evict oldest entries (Set preserves insertion order) once it's exceeded.
+  const PROCESSED_SIGNAL_ID_CAP = 500;
+  const addProcessedSignalId = (id: string) => {
+    const set = processedSignalIdsRef.current;
+    set.add(id);
+    while (set.size > PROCESSED_SIGNAL_ID_CAP) {
+      const oldest = set.values().next().value;
+      if (oldest === undefined) break;
+      set.delete(oldest);
+    }
+  };
+  const presenterPeerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const viewerPeerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const presenterIceQueuesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
   const lastSignalTimestampRef = useRef<number>(Date.now() - 5000);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -241,14 +985,19 @@ export function MeetingRoomPage() {
   // Live refs so the PiP draw loop always reads current state
   const pipRemoteParticipantsRef = useRef<typeof remoteParticipants>([]);
   const pipIsScreenSharingRef = useRef(false);
+  const pipRemoteScreenStreamRef = useRef<MediaStream | null>(null);
+  const pipRemotePresenterNameRef = useRef('');
   const pipDisplayNameRef = useRef('');
   const pipAutoTriggeredRef = useRef(false);
   const pipInCallVideoRef = useRef(inCallVideo);
   const toggleInCallMicRef = useRef<() => void>(() => {});
   const toggleInCallVideoRef = useRef<() => void>(() => {});
+  const toggleRaiseHandRef = useRef<() => void>(() => {});
   const leaveMeetingRef = useRef<() => void>(() => {});
   const pipInCallMutedRef = useRef<boolean | null>(null);
   const pipIsHandRaisedRef = useRef(false);
+  const hasJoinedRef = useRef(hasJoined);
+  useEffect(() => { hasJoinedRef.current = hasJoined; }, [hasJoined]);
   useEffect(() => { pipInCallMutedRef.current = inCallMuted; }, [inCallMuted]);
   useEffect(() => { pipIsHandRaisedRef.current = isHandRaised; }, [isHandRaised]);
   useEffect(() => { pipInCallVideoRef.current = inCallVideo; }, [inCallVideo]);
@@ -327,9 +1076,37 @@ export function MeetingRoomPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captionsEnabled]);
 
+  // Dev-only PiP diagnostics -- trigger source, lifecycle phase/kind/origin/requestId,
+  // document visibility, active window/video identity, video readiness/track state, and
+  // (when relevant) the exact API error name/message. Never logs credentials, tokens, or
+  // meeting content -- only PiP plumbing state.
+  const logPipDiagnostic = (event: string, details: Record<string, unknown> = {}) => {
+    if (!(import.meta as any).env?.DEV) return;
+    const lc = pipLifecycleRef.current;
+    try {
+      const vid = pipVideoRef.current;
+      const track = pipCanvasStreamRef.current?.getVideoTracks?.()[0];
+      // eslint-disable-next-line no-console
+      console.debug('[PiP]', event, {
+        phase: lc.phase,
+        kind: lc.kind,
+        origin: lc.origin,
+        requestId: lc.requestId,
+        visibility: document.visibilityState,
+        docPipWindowClosed: documentPipWindowRef.current ? Boolean(documentPipWindowRef.current.closed) : null,
+        videoPipElementActive: Boolean((document as any).pictureInPictureElement),
+        videoReadyState: vid?.readyState ?? null,
+        videoTrackState: track?.readyState ?? null,
+        ...details,
+      });
+    } catch {}
+  };
+
   // ── Keep PiP refs in sync with live state ────────────────────────────────
   useEffect(() => { pipRemoteParticipantsRef.current = remoteParticipants; }, [remoteParticipants]);
   useEffect(() => { pipIsScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]);
+  useEffect(() => { pipRemoteScreenStreamRef.current = remoteScreenStream; }, [remoteScreenStream]);
+  useEffect(() => { pipRemotePresenterNameRef.current = remotePresenterName || ''; }, [remotePresenterName]);
   useEffect(() => { pipDisplayNameRef.current = displayName; }, [displayName]);
 
   // ── Picture-in-Picture ───────────────────────────────────────────────────
@@ -364,14 +1141,48 @@ export function MeetingRoomPage() {
       document.body.appendChild(vid);
       pipVideoRef.current = vid;
 
-      vid.addEventListener('leavepictureinpicture', () => {
-        if (pipTimerRef.current) {
-          clearInterval(pipTimerRef.current);
-          pipTimerRef.current = null;
+      vid.addEventListener('enterpictureinpicture', () => {
+        // Fires whenever video-element PiP actually starts showing, regardless of what
+        // caused it -- our own openPip() call succeeding, OR the browser re-entering it on
+        // its own after a prior close. Keeps React/lifecycle state correct either way
+        // instead of only trusting our own call's promise.
+        setIsPiPActive(true);
+        const lc = pipLifecycleRef.current;
+        if (lc.phase !== 'open' || lc.kind !== 'video') {
+          lc.phase = 'open';
+          lc.kind = 'video';
+          if (!lc.origin) lc.origin = 'auto';
         }
+        // The leave handler below always stops the canvas draw loop, but nothing was
+        // restarting it on the NEXT entry -- reopening PiP after a close showed a frozen
+        // last frame instead of live content. Restart it here whenever the video's source
+        // is still the synthetic canvas stream.
+        if (pipCanvasStreamRef.current && vid.srcObject === pipCanvasStreamRef.current) {
+          startPipDraw();
+        }
+        logPipDiagnostic('enter', { type: 'video' });
+      });
+
+      vid.addEventListener('leavepictureinpicture', () => {
+        // Native browser close (window X, OS gesture, or programmatic exit) — this fires
+        // regardless of how PiP was closed, so it's the single source of truth for
+        // "video-element PiP is no longer showing." Canvas drawing must stop here too,
+        // otherwise it keeps running 24/7 against a PiP that's no longer visible.
+        stopPipDraw();
         setIsPiPActive(false);
         pipAutoTriggeredRef.current = false;
-        pipUserEnabledRef.current = false;
+        const lc = pipLifecycleRef.current;
+        if (lc.kind === 'video') {
+          lc.phase = 'idle';
+          lc.kind = null;
+          lc.origin = null;
+        }
+        // NOTE: intentionally NOT resetting pipUserEnabledRef here. That flag records
+        // "has the user ever manually used the PiP button" (gesture provenance, used to
+        // decide whether the auto-PiP permission hint should show) — it must survive
+        // across PiP close/reopen cycles, or the hint would reappear every single time
+        // auto-PiP fails after the very first manual use.
+        logPipDiagnostic('native-close', { type: 'video' });
       });
     }
   };
@@ -567,8 +1378,9 @@ export function MeetingRoomPage() {
 
     const remotes = pipRemoteParticipantsRef.current;
     const localName = pipDisplayNameRef.current || 'You';
-    const screenSharing = pipIsScreenSharingRef.current;
-    const screenVid = remotePresentationVideoRef.current;
+    const isLocalScreenSharing = pipIsScreenSharingRef.current;
+    const hasScreen = isLocalScreenSharing || Boolean(pipRemoteScreenStreamRef.current);
+    const screenVid = isLocalScreenSharing ? presentationVideoRef.current : remotePresentationVideoRef.current;
     const localVid = inCallVideoRef.current;
     const localMuted = pipInCallMutedRef.current ?? false;
     const localHandRaised = pipIsHandRaisedRef.current;
@@ -578,41 +1390,114 @@ export function MeetingRoomPage() {
     const HEADER_H = 28;
     const TOOLBAR_H = 48;
 
-    if (screenSharing && screenVid && screenVid.readyState >= 2) {
-      // ── Screen-sharing layout: big screen on top, participants below ──
-      const availH = H - HEADER_H - TOOLBAR_H - PADDING * 2 - GAP;
-      const screenH = Math.round(availH * 0.62);
-      const thumbH = availH - screenH;
-      const thumbCount = remotes.length + 1;
-      const thumbW = Math.max(80, Math.floor((W - PADDING * 2 - GAP * (thumbCount - 1)) / Math.min(thumbCount, 3)));
+    if (hasScreen) {
+      // ── Screen-sharing layout (Google Meet style): the shared screen fills the frame,
+      // with a small floating circular self-view bubble overlapping its bottom-right
+      // corner -- matches Meet's PiP treatment of screen share, where the screen always
+      // gets priority over any participant tile. ──
+      const screenY = HEADER_H + PADDING;
+      const screenH = H - HEADER_H - TOOLBAR_H - PADDING * 2;
+      const screenW = W - PADDING * 2;
 
-      // Screen share tile
       ctx.save();
-      drawRoundRect(ctx, PADDING, HEADER_H + PADDING, W - PADDING * 2, screenH, 12);
+      drawRoundRect(ctx, PADDING, screenY, screenW, screenH, 12);
       ctx.clip();
-      ctx.drawImage(screenVid, PADDING, HEADER_H + PADDING, W - PADDING * 2, screenH);
+      if (screenVid && screenVid.readyState >= 2 && !screenVid.paused) {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(PADDING, screenY, screenW, screenH);
+        // Letterbox the shared screen to preserve its aspect ratio, matching Meet's fit-contain behavior
+        const vw = screenVid.videoWidth || screenW;
+        const vh = screenVid.videoHeight || screenH;
+        const scale = Math.min(screenW / vw, screenH / vh);
+        const dw = vw * scale;
+        const dh = vh * scale;
+        const dx = PADDING + (screenW - dw) / 2;
+        const dy = screenY + (screenH - dh) / 2;
+        ctx.drawImage(screenVid, dx, dy, dw, dh);
+      } else {
+        ctx.fillStyle = '#18191C';
+        ctx.fillRect(PADDING, screenY, screenW, screenH);
+        ctx.fillStyle = '#8AB4F8';
+        ctx.font = '500 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(
+          isLocalScreenSharing ? '🖥 You are presenting' : `${pipRemotePresenterNameRef.current || 'Participant'} is presenting`,
+          W / 2,
+          screenY + screenH / 2
+        );
+      }
       ctx.restore();
 
-      // "📺 Screen" label
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(PADDING, HEADER_H + PADDING, 90, 22);
-      ctx.fillStyle = '#FFFFFF';
+      // Presenter label, top-left of the screen tile
+      const presenterLabel = isLocalScreenSharing
+        ? 'You are presenting'
+        : `${pipRemotePresenterNameRef.current || 'Participant'} is presenting`;
       ctx.font = '500 11px sans-serif';
+      const labelW = Math.min(screenW - 16, ctx.measureText('🖥 ' + presenterLabel).width + 16);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      drawRoundRect(ctx, PADDING + 8, screenY + 8, labelW, 22, 11);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText('🖥 Screen share', PADDING + 6, HEADER_H + PADDING + 11);
+      ctx.save();
+      drawRoundRect(ctx, PADDING + 8, screenY + 8, labelW, 22, 11);
+      ctx.clip();
+      ctx.fillText('🖥 ' + presenterLabel, PADDING + 14, screenY + 19);
+      ctx.restore();
 
-      // Participant thumbnails in a row
-      let tx = PADDING;
-      const ty = HEADER_H + PADDING + screenH + GAP;
+      // Floating circular self-view bubble, bottom-right of the screen tile
+      const bubbleR = 30;
+      const bubbleCx = PADDING + screenW - bubbleR - 10;
+      const bubbleCy = screenY + screenH - bubbleR - 10;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(bubbleCx, bubbleCy, bubbleR + 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(bubbleCx, bubbleCy, bubbleR, 0, Math.PI * 2);
+      ctx.clip();
       const localTheme = getParticipantColorTheme(localName, 0);
-      drawParticipantCard(ctx, tx, ty, thumbW, thumbH, localName + ' (You)', localTheme, localVid, localMuted, localHandRaised);
-      tx += thumbW + GAP;
-      remotes.slice(0, 2).forEach((r, idx) => {
-        const rTheme = getParticipantColorTheme(r.name, idx + 1);
-        drawParticipantCard(ctx, tx, ty, thumbW, thumbH, r.name, rTheme, null, r.muted, !!r.raisedHand);
-        tx += thumbW + GAP;
-      });
+      if (localVid && localVid.readyState >= 2 && !localVid.paused) {
+        ctx.drawImage(localVid, bubbleCx - bubbleR, bubbleCy - bubbleR, bubbleR * 2, bubbleR * 2);
+      } else {
+        ctx.fillStyle = localTheme.avatarBg;
+        ctx.fillRect(bubbleCx - bubbleR, bubbleCy - bubbleR, bubbleR * 2, bubbleR * 2);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `500 ${Math.round(bubbleR * 0.8)}px 'Google Sans', Roboto, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const cleanName = localName.replace(/\(You\)/i, '').trim();
+        ctx.fillText((cleanName || '?').charAt(0).toUpperCase(), bubbleCx, bubbleCy);
+      }
+      ctx.restore();
+
+      // Muted-mic badge on the self-view bubble (top-right of the circle)
+      if (localMuted) {
+        ctx.fillStyle = '#EA4335';
+        ctx.beginPath();
+        ctx.arc(bubbleCx + bubbleR * 0.62, bubbleCy - bubbleR * 0.62, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('✕', bubbleCx + bubbleR * 0.62, bubbleCy - bubbleR * 0.62);
+      }
+
+      // Remote-participant count badge, if there are others in the call besides the presenter
+      if (remotes.length > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        drawRoundRect(ctx, PADDING + 8, screenY + screenH - 30, 64, 22, 11);
+        ctx.fill();
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '500 11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`+${remotes.length}`, PADDING + 16, screenY + screenH - 19);
+      }
     } else {
       // ── Normal vertical stack layout (Google Meet PiP style) ──
       const allParticipants = [
@@ -673,129 +1558,441 @@ export function MeetingRoomPage() {
     cancelAnimationFrame(pipRafRef.current);
   };
 
-  const initPipStream = () => {
+  // Helper to check if Document PiP window is truly open and detect unexpected closures
+  const isDocPipWindowOpen = () => {
+    const win = documentPipWindowRef.current;
+    if (!win) return false;
+    if (win.closed) {
+      // Detected closed window whose pagehide may have been missed or delayed
+      documentPipWindowRef.current = null;
+      setDocumentPipActive(false);
+      setIsPiPActive(false);
+      const lc = pipLifecycleRef.current;
+      if (lc.kind === 'document') {
+        lc.phase = 'idle';
+        lc.kind = null;
+        lc.origin = null;
+      }
+      logPipDiagnostic('native-close', { type: 'document', detectedVia: 'poll' });
+      return false;
+    }
+    return true;
+  };
+
+  // Helper to check if HTMLVideoElement PiP is active
+  const isVideoPipActive = () => {
+    return Boolean((document as any).pictureInPictureElement);
+  };
+
+  // Helper to check if synthetic canvas stream is healthy and usable
+  const isSyntheticStreamHealthy = (stream: MediaStream | null): boolean => {
+    if (!stream || !stream.active) return false;
+    const tracks = stream.getVideoTracks();
+    if (tracks.length === 0) return false;
+    return tracks.every((t) => t.readyState === 'live');
+  };
+
+  // Helper to ensure video element is ready to enter Picture-in-Picture without InvalidStateError
+  const ensureVideoReady = (vid: HTMLVideoElement, maxWaitMs = 1200): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (vid.readyState >= 2 && vid.videoWidth > 0) {
+        return resolve(true);
+      }
+      let timer: any = null;
+      const onReady = () => {
+        cleanup();
+        resolve(true);
+      };
+      const cleanup = () => {
+        vid.removeEventListener('loadeddata', onReady);
+        vid.removeEventListener('canplay', onReady);
+        if (timer) clearTimeout(timer);
+      };
+      vid.addEventListener('loadeddata', onReady, { once: true });
+      vid.addEventListener('canplay', onReady, { once: true });
+      timer = setTimeout(() => {
+        cleanup();
+        resolve(vid.readyState >= 2);
+      }, maxWaitMs);
+    });
+  };
+
+  // Helper to configure a native Document Picture-in-Picture window
+  const setupPipWindow = (pipWin: any, isManual: boolean) => {
+    // If call was left while request was pending, immediately close window
+    if (!hasJoinedRef.current) {
+      try { pipWin.close(); } catch {}
+      return;
+    }
+
+    // Copy stylesheets from document.head once (clean, fast, no duplicate stylesheets)
+    [...document.head.querySelectorAll('style, link[rel="stylesheet"]')].forEach((el) => {
+      try {
+        pipWin.document.head.appendChild(el.cloneNode(true));
+      } catch {}
+    });
+    pipWin.document.body.style.margin = '0';
+    pipWin.document.body.style.backgroundColor = '#1E1F21';
+    pipWin.document.body.style.color = '#FFFFFF';
+    pipWin.document.body.style.fontFamily = "'Google Sans', Roboto, sans-serif";
+    pipWin.document.body.style.overflow = 'hidden';
+
+    const onPageHide = () => {
+      // Race protection: only clear state if this closing window is the current active
+      // window -- an older window's pagehide firing late must never clear a NEWER window's
+      // state (e.g. rapid close+reopen), which is exactly what this identity check prevents.
+      if (documentPipWindowRef.current === pipWin) {
+        documentPipWindowRef.current = null;
+        setDocumentPipActive(false);
+        setIsPiPActive(false);
+        const lc = pipLifecycleRef.current;
+        if (lc.kind === 'document') {
+          lc.phase = 'idle';
+          lc.kind = null;
+          lc.origin = null;
+        }
+        logPipDiagnostic('native-close', { type: 'document' });
+      }
+    };
+
+    pipWin.addEventListener('pagehide', onPageHide);
+
+    documentPipWindowRef.current = pipWin;
+    const lc = pipLifecycleRef.current;
+    lc.phase = 'open';
+    lc.kind = 'document';
+    lc.origin = isManual ? 'manual' : 'auto';
+    setDocumentPipActive(true);
+    setIsPiPActive(true);
+    logPipDiagnostic('open', { type: 'document', origin: lc.origin });
+  };
+
+  const initPipStream = useCallback(() => {
     ensurePipElements();
     const canvas = pipCanvasRef.current;
     const vid = pipVideoRef.current;
     if (!canvas || !vid) return;
 
-    // Immediately draw fresh frame so video track starts with valid pixels
-    drawPipFrame();
-
-    if (!vid.srcObject) {
-      vid.srcObject = canvas.captureStream(15);
-      (vid as any).autoPictureInPicture = true;
-      vid.setAttribute('autopictureinpicture', 'true');
+    // Always render through the composited canvas (drawPipFrame), including while screen
+    // sharing -- that's what produces the Google Meet-style layout (screen tile + header +
+    // participant thumbnails + toolbar). Attaching the raw screen MediaStream directly used
+    // to bypass all of that and show it as a bare, uncomposited video ("square box" with no
+    // chrome around it) -- never do that; the canvas path already handles screen share.
+    if (!isSyntheticStreamHealthy(pipCanvasStreamRef.current)) {
+      if (pipCanvasStreamRef.current) {
+        try { pipCanvasStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+        pipCanvasStreamRef.current = null;
+      }
     }
-    if (vid.paused) {
-      vid.play().catch(() => {});
-    }
-    // Note: Do NOT start continuous loop until PiP is actually open (saves CPU)
-  };
-
-  // Immediate synchronous Auto-PiP invocation for zero-latency tab switching
-  const triggerAutoPiP = () => {
-    if (!hasJoined) return;
-    if ((document as any).pictureInPictureElement) return;
-
-    ensurePipElements();
-    const vid = pipVideoRef.current;
-    const canvas = pipCanvasRef.current;
-    if (!vid || !canvas) return;
-
     drawPipFrame();
-    startPipDraw(); // Start active draw loop now that PiP is entering
-
-    if (!vid.srcObject) {
-      vid.srcObject = canvas.captureStream(15);
+    startPipDraw();
+    if (!pipCanvasStreamRef.current || vid.srcObject !== pipCanvasStreamRef.current) {
+      const synthStream = canvas.captureStream(15);
+      pipCanvasStreamRef.current = synthStream;
+      vid.srcObject = synthStream;
     }
     (vid as any).autoPictureInPicture = true;
     vid.setAttribute('autopictureinpicture', 'true');
     if (vid.paused) {
       vid.play().catch(() => {});
     }
+  }, []);
+
+  useEffect(() => {
+    initPipStreamRef.current = initPipStream;
+  }, [initPipStream]);
+
+  // Keep the fallback PiP <video> primed with a live (cheap, uncomposited) stream at all
+  // times while in the call, so its readyState is already >= 2 the instant a tab-hide
+  // fires. Without this, every auto-trigger has to wait for the stream to attach before
+  // it can call requestPictureInPicture() -- and that wait can push the call outside the
+  // window Chrome grants an activation-free "auto PiP" allowance for, causing it to fail
+  // silently on repeated switches even though the very first one (attached moments after
+  // a real click) still worked. Deliberately does NOT touch the heavier composited canvas
+  // draw loop (started in initPipStream/startPipDraw) -- that stays gated to only run once
+  // PiP is actually visible.
+  useEffect(() => {
+    if (!hasJoined) return;
+    if (isDocPipWindowOpen() || isVideoPipActive()) return;
+    ensurePipElements();
+    const vid = pipVideoRef.current;
+    const primingStream = inCallStreamRef.current;
+    if (!vid || !primingStream) return;
+    if (vid.srcObject !== primingStream) {
+      vid.srcObject = primingStream;
+      vid.play().catch(() => {});
+    }
+  }, [hasJoined, inCallStream]);
+
+  // Keep the Video-PiP fallback's stream in sync with screen-share changes -- but ONLY
+  // while that fallback is actually the open PiP (item 2: this used to run unconditionally
+  // on every join/screen-share change, which kept the ~15fps canvas draw loop running for
+  // the entire meeting even when no PiP window was ever opened). Document PiP renders real
+  // React content via its own portal and never touches this canvas/video element at all,
+  // so it's deliberately excluded here.
+  useEffect(() => {
+    if (!hasJoined) return;
+    if (!isVideoPipActive()) return;
+    initPipStream();
+  }, [hasJoined, isScreenSharing, remoteScreenStream, initPipStream]);
+
+  // If screen sharing ends while an auto-triggered PiP is being kept open (the "stay
+  // constant during screen share" case above) and the user is already back on the meeting
+  // tab, there's no more reason for it to stay open -- close it now instead of leaving it
+  // stranded open until the next tab switch.
+  useEffect(() => {
+    if (!hasJoined) return;
+    if (isScreenSharing || remoteScreenStream) return;
+    if (document.visibilityState !== 'visible') return;
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'open' || lc.origin !== 'auto') return;
+    closePipRef.current?.();
+  }, [hasJoined, isScreenSharing, remoteScreenStream]);
+
+  // Close whichever PiP type is currently open. Single consolidated close path used by the
+  // manual toggle, the "Return to meeting" button inside Document PiP, the visibility-return
+  // handler, and the screen-share-ended effect above -- one place decides how a close
+  // completes instead of several places each duplicating slightly different logic (which is
+  // how "closing" state used to end up inconsistent between them).
+  const closePip = useCallback(async () => {
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'open') return; // nothing open, or an open/close is already in flight
+    const myRequestId = ++pipRequestIdRef.current;
+    const closingKind = lc.kind;
+    lc.phase = 'closing';
+    lc.requestId = myRequestId;
+    const isCurrent = () => pipLifecycleRef.current.requestId === myRequestId;
+    logPipDiagnostic('close-start', { type: closingKind });
 
     try {
-      const p = (vid as any).requestPictureInPicture();
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          setIsPiPActive(true);
-          pipAutoTriggeredRef.current = true;
-        }).catch((err: any) => {
-          stopPipDraw();
-          console.warn('Auto-PiP enter caught:', err);
-        });
-      }
-    } catch (err) {
-      stopPipDraw();
-      console.warn('Auto-PiP sync enter caught:', err);
-    }
-  };
-
-  // Toggle PiP — called from button click (user gesture)
-  const handleTogglePiP = async () => {
-    if (!(document as any).pictureInPictureEnabled) return;
-
-    if ((document as any).pictureInPictureElement) {
-      // Exit PiP
-      try {
-        await (document as any).exitPictureInPicture();
+      if (closingKind === 'video') {
+        try {
+          await (document as any).exitPictureInPicture();
+        } catch (err: any) {
+          logPipDiagnostic('close-error', { type: 'video', errorName: err?.name, errorMessage: err?.message });
+        }
         stopPipDraw();
+      } else if (closingKind === 'document') {
+        try { documentPipWindowRef.current?.close(); } catch {}
+      }
+    } finally {
+      // Only finalize to idle if this operation still owns the lifecycle -- a native close
+      // event (leavepictureinpicture / pagehide) may have already raced ahead and reset
+      // state itself, in which case there's nothing left for us to do here.
+      if (isCurrent()) {
+        documentPipWindowRef.current = null;
+        setDocumentPipActive(false);
         setIsPiPActive(false);
-        pipAutoTriggeredRef.current = false;
-        pipUserEnabledRef.current = false;
-      } catch {}
-      return;
+        lc.phase = 'idle';
+        lc.kind = null;
+        lc.origin = null;
+      }
+      logPipDiagnostic('close-end', { type: closingKind });
     }
+  }, []);
 
-    // Enter PiP manually
+  useEffect(() => {
+    closePipRef.current = closePip;
+  }, [closePip]);
+
+  // Single consolidated PiP-opening routine, used for BOTH origins:
+  //  - 'manual': invoked directly from a real click (handleTogglePiP) -- always
+  //    gesture-backed, guaranteed eligible.
+  //  - 'auto': invoked ONLY from the browser-authorized Media Session
+  //    'enterpictureinpicture' action handler (registered in the effect below) -- NOT from
+  //    our own visibilitychange listener. Per
+  //    https://developer.chrome.com/blog/automatic-picture-in-picture, that Media Session
+  //    handler is the officially supported automatic-entry point: the BROWSER decides when
+  //    to invoke it (tab hidden, eligibility/permission conditions met), and because the
+  //    call originates from that browser-invoked context rather than an ordinary page
+  //    script event, it is authorized/exempt where a plain visibilitychange-triggered call
+  //    is not. Confirmed via direct testing: a script call made from our own
+  //    visibilitychange handler reliably throws NotAllowedError; it is not "impossible" for
+  //    the API to auto-open, it was simply the wrong (unauthorized) call site. Only one
+  //    opening/closing operation may own the lifecycle at a time -- phase !== 'idle' refuses
+  //    a second concurrent attempt outright, so rapid tab flips can't produce duplicates.
+  const openPip = useCallback(async (origin: 'manual' | 'auto') => {
+    if (!hasJoinedRef.current) return;
+    const lc = pipLifecycleRef.current;
+    if (lc.phase !== 'idle') return;
+    const myRequestId = ++pipRequestIdRef.current;
+    lc.phase = 'opening';
+    lc.origin = origin;
+    lc.requestId = myRequestId;
+    // "Current" requires holding the latest id, the meeting still being joined, and -- for
+    // auto-origin opens specifically -- the tab still being hidden (returning to the tab
+    // means the user wants the main page, not a freshly-opened PiP window competing for
+    // attention). A manual open has no visibility requirement since it's a direct request.
+    const isCurrent = () =>
+      pipLifecycleRef.current.requestId === myRequestId &&
+      hasJoinedRef.current &&
+      (origin !== 'auto' || document.visibilityState === 'hidden');
+    let opened = false;
+    logPipDiagnostic('open-start', { trigger: origin === 'manual' ? 'manual' : 'media-session' });
+
     try {
+      // 1. Prefer Document PiP for interactive meeting content where supported -- it
+      // renders the real in-meeting React portal (live tiles, controls) rather than the
+      // synthetic canvas dub Video PiP is limited to. Both a manual click and the
+      // browser-authorized Media Session callback are legitimate, permission-satisfied
+      // contexts to call requestWindow() from.
+      if ('documentPictureInPicture' in window) {
+        try {
+          const pipWin = await (window as any).documentPictureInPicture.requestWindow({
+            width: 380,
+            height: 500,
+          });
+          if (!isCurrent()) {
+            try { pipWin.close(); } catch {}
+            return;
+          }
+          setupPipWindow(pipWin, origin === 'manual');
+          opened = true;
+          if (origin === 'manual') maybeShowAutoPipAllowNudge();
+          return;
+        } catch (docPipErr: any) {
+          logPipDiagnostic('open-error', {
+            type: 'document', origin, errorName: docPipErr?.name, errorMessage: docPipErr?.message,
+          });
+          if (docPipErr?.name === 'NotAllowedError' && origin === 'auto' && !pipHintShownRef.current) {
+            // This browser/session doesn't currently grant Automatic Picture-in-Picture
+            // for this site, or eligibility conditions (active media session playback,
+            // installed-app state, etc.) aren't met right now. Falls through to the Video
+            // PiP fallback below rather than giving up.
+            pipHintShownRef.current = true;
+            setPipHintToast('Automatic Picture-in-Picture isn\'t enabled for this browser/site yet. Use the PiP button, or check your browser\'s Automatic Picture-in-Picture site permission.');
+            setTimeout(() => setPipHintToast(null), 7000);
+          }
+        }
+      }
+
+      if (!isCurrent()) return;
+
+      // 2. Video PiP fallback.
+      if (!(document as any).pictureInPictureEnabled) return;
+      ensurePipElements();
+      const vid = pipVideoRef.current;
+      if (!vid) return;
       initPipStream();
-      drawPipFrame();
-      startPipDraw();
-      const vid = pipVideoRef.current!;
-      await (vid as any).requestPictureInPicture();
-      setIsPiPActive(true);
-      pipUserEnabledRef.current = true;
-      pipAutoTriggeredRef.current = false;
-    } catch {
-      stopPipDraw();
-      setIsPiPActive(false);
+      if (vid.paused) {
+        try { await vid.play(); } catch {}
+      }
+      if (!isCurrent()) return;
+
+      // The priming effect keeps this video fed with a live stream at all times while in a
+      // call, so readyState is almost always already >= 2 here -- this only actually waits
+      // right after joining, before priming has had a chance to run. Kept short and skipped
+      // entirely when already ready, since a permission-sensitive request should not be
+      // delayed by a readiness wait when it can be avoided.
+      const ready = vid.readyState >= 2 && vid.videoWidth > 0 ? true : await ensureVideoReady(vid, 500);
+      if (!ready) {
+        logPipDiagnostic('open-error', { type: 'video', origin, reason: 'not-ready', readyState: vid.readyState });
+        return;
+      }
+      if (!isCurrent()) return;
+
+      try {
+        await (vid as any).requestPictureInPicture();
+        if (!isCurrent()) {
+          try { await (document as any).exitPictureInPicture(); } catch {}
+          return;
+        }
+        lc.phase = 'open';
+        lc.kind = 'video';
+        setIsPiPActive(true);
+        opened = true;
+        if (origin === 'manual') maybeShowAutoPipAllowNudge();
+        logPipDiagnostic('open-success', { type: 'video', origin });
+      } catch (videoPipErr: any) {
+        logPipDiagnostic('open-error', {
+          type: 'video', origin, errorName: videoPipErr?.name, errorMessage: videoPipErr?.message,
+        });
+        if (videoPipErr?.name === 'NotAllowedError' && origin === 'auto' && !pipHintShownRef.current) {
+          pipHintShownRef.current = true;
+          setPipHintToast('Automatic Picture-in-Picture isn\'t enabled for this browser/site yet. Use the PiP button, or check your browser\'s Automatic Picture-in-Picture site permission.');
+          setTimeout(() => setPipHintToast(null), 7000);
+        }
+        stopPipDraw();
+      }
+    } finally {
+      if (!opened && isCurrent()) {
+        lc.phase = 'idle';
+        lc.origin = null;
+        lc.kind = null;
+      }
+      logPipDiagnostic('open-end', { opened });
     }
+  }, [initPipStream]);
+
+  // Nudge the user toward the browser's own native "Always allow Picture-in-Picture" icon
+  // in the address bar, right after their first manual (real-click) PiP open -- that's the
+  // moment Chromium surfaces it. Skips the nudge entirely if the Permissions API reports
+  // it's already granted (nothing to point at); does not treat an unsupported/erroring
+  // query as proof of either denial or approval -- it just falls through to showing the
+  // nudge, since that's the safe default either way. Never asks twice in one tab session.
+  // NOTE: this points the user at a SEPARATE browser permission step ("Always allow") --
+  // it does not claim the manual click itself grants any lasting automatic-PiP permission.
+  const maybeShowAutoPipAllowNudge = () => {
+    if (pipAutoAllowNudgeShownRef.current) return;
+    pipAutoAllowNudgeShownRef.current = true;
+    (async () => {
+      try {
+        const status = await (navigator as any).permissions?.query?.({ name: 'picture-in-picture' as any });
+        if (status?.state === 'granted') return;
+      } catch {
+        // Permission name unsupported in this browser -- still worth showing the nudge,
+        // since we can't otherwise tell whether it's already granted.
+      }
+      setPipHintToast('Tip: click the Picture-in-Picture icon in your browser\'s address bar and choose "Always allow" so PiP can open automatically on future tab switches.');
+      setTimeout(() => setPipHintToast(null), 8000);
+    })();
   };
 
-  // Auto-enter PiP on tab switch (Google Meet style) & auto-exit when switching back
+  // Toggle PiP — called from button click (guaranteed user gesture). Delegates the actual
+  // mechanics to the shared openPip/closePip so the manual and automatic paths run through
+  // exactly one lifecycle implementation instead of two divergent copies of similar logic.
+  const handleTogglePiP = useCallback(async () => {
+    pipUserEnabledRef.current = true;
+    setShowPipEnableCTA(false);
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    const lc = pipLifecycleRef.current;
+    if (lc.phase === 'open') {
+      await closePip();
+    } else if (lc.phase === 'idle') {
+      await openPip('manual');
+    }
+    // If phase is 'opening' or 'closing', another operation already owns the lifecycle for
+    // this click -- ignore it rather than fighting that operation (covers rapid double-clicks).
+  }, [openPip, closePip]);
+
+  // Keep references to current callbacks so listeners never suffer stale closures
+  useEffect(() => {
+    triggerAutoPiPRef.current = () => openPip('auto');
+    handleTogglePiPRef.current = handleTogglePiP;
+  }, [openPip, handleTogglePiP]);
+
+  // Tab switch listener: cleanup and cancellation ONLY. Automatic OPENING is handled solely
+  // by the Media Session 'enterpictureinpicture' handler registered below -- see the comment
+  // above openPip for why calling the same open routine directly from visibilitychange used
+  // to compete with (and could block) that browser-authorized callback.
   useEffect(() => {
     if (!hasJoined) return;
 
-    // Immediately pre-warm PiP stream
-    initPipStream();
-
-    // Pre-warm / maintain stream on any user interaction in meeting window
-    const onUserInteract = () => {
-      initPipStream();
-    };
-    window.addEventListener('click', onUserInteract, { passive: true });
-    window.addEventListener('keydown', onUserInteract, { passive: true });
-    window.addEventListener('pointerdown', onUserInteract, { passive: true });
-
-    // Chrome MediaSession action handlers for interactive native PiP buttons (Mic, Cam, Hangup)
     if ('mediaSession' in navigator) {
       try {
         navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, () => {
-          triggerAutoPiP();
+          logPipDiagnostic('trigger', { source: 'media-session' });
+          triggerAutoPiPRef.current?.();
         });
       } catch {}
       try {
         navigator.mediaSession.setActionHandler('togglemicrophone' as any, () => {
           toggleInCallMicRef.current();
-          drawPipFrame();
         });
       } catch {}
       try {
         navigator.mediaSession.setActionHandler('togglecamera' as any, () => {
           toggleInCallVideoRef.current();
-          drawPipFrame();
         });
       } catch {}
       try {
@@ -807,37 +2004,37 @@ export function MeetingRoomPage() {
 
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        // User switched to another tab: trigger immediately and fast!
-        triggerAutoPiP();
+        logPipDiagnostic('visibility-hidden', {});
+        // No auto-open call here -- see the comment above this effect and above openPip.
       } else if (document.visibilityState === 'visible') {
-        // User switched back: close PiP if it was auto-triggered (Google Meet behavior)
-        if (pipAutoTriggeredRef.current && (document as any).pictureInPictureElement) {
-          try {
-            (document as any).exitPictureInPicture();
-          } catch {}
-          pipAutoTriggeredRef.current = false;
-          setIsPiPActive(false);
+        logPipDiagnostic('visibility-visible', {});
+        const lc = pipLifecycleRef.current;
+        // Invalidate any in-flight opening so it can't publish itself as active a moment
+        // later and pop a window right back open after we've already decided the user
+        // wants the main page. Reset phase directly rather than waiting for the stale
+        // async attempt to notice -- once superseded, that attempt deliberately leaves
+        // lifecycle state alone (see isCurrent() in openPip), so someone has to do it here.
+        if (lc.phase === 'opening') {
+          pipRequestIdRef.current++;
+          lc.phase = 'idle';
+          lc.origin = null;
+          lc.kind = null;
+        }
+        // While screen sharing (local or remote) is active, PiP stays open across a return
+        // to the tab -- it's the priority view for the shared screen and should stay
+        // constant until the user closes it themselves or sharing ends (handled by the
+        // dedicated effect above), not vanish the moment they glance back at the tab.
+        const screenSharePriority = pipIsScreenSharingRef.current || Boolean(pipRemoteScreenStreamRef.current);
+        if (lc.phase === 'open' && lc.origin === 'auto' && !screenSharePriority) {
+          closePipRef.current?.();
         }
       }
     };
 
-    const handleBlur = () => {
-      if (document.visibilityState === 'hidden') {
-        triggerAutoPiP();
-      }
-    };
-
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('pagehide', handleBlur);
 
     return () => {
-      window.removeEventListener('click', onUserInteract);
-      window.removeEventListener('keydown', onUserInteract);
-      window.removeEventListener('pointerdown', onUserInteract);
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('pagehide', handleBlur);
       if ('mediaSession' in navigator) {
         try {
           navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, null);
@@ -847,6 +2044,15 @@ export function MeetingRoomPage() {
         } catch {}
       }
       stopPipDraw();
+      if (pipCanvasStreamRef.current) {
+        pipCanvasStreamRef.current.getTracks().forEach((t) => t.stop());
+        pipCanvasStreamRef.current = null;
+      }
+      if (documentPipWindowRef.current) {
+        try { documentPipWindowRef.current.close(); } catch {}
+        documentPipWindowRef.current = null;
+        setDocumentPipActive(false);
+      }
       if ((document as any).pictureInPictureElement) {
         (document as any).exitPictureInPicture().catch(() => {});
       }
@@ -856,9 +2062,41 @@ export function MeetingRoomPage() {
         pipVideoRef.current = null;
       }
       pipCanvasRef.current = null;
+      // Meeting ended/left -- any open or in-flight PiP was already force-closed above (and
+      // any still-in-flight openPip()/closePip() promise will see hasJoinedRef.current is
+      // now false via isCurrent() and close whatever it produces once it resolves), so the
+      // lifecycle unconditionally resets to idle here.
+      pipLifecycleRef.current = { phase: 'idle', kind: null, origin: null, requestId: pipLifecycleRef.current.requestId };
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined]);
+
+  // Show the one-time "Enable Auto Picture-in-Picture" onboarding banner shortly after
+  // joining -- gets the required real click out of the way proactively instead of leaving
+  // auto-PiP silently broken until the user happens to find and click the PiP button
+  // themselves. Skipped entirely if they've already enabled/dismissed it before (any past
+  // meeting, this browser), or if this browser has no PiP support at all.
+  useEffect(() => {
+    if (!hasJoined) return;
+    const pipSupported = Boolean((document as any).pictureInPictureEnabled) || 'documentPictureInPicture' in window;
+    if (!pipSupported) return;
+    if (pipUserEnabledRef.current) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem('toowix_pip_cta_seen') === '1'; } catch {}
+    if (dismissed) return;
+    const timer = setTimeout(() => setShowPipEnableCTA(true), 4000);
+    return () => clearTimeout(timer);
+  }, [hasJoined]);
+
+  const handleEnablePipCTA = () => {
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    setShowPipEnableCTA(false);
+    handleTogglePiPRef.current?.();
+  };
+
+  const handleDismissPipCTA = () => {
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    setShowPipEnableCTA(false);
+  };
 
   // Update real-time clock every second
   useEffect(() => {
@@ -867,18 +2105,6 @@ export function MeetingRoomPage() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
-
-  // Separate Recording Timer
-  useEffect(() => {
-    if (!recording) {
-      setRecordingSeconds(0);
-      return;
-    }
-    const timer = setInterval(() => {
-      setRecordingSeconds((s) => s + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [recording]);
 
   useEffect(() => {
     if (!displayName && auth.currentUser) {
@@ -890,12 +2116,18 @@ export function MeetingRoomPage() {
     }
   }, [displayName]);
 
-  // Real-time media preview hook (kept active for in-call preview & level meter)
-  const media = useMediaPreview(false, micEnabled, videoEnabled, audioId, videoId);
+  // Real-time media preview hook (cleaned up cleanly on joining)
+  const media = useMediaPreview(hasJoined, micEnabled, videoEnabled, audioId, videoId);
   const videoPreviewRef = media.preview;
   const mediaStreamRef = media.stream;
   const cameraPermissionError = !!media.cameraError;
   const micPermissionError = !!media.micError;
+
+  useEffect(() => {
+    if (cameraPermissionError) {
+      setVideoEnabled(false);
+    }
+  }, [cameraPermissionError]);
 
   const currentUserIdRef = useRef<string | null>(null);
   const [meetingInfo, setMeetingInfo] = useState<{
@@ -997,7 +2229,10 @@ export function MeetingRoomPage() {
 
     try {
       const headers = await accountHeaders();
-      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/knock`, {
+      const endpoint = meetingInfo?.requireLobbyPolicy
+        ? `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/knock`
+        : `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/admission`;
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({
@@ -1008,10 +2243,10 @@ export function MeetingRoomPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Join request failed');
 
-      if (data.status === 'ADMITTED' && data.jitsiToken) {
+      if ((data.status === 'ADMITTED' || !data.status) && data.jitsiToken) {
         // Admitted directly
         setJwtToken(data.jitsiToken);
-        setIsModerator(!!data.isHost);
+        setIsModerator(!!data.isHost || !!data.moderator);
         attendanceTokenRef.current = data.attendanceToken;
         attendanceEntryIdRef.current = data.participantEntryId;
         mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1167,10 +2402,19 @@ export function MeetingRoomPage() {
     return () => clearInterval(timer);
   }, [hasJoined]);
 
-  // Active recording timer
+  // Recording timer. Timestamp-based (not a naive per-tick increment) so background-tab
+  // throttling or missed ticks can't make the displayed duration drift from wall-clock time.
   useEffect(() => {
-    if (!recording) return;
-    const timer = setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    if (!recording) {
+      recordingStartTimeRef.current = null;
+      setRecordingSeconds(0);
+      return;
+    }
+    recordingStartTimeRef.current = Date.now();
+    const timer = setInterval(() => {
+      if (recordingStartTimeRef.current == null) return;
+      setRecordingSeconds(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000));
+    }, 1000);
     return () => clearInterval(timer);
   }, [recording]);
 
@@ -1240,8 +2484,12 @@ export function MeetingRoomPage() {
 
   const handleEndMeetingForEveryone = async () => {
     setShowEndMeetingModal(false);
+    // HTTP-reliable broadcast (see postRoomSignal) instead of sendEndpointTextMessage
+    // directly -- same BridgeChannel-not-ready problem chat had. This is a courtesy for a
+    // specific "ended by host" message; the native endConference command below is what
+    // actually terminates the conference for everyone regardless of whether this arrives.
     try {
-      jitsiApiRef.current?.executeCommand('sendEndpointTextMessage', '', JSON.stringify({ type: 'MEETING_ENDED_FOR_EVERYONE' }));
+      postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
     } catch {}
     try {
       jitsiApiRef.current?.executeCommand('endConference');
@@ -1300,7 +2548,7 @@ export function MeetingRoomPage() {
             prejoinConfig: { enabled: false, hideDisplayName: true },
             requireDisplayName: false,
             startWithAudioMuted: !micEnabled,
-            startWithVideoMuted: !videoEnabled,
+            startWithVideoMuted: !videoEnabled || cameraPermissionError,
             disableDeepLinking: true,
             disableInviteFunctions: true,
             doNotStoreRoom: true,
@@ -1368,17 +2616,41 @@ export function MeetingRoomPage() {
         });
         on('videoConferenceLeft', () => leaveMeeting('You left the meeting.'));
         on('readyToClose', () => leaveMeeting('You left the meeting.'));
-        on('participantKickedOut', () => leaveMeeting('You were removed from the meeting by a moderator.'));
+        on('participantKickedOut', (data: any) => {
+          const kickedId = data?.kicked?.id || data?.id;
+          const isLocal = data?.kicked?.local || kickedId === localParticipantIdRef.current || kickedId === 'local';
+          if (isLocal) {
+            leaveMeeting('You were removed from the meeting by a moderator.');
+          } else if (kickedId) {
+            setRemoteParticipants((prev) => {
+              const next = prev.filter((p) => p.id !== kickedId);
+              setRemoteParticipantCount(next.length);
+              return next;
+            });
+          }
+        });
         on('endpointTextMessageReceived', (event: any) => {
           try {
             const raw = event?.data?.eventData?.text || event?.text || '';
             if (raw.includes('MEETING_ENDED_FOR_EVERYONE')) {
               leaveMeeting('The host has ended the meeting for everyone.');
+              return;
+            }
+            if (raw.startsWith('{') && handleIncomingSignalRef.current) {
+              const sig = JSON.parse(raw);
+              handleIncomingSignalRef.current(sig);
             }
           } catch {}
         });
         on('audioMuteStatusChanged', ({ muted }: any) => setInCallMuted(muted));
-        on('recordingStatusChanged', ({ on: enabled }: any) => setRecording(!!enabled));
+        on('recordingStatusChanged', ({ on: enabled }: any) => {
+          setRecording(!!enabled);
+          if (enabled) {
+            setRecordingToast('Recording: on');
+          } else {
+            setRecordingToast(null);
+          }
+        });
         on('screenSharingStatusChanged', ({ on: enabled }: any) => setIsScreenSharing(!!enabled));
         on('raiseHandUpdated', (data: any) => {
           if (data && data.id) {
@@ -1388,7 +2660,8 @@ export function MeetingRoomPage() {
           }
         });
 
-        on('videoConferenceJoined', () => {
+        on('videoConferenceJoined', (data: any) => {
+          localParticipantIdRef.current = data?.id || 'local';
           recordAttendanceJoin();
         });
       })
@@ -1434,26 +2707,89 @@ export function MeetingRoomPage() {
     }
   }, [hasJoined]);
 
+  // In-call camera stream acquisition (independent of preview cleanup)
   useEffect(() => {
-    if (hasJoined && inCallVideo && inCallVideoRef.current && media.stream.current) {
-      inCallVideoRef.current.srcObject = media.stream.current;
+    if (!hasJoined) {
+      if (inCallStreamRef.current) {
+        inCallStreamRef.current.getTracks().forEach((t) => t.stop());
+        inCallStreamRef.current = null;
+        setInCallStream(null);
+      }
+      return;
     }
-  }, [hasJoined, inCallVideo, media.stream]);
+
+    if (!inCallVideo || cameraPermissionError) {
+      if (inCallStreamRef.current) {
+        inCallStreamRef.current.getTracks().forEach((t) => t.stop());
+        inCallStreamRef.current = null;
+        setInCallStream(null);
+      }
+      if (inCallVideoRef.current) {
+        inCallVideoRef.current.srcObject = null;
+      }
+      return;
+    }
+
+    let active = true;
+    const acquireInCallVideo = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: videoId ? { deviceId: { exact: videoId } } : true,
+          audio: false,
+        });
+        if (!active) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        if (inCallStreamRef.current) {
+          inCallStreamRef.current.getTracks().forEach((t) => t.stop());
+        }
+        inCallStreamRef.current = stream;
+        setInCallStream(stream);
+        if (inCallVideoRef.current) {
+          inCallVideoRef.current.srcObject = stream;
+          inCallVideoRef.current.play().catch(() => {});
+        }
+        initPipStreamRef.current();
+      } catch (err) {
+        console.warn('In-call camera stream error:', err);
+      }
+    };
+
+    acquireInCallVideo();
+
+    return () => {
+      active = false;
+    };
+    // initPipStream intentionally omitted: called via initPipStreamRef so PiP re-inits
+    // (e.g. from screen-share toggles) never re-trigger camera reacquisition (item 3).
+  }, [hasJoined, inCallVideo, videoId, cameraPermissionError]);
 
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
-    if (isScreenSharing && presentationVideoRef.current && screenStreamRef.current) {
-      presentationVideoRef.current.srcObject = screenStreamRef.current;
-      presentationVideoRef.current.play().catch(() => {});
+    if (presentationVideoRef.current) {
+      if (isScreenSharing && screenStreamRef.current) {
+        presentationVideoRef.current.srcObject = screenStreamRef.current;
+        presentationVideoRef.current.play().catch(() => {});
+      } else {
+        presentationVideoRef.current.srcObject = null;
+      }
     }
   }, [isScreenSharing]);
+
+  // Synchronize remote presentation stream to remote presentation video element
+  useEffect(() => {
+    if (remotePresentationVideoRef.current) {
+      remotePresentationVideoRef.current.srcObject = remoteScreenStream;
+      if (remoteScreenStream) {
+        remotePresentationVideoRef.current.play().catch(() => {});
+      }
+    }
+  }, [remoteScreenStream]);
 
   const handleToggleInCallMic = () => {
     const nextMuted = inCallMuted === null ? false : !inCallMuted;
     setInCallMuted(nextMuted);
-    if (media.stream.current) {
-      media.stream.current.getAudioTracks().forEach((t) => (t.enabled = !nextMuted));
-    }
     try {
       jitsiApiRef.current?.executeCommand('toggleAudio');
     } catch {}
@@ -1462,9 +2798,6 @@ export function MeetingRoomPage() {
   const handleToggleInCallVideo = () => {
     const nextVideo = !inCallVideo;
     setInCallVideo(nextVideo);
-    if (media.stream.current) {
-      media.stream.current.getVideoTracks().forEach((t) => (t.enabled = nextVideo));
-    }
     try {
       jitsiApiRef.current?.executeCommand('toggleVideo');
     } catch {}
@@ -1492,137 +2825,23 @@ export function MeetingRoomPage() {
     }
   }, [inCallVideo]);
 
-  const handleToggleRecording = async () => {
+  // Recording state is NOT set optimistically here. `recording` and `recordingToast` are
+  // driven solely by the real `recordingStatusChanged` External API event (see the `on(...)`
+  // handler above), which reflects actual Jibri on/off status. This only requests the
+  // start/stop and shows a transient "requesting" message distinct from that real confirmation.
+  const handleToggleRecording = () => {
     if (recording) {
-      // Stop recording
-      setRecording(false);
-      setRecordingToast('Recording completed & saved!');
-      setTimeout(() => setRecordingToast(null), 4000);
-
+      setRecordingToast('Stopping recording…');
+      setTimeout(() => setRecordingToast((t) => (t === 'Stopping recording…' ? null : t)), 3500);
       try {
         jitsiApiRef.current?.executeCommand('stopRecording', 'file');
       } catch {}
-
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch {}
-      }
     } else {
-      // Start recording
-      setRecording(true);
-      setRecordingSeconds(0);
-      setRecordingToast('Recording started - Capturing meeting session');
-      setTimeout(() => setRecordingToast(null), 3500);
-
+      setRecordingToast('Requesting recording…');
+      setTimeout(() => setRecordingToast((t) => (t === 'Requesting recording…' ? null : t)), 3500);
       try {
         jitsiApiRef.current?.executeCommand('startRecording', { mode: 'file' });
       } catch {}
-
-      try {
-        const tracks: MediaStreamTrack[] = [];
-
-        // 1. Video track: Screen share -> Webcam -> Dynamic Meeting Canvas
-        if (isScreenSharing && screenStreamRef.current && screenStreamRef.current.getVideoTracks().length > 0) {
-          tracks.push(screenStreamRef.current.getVideoTracks()[0]);
-        } else if (inCallVideo && media.stream.current && media.stream.current.getVideoTracks().length > 0) {
-          tracks.push(media.stream.current.getVideoTracks()[0]);
-        } else {
-          // Canvas stream fallback so MediaRecorder always has a valid video track
-          const canvas = document.createElement('canvas');
-          canvas.width = 1280;
-          canvas.height = 720;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.fillStyle = '#162842';
-            ctx.fillRect(0, 0, 1280, 720);
-            ctx.fillStyle = '#1A73E8';
-            ctx.beginPath();
-            ctx.arc(640, 320, 90, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#FFFFFF';
-            ctx.font = 'bold 72px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText((displayName || 'You').charAt(0).toUpperCase(), 640, 320);
-            ctx.font = '28px sans-serif';
-            ctx.fillText(displayName || 'You', 640, 460);
-            ctx.font = '20px sans-serif';
-            ctx.fillStyle = '#9AA0A6';
-            ctx.fillText(`Toowix Meet — Room: ${roomId}`, 640, 500);
-          }
-          const canvasStream = canvas.captureStream(15);
-          if (canvasStream.getVideoTracks().length > 0) {
-            tracks.push(canvasStream.getVideoTracks()[0]);
-          }
-        }
-
-        // 2. Audio track: Microphone -> Silent audio node fallback
-        if (media.stream.current && media.stream.current.getAudioTracks().length > 0) {
-          tracks.push(media.stream.current.getAudioTracks()[0]);
-        } else {
-          try {
-            const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-            if (AudioCtxClass) {
-              const audioCtx = new AudioCtxClass();
-              const dest = audioCtx.createMediaStreamDestination();
-              const osc = audioCtx.createOscillator();
-              const gain = audioCtx.createGain();
-              gain.gain.value = 0; // silent
-              osc.connect(gain);
-              gain.connect(dest);
-              osc.start();
-              if (dest.stream.getAudioTracks().length > 0) {
-                tracks.push(dest.stream.getAudioTracks()[0]);
-              }
-            }
-          } catch {}
-        }
-
-        if (tracks.length > 0) {
-          const combinedStream = new MediaStream(tracks);
-          recordedChunksRef.current = [];
-
-          let options: MediaRecorderOptions = {};
-          if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-            options = { mimeType: 'video/webm;codecs=vp9,opus' };
-          } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-            options = { mimeType: 'video/webm;codecs=vp8,opus' };
-          } else if (MediaRecorder.isTypeSupported('video/webm')) {
-            options = { mimeType: 'video/webm' };
-          }
-
-          const recorder = new MediaRecorder(combinedStream, options);
-
-          recorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-              recordedChunksRef.current.push(event.data);
-            }
-          };
-
-          recorder.onstop = () => {
-            if (recordedChunksRef.current.length > 0) {
-              const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              const dateStr = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-              a.download = `Toowix-Meeting-${roomId}-${dateStr}.webm`;
-              document.body.appendChild(a);
-              a.click();
-              setTimeout(() => {
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              }, 1000);
-            }
-          };
-
-          recorder.start(1000);
-          mediaRecorderRef.current = recorder;
-        }
-      } catch (recErr) {
-        console.warn('Browser MediaRecorder init error:', recErr);
-      }
     }
   };
 
@@ -1641,34 +2860,50 @@ export function MeetingRoomPage() {
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim()) return;
+    const text = chatInput.trim();
     const msg = {
       id: String(Date.now()),
       sender: displayName || 'You',
       time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      text: chatInput.trim(),
+      text,
     };
     setChatMessages((prev) => [...prev, msg]);
     setChatInput('');
-    try {
-      jitsiApiRef.current?.executeCommand('sendEndpointTextMessage', '', msg.text);
-    } catch {}
+    // Routed through postRoomSignal (HTTP to our backend + Jitsi datachannel as a latency
+    // accelerant) instead of only sendEndpointTextMessage directly -- that datachannel relies
+    // on Jitsi's BridgeChannel, which can be unready or unavailable, and had no fallback, so
+    // messages could silently never reach other participants. HTTP always works.
+    postRoomSignal('CHAT_MESSAGE', { text });
   };
 
   const postRoomSignal = useCallback(
-    async (type: string, payload: any) => {
+    async (type: string, payload: any, targetSessionId?: string) => {
+      const msgId = `${sessionIdRef.current}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      addProcessedSignalId(msgId);
+      const signalData = {
+        msgId,
+        sender: displayName || 'Participant',
+        senderSessionId: sessionIdRef.current,
+        targetSessionId: targetSessionId || null,
+        type,
+        payload,
+      };
+
+      // HTTP to our own backend is the sole, reliable transport -- this used to ALSO send
+      // via Jitsi's sendEndpointTextMessage (BridgeChannel datachannel) as a latency
+      // accelerant, but that channel isn't always initialized by the time signaling starts
+      // (or may never be, depending on JVB connectivity), and lib-jitsi-meet logs a
+      // "BridgeChannel has not been initialized yet" error internally every time it's
+      // attempted while unready -- that error isn't catchable from here (it's logged deep
+      // inside the library, not thrown back to this call), so it can't be silenced short of
+      // not calling it. HTTP already delivers every signal type reliably (confirmed via
+      // server logs), so the datachannel attempt was pure redundant risk for no real benefit.
       try {
         await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sender: displayName || 'Participant', type, payload }),
+          body: JSON.stringify(signalData),
         });
-      } catch {}
-      try {
-        jitsiApiRef.current?.executeCommand(
-          'sendEndpointTextMessage',
-          '',
-          JSON.stringify({ type, sender: displayName || 'Participant', payload })
-        );
       } catch {}
     },
     [roomId, displayName]
@@ -1690,69 +2925,41 @@ export function MeetingRoomPage() {
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((t) => t.stop());
         screenStreamRef.current = null;
+        setScreenStream(null);
       }
       setIsScreenSharing(false);
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-        peerConnectionRef.current = null;
-      }
-      postRoomSignal('SCREEN_SHARE_STOPPED', {});
+      presenterPeerConnectionsRef.current.forEach((pc) => pc.close());
+      presenterPeerConnectionsRef.current.clear();
+      presenterIceQueuesRef.current.clear();
+      postRoomSignal('SCREEN_SHARE_STOPPED', { presenterSessionId: sessionIdRef.current });
     } else {
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
+          video: { frameRate: 30 },
           audio: false,
         });
         screenStreamRef.current = stream;
+        setScreenStream(stream);
         setIsScreenSharing(true);
 
         // Notify room that presenter started sharing
-        postRoomSignal('SCREEN_SHARE_STARTED', { presenter: displayName || 'Participant' });
-
-        // Initialize WebRTC PeerConnection to broadcast stream to remote attendees
-        try {
-          const pc = new RTCPeerConnection({
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          });
-          peerConnectionRef.current = pc;
-
-          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate });
-            }
-          };
-
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          postRoomSignal('WEBRTC_OFFER', { sdp: offer });
-        } catch (webrtcErr) {
-          console.warn('WebRTC broadcast init error:', webrtcErr);
-        }
+        postRoomSignal('SCREEN_SHARE_STARTED', {
+          presenter: displayName || 'Participant',
+          presenterSessionId: sessionIdRef.current,
+        });
 
         stream.getVideoTracks()[0].onended = () => {
           setIsScreenSharing(false);
           if (screenStreamRef.current) {
             screenStreamRef.current.getTracks().forEach((t) => t.stop());
             screenStreamRef.current = null;
+            setScreenStream(null);
           }
-          if (peerConnectionRef.current) {
-            peerConnectionRef.current.close();
-            peerConnectionRef.current = null;
-          }
-          postRoomSignal('SCREEN_SHARE_STOPPED', {});
+          presenterPeerConnectionsRef.current.forEach((pc) => pc.close());
+          presenterPeerConnectionsRef.current.clear();
+          presenterIceQueuesRef.current.clear();
+          postRoomSignal('SCREEN_SHARE_STOPPED', { presenterSessionId: sessionIdRef.current });
         };
-
-        setTimeout(() => {
-          if (presentationVideoRef.current) {
-            presentationVideoRef.current.srcObject = stream;
-            presentationVideoRef.current.play().catch(() => {});
-          }
-        }, 50);
       } catch (err: any) {
         console.warn('Screen share cancelled or not allowed:', err);
       }
@@ -1764,22 +2971,34 @@ export function MeetingRoomPage() {
     if (!hasJoined) return;
 
     const handleIncomingSignal = async (sig: any) => {
-      const { type, sender, payload } = sig;
-      if (sender === (displayName || 'Participant')) return; // Ignore own signals
+      if (!sig || !sig.type) return;
+      const { type, sender, senderSessionId, targetSessionId, payload, msgId } = sig;
 
-      if (type === 'SCREEN_SHARE_STARTED') {
+      // Ignore signals originated by this client
+      if (senderSessionId === sessionIdRef.current) return;
+      // If signal is targeted to a specific viewer/client, verify match
+      if (targetSessionId && targetSessionId !== sessionIdRef.current) return;
+      // Deduplicate signal across HTTP polling and Jitsi datachannels
+      if (msgId && processedSignalIdsRef.current.has(msgId)) return;
+      if (msgId) addProcessedSignalId(msgId);
+
+      if (type === 'MEETING_ENDED_FOR_EVERYONE') {
+        leaveMeeting('The host has ended the meeting for everyone.');
+      } else if (type === 'SCREEN_SHARE_STARTED') {
         setRemotePresenterName(payload?.presenter || sender);
+        // Viewer sends join request to presenter for per-peer connection
+        postRoomSignal('WEBRTC_JOIN_PRESENTATION', {}, payload?.presenterSessionId || senderSessionId);
       } else if (type === 'SCREEN_SHARE_STOPPED') {
         setRemoteScreenStream(null);
         setRemotePresenterName(null);
-        if (peerConnectionRef.current) {
-          peerConnectionRef.current.close();
-          peerConnectionRef.current = null;
+        if (viewerPeerConnectionRef.current) {
+          viewerPeerConnectionRef.current.close();
+          viewerPeerConnectionRef.current = null;
         }
-      } else if (type === 'WEBRTC_OFFER') {
-        if (isScreenSharing) return; // Ignore if we are the presenter
-        setRemotePresenterName(sender);
-
+        iceCandidateQueueRef.current = [];
+      } else if (type === 'WEBRTC_JOIN_PRESENTATION') {
+        // We are the presenter: a viewer wants to receive our stream
+        if (!screenStreamRef.current) return;
         try {
           const pc = new RTCPeerConnection({
             iceServers: [
@@ -1787,62 +3006,139 @@ export function MeetingRoomPage() {
               { urls: 'stun:stun1.l.google.com:19302' },
             ],
           });
-          peerConnectionRef.current = pc;
+          presenterPeerConnectionsRef.current.set(senderSessionId, pc);
+          screenStreamRef.current.getTracks().forEach((track) => {
+            pc.addTrack(track, screenStreamRef.current!);
+          });
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate }, senderSessionId);
+            }
+          };
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          postRoomSignal('WEBRTC_OFFER', { sdp: offer }, senderSessionId);
+        } catch (e) {
+          console.warn('Presenter peer connection error:', e);
+        }
+      } else if (type === 'WEBRTC_OFFER') {
+        // Viewer receives offer from presenter
+        if (isScreenSharing) return;
+        setRemotePresenterName(sender);
+
+        try {
+          if (viewerPeerConnectionRef.current) {
+            viewerPeerConnectionRef.current.close();
+          }
+          const pc = new RTCPeerConnection({
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+            ],
+          });
+          viewerPeerConnectionRef.current = pc;
 
           pc.ontrack = (event) => {
             if (event.streams && event.streams[0]) {
               setRemoteScreenStream(event.streams[0]);
-              if (remotePresentationVideoRef.current) {
-                remotePresentationVideoRef.current.srcObject = event.streams[0];
-                remotePresentationVideoRef.current.play().catch(() => {});
-              }
             }
           };
 
           pc.onicecandidate = (event) => {
             if (event.candidate) {
-              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate });
+              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate }, senderSessionId);
             }
           };
 
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+
+          // Flush any buffered candidates
+          for (const cand of iceCandidateQueueRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
+          iceCandidateQueueRef.current = [];
+
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          postRoomSignal('WEBRTC_ANSWER', { sdp: answer });
+          postRoomSignal('WEBRTC_ANSWER', { sdp: answer }, senderSessionId);
         } catch (e) {
-          console.warn('WebRTC receiver error:', e);
+          console.warn('Viewer peer connection error:', e);
         }
       } else if (type === 'WEBRTC_ANSWER') {
-        if (peerConnectionRef.current && payload?.sdp) {
+        // Presenter receives answer from viewer
+        const pc = presenterPeerConnectionsRef.current.get(senderSessionId);
+        if (pc && payload?.sdp) {
           try {
-            await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+            const queue = presenterIceQueuesRef.current.get(senderSessionId) || [];
+            for (const cand of queue) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+            presenterIceQueuesRef.current.delete(senderSessionId);
           } catch (e) {
-            console.warn('Set remote desc error:', e);
+            console.warn('Set remote desc error on presenter:', e);
           }
         }
       } else if (type === 'WEBRTC_ICE') {
-        if (peerConnectionRef.current && payload?.candidate) {
-          try {
-            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
-          } catch {}
+        if (payload?.candidate) {
+          if (presenterPeerConnectionsRef.current.has(senderSessionId)) {
+            const pc = presenterPeerConnectionsRef.current.get(senderSessionId)!;
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
+            } else {
+              if (!presenterIceQueuesRef.current.has(senderSessionId)) {
+                presenterIceQueuesRef.current.set(senderSessionId, []);
+              }
+              presenterIceQueuesRef.current.get(senderSessionId)!.push(payload.candidate);
+            }
+          } else if (viewerPeerConnectionRef.current) {
+            const pc = viewerPeerConnectionRef.current;
+            if (pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
+            } else {
+              iceCandidateQueueRef.current.push(payload.candidate);
+            }
+          }
         }
       } else if (type === 'HAND_TOGGLED') {
         const isRaised = Boolean(payload?.raised);
         const personName = payload?.name || sender || 'Participant';
         setRemoteParticipants((prev) => {
-          const exists = prev.some((p) => p.name === personName || p.id === sender);
+          const exists = prev.some((p) => p.name === personName || p.id === senderSessionId);
           if (exists) {
-            return prev.map((p) => (p.name === personName || p.id === sender ? { ...p, raisedHand: isRaised } : p));
+            return prev.map((p) => (p.name === personName || p.id === senderSessionId ? { ...p, raisedHand: isRaised } : p));
           } else {
-            return [...prev, { id: sender, name: personName, muted: true, video: false, raisedHand: isRaised }];
+            return [...prev, { id: senderSessionId, name: personName, muted: true, video: false, raisedHand: isRaised }];
           }
         });
         if (isRaised) {
           setHandRaisedToast(`${personName} raised their hand`);
           setTimeout(() => setHandRaisedToast(null), 4000);
         }
+      } else if (type === 'CHAT_MESSAGE') {
+        // HTTP-delivered fallback for chat -- sendEndpointTextMessage (Jitsi's BridgeChannel
+        // datachannel) has no delivery guarantee if the channel isn't initialized yet, and
+        // was the only transport chat had, so messages could silently never reach other
+        // participants. This path always works, since it rides the same signal endpoint
+        // screen-share already relies on. msgId dedup above prevents a double-add on the
+        // rare chance both this and a working datachannel send arrive.
+        const text = typeof payload?.text === 'string' ? payload.text : '';
+        if (!text) return;
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: msgId || String(Date.now()),
+            sender: sender || 'Participant',
+            time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            text,
+          },
+        ]);
       }
     };
+
+    handleIncomingSignalRef.current = handleIncomingSignal;
 
     const interval = setInterval(async () => {
       try {
@@ -1864,8 +3160,9 @@ export function MeetingRoomPage() {
 
     return () => {
       clearInterval(interval);
+      handleIncomingSignalRef.current = null;
     };
-  }, [hasJoined, roomId, displayName, isScreenSharing, postRoomSignal]);
+  }, [hasJoined, roomId, isScreenSharing, postRoomSignal]);
 
   const handleSelectAudioDevice = (devId: string) => {
     setAudioId(devId);
@@ -2046,7 +3343,7 @@ export function MeetingRoomPage() {
                   }}
                 />
                 <span style={{ fontSize: '11px', fontWeight: 600, color: '#EA4335', letterSpacing: '0.4px' }}>
-                  REC {formatDuration(recordingSeconds)}
+                  REC {formatDuration(recordingSeconds)} • Recording: on
                 </span>
               </div>
             )}
@@ -2144,13 +3441,7 @@ export function MeetingRoomPage() {
               >
                 {isScreenSharing ? (
                   <video
-                    ref={(el) => {
-                      presentationVideoRef.current = el;
-                      if (el && screenStreamRef.current && el.srcObject !== screenStreamRef.current) {
-                        el.srcObject = screenStreamRef.current;
-                        el.play().catch(() => {});
-                      }
-                    }}
+                    ref={presentationVideoRef}
                     autoPlay
                     playsInline
                     muted
@@ -2158,13 +3449,7 @@ export function MeetingRoomPage() {
                   />
                 ) : (
                   <video
-                    ref={(el) => {
-                      remotePresentationVideoRef.current = el;
-                      if (el && remoteScreenStream && el.srcObject !== remoteScreenStream) {
-                        el.srcObject = remoteScreenStream;
-                        el.play().catch(() => {});
-                      }
-                    }}
+                    ref={remotePresentationVideoRef}
                     autoPlay
                     playsInline
                     muted
@@ -3925,7 +5210,7 @@ export function MeetingRoomPage() {
                     Broadcast announcement
                   </button>
                 )}
-                {(document as any).pictureInPictureEnabled && (
+                {('documentPictureInPicture' in window || (document as any).pictureInPictureEnabled) && (
                   <button
                     onClick={() => {
                       setShowMoreMenu(false);
@@ -3953,6 +5238,29 @@ export function MeetingRoomPage() {
               </div>
             )}
           </div>
+
+          {/* Button: Picture-in-Picture Quick Toggle */}
+          {('documentPictureInPicture' in window || (document as any).pictureInPictureEnabled) && (
+            <button
+              onClick={handleTogglePiP}
+              title={isPiPActive ? 'Exit Picture-in-Picture' : 'Open Picture-in-Picture'}
+              style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '50%',
+                backgroundColor: isPiPActive ? '#8AB4F8' : '#3C4043',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'background-color 0.15s ease',
+              }}
+            >
+              <LayoutGrid size={20} color={isPiPActive ? '#202124' : '#E8EAED'} />
+              <span style={{ display: 'none' }}>Picture in picture</span>
+            </button>
+          )}
 
           {/* Button: Invite People (Directly opens Share / Invite Modal) */}
           <button
@@ -4004,6 +5312,7 @@ export function MeetingRoomPage() {
             }}
           >
             <Phone size={20} color="#FFFFFF" style={{ transform: 'rotate(135deg)' }} />
+            <span style={{ display: 'none' }}>Exit Meeting</span>
           </button>
         </div>
 
@@ -4302,8 +5611,70 @@ export function MeetingRoomPage() {
           </div>
         )}
 
-        {/* Floating Toast Notification (Raise Hand & Recording) */}
-        {(handRaisedToast || recordingToast) && (
+        {/* One-time Auto Picture-in-Picture opt-in banner */}
+        {showPipEnableCTA && (
+          <div
+            style={{
+              position: 'fixed',
+              top: '16px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              backgroundColor: '#202124',
+              color: '#FFFFFF',
+              padding: '10px 12px 10px 16px',
+              borderRadius: '12px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              zIndex: 260,
+              fontSize: '13px',
+              maxWidth: '92vw',
+              animation: 'fadeIn 0.2s ease',
+            }}
+          >
+            <LayoutGrid size={18} color="#8AB4F8" style={{ flexShrink: 0 }} />
+            <span style={{ lineHeight: 1.4 }}>
+              Keep this meeting visible when you switch tabs — enable automatic Picture-in-Picture?
+            </span>
+            <button
+              onClick={handleEnablePipCTA}
+              style={{
+                backgroundColor: '#8AB4F8',
+                color: '#202124',
+                border: 'none',
+                borderRadius: '18px',
+                padding: '7px 14px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              Enable
+            </button>
+            <button
+              onClick={handleDismissPipCTA}
+              aria-label="Dismiss"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#9AA0A6',
+                cursor: 'pointer',
+                padding: '4px',
+                flexShrink: 0,
+                display: 'flex',
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* Floating Toast Notification (Raise Hand, Recording, PiP Hint) */}
+        {(handRaisedToast || recordingToast || pipHintToast) && (
           <div
             style={{
               position: 'fixed',
@@ -4343,7 +5714,7 @@ export function MeetingRoomPage() {
                 </div>
                 <span>{handRaisedToast}</span>
               </>
-            ) : (
+            ) : recordingToast ? (
               <>
                 <div
                   style={{
@@ -4356,8 +5727,51 @@ export function MeetingRoomPage() {
                 />
                 <span>{recordingToast}</span>
               </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#34A853',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <LayoutGrid size={14} color="#FFFFFF" />
+                </div>
+                <span>{pipHintToast}</span>
+              </>
             )}
           </div>
+        )}
+
+        {/* Document Picture-in-Picture Portal (Rendered into detached native window) */}
+        {documentPipActive && documentPipWindowRef.current && createPortal(
+          <DocumentPipContent
+            isScreenSharing={isScreenSharing}
+            screenStream={screenStream || screenStreamRef.current}
+            remoteScreenStream={remoteScreenStream}
+            remotePresenterName={remotePresenterName}
+            inCallVideo={inCallVideo}
+            inCallStream={inCallStream || inCallStreamRef.current}
+            inCallMuted={inCallMuted}
+            displayName={displayName}
+            isHandRaised={isHandRaised}
+            remoteParticipants={remoteParticipants}
+            roomTitle={meetingInfo?.description || roomId}
+            onToggleMic={handleToggleInCallMic}
+            onToggleVideo={handleToggleInCallVideo}
+            onToggleHand={handleToggleRaiseHand}
+            onReturnToMeeting={() => {
+              window.focus();
+              closePipRef.current?.();
+            }}
+            onLeaveMeeting={() => leaveMeeting()}
+          />,
+          documentPipWindowRef.current.document.body
         )}
       </div>
     );
@@ -4766,8 +6180,8 @@ export function MeetingRoomPage() {
                 >
                   {(displayName || 'U').charAt(0).toUpperCase()}
                 </div>
-                <span style={{ fontSize: '13px', color: '#9AA0A6', marginTop: '14px' }}>
-                  Camera is off
+                <span style={{ fontSize: '13px', color: '#9AA0A6', marginTop: '14px', textAlign: 'center', padding: '0 16px' }}>
+                  {cameraPermissionError ? (media.cameraError || 'Camera permission denied. You can join with audio only.') : 'Camera is off'}
                 </span>
               </div>
             )}
@@ -5041,17 +6455,17 @@ export function MeetingRoomPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <button
               onClick={() => handleJoinMeeting(false)}
-              disabled={joining || !displayName.trim()}
+              disabled={joining}
               style={{
                 width: '100%',
                 padding: '14px',
                 borderRadius: '24px',
-                backgroundColor: !displayName.trim() ? '#80868B' : '#4F46E5',
+                backgroundColor: joining ? '#80868B' : '#4F46E5',
                 color: '#FFFFFF',
                 border: 'none',
                 fontSize: '16px',
                 fontWeight: 600,
-                cursor: !displayName.trim() || joining ? 'not-allowed' : 'pointer',
+                cursor: joining ? 'not-allowed' : 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -5060,18 +6474,17 @@ export function MeetingRoomPage() {
                 transition: 'background-color 0.15s ease',
               }}
               onMouseEnter={(e) => {
-                if (displayName.trim() && !joining) e.currentTarget.style.backgroundColor = '#4338CA';
+                if (!joining) e.currentTarget.style.backgroundColor = '#4338CA';
               }}
               onMouseLeave={(e) => {
-                if (displayName.trim() && !joining) e.currentTarget.style.backgroundColor = '#4F46E5';
+                if (!joining) e.currentTarget.style.backgroundColor = '#4F46E5';
               }}
             >
-              {joining ? 'Connecting...' : 'Join now'}
+              {joining ? 'Connecting...' : 'Join Meeting'}
             </button>
 
             <button
-              onClick={() => handleJoinMeeting(true)}
-              disabled={joining || !displayName.trim()}
+              onClick={() => setShowOtherWaysModal(true)}
               style={{
                 width: '100%',
                 padding: '12px',
@@ -5081,13 +6494,13 @@ export function MeetingRoomPage() {
                 border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.15)' : '#DADCE0'}`,
                 fontSize: '14px',
                 fontWeight: 600,
-                cursor: !displayName.trim() || joining ? 'not-allowed' : 'pointer',
+                cursor: 'pointer',
                 transition: 'all 0.15s ease',
               }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? 'rgba(255, 255, 255, 0.05)' : '#F1F3F4')}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
             >
-              Other ways to join • Audio only
+              Other ways to join
             </button>
           </div>
 
@@ -5279,6 +6692,118 @@ export function MeetingRoomPage() {
                 }}
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Other Ways to Join Dialog */}
+      {showOtherWaysModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 200,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: isDark ? '#2D2E30' : '#FFFFFF',
+              borderRadius: '24px',
+              padding: '28px',
+              maxWidth: '480px',
+              width: '100%',
+              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.5)',
+              border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.1)' : '#E5E7EB'}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#202124' }}>
+                Other ways to join
+              </h3>
+              <button
+                onClick={() => setShowOtherWaysModal(false)}
+                style={{ background: 'none', border: 'none', color: isDark ? '#9AA0A6' : '#5F6368', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: isDark ? '#BDC1C6' : '#3C4043' }}>
+                  Shareable Room URL
+                </label>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 14px',
+                    borderRadius: '10px',
+                    backgroundColor: isDark ? '#202124' : '#F1F3F4',
+                    border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : '#DADCE0'}`,
+                    gap: '10px',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: '13px',
+                      color: isDark ? '#E8EAED' : '#202124',
+                      fontFamily: 'monospace',
+                      textOverflow: 'ellipsis',
+                      overflow: 'hidden',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {`${window.location.origin}/meet/${roomId}`}
+                  </span>
+                  <button
+                    onClick={handleCopyMeetingLink}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      backgroundColor: copiedLink ? '#34A853' : '#4F46E5',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      transition: 'background-color 0.15s ease',
+                    }}
+                  >
+                    {copiedLink ? <Check size={14} /> : <Copy size={14} />}
+                    {copiedLink ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowOtherWaysModal(false)}
+                style={{
+                  padding: '10px 24px',
+                  borderRadius: '20px',
+                  backgroundColor: '#4F46E5',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                }}
+              >
+                Close
               </button>
             </div>
           </div>
