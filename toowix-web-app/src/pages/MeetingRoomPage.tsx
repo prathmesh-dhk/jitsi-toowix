@@ -2643,6 +2643,10 @@ export function MeetingRoomPage() {
           } catch {}
         });
         on('audioMuteStatusChanged', ({ muted }: any) => setInCallMuted(muted));
+        // Reconciles the local video button with the real conference state -- without this,
+        // a failed/no-op toggleVideo command (host force-mute, camera error, or the API not
+        // being ready yet) leaves the button showing the opposite of what's actually on-air.
+        on('videoMuteStatusChanged', ({ muted }: any) => setInCallVideo(!muted));
         on('recordingStatusChanged', ({ on: enabled }: any) => {
           setRecording(!!enabled);
           if (enabled) {
@@ -2798,18 +2802,23 @@ export function MeetingRoomPage() {
   }, [remoteScreenStream]);
 
   const handleToggleInCallMic = () => {
+    // Only flip optimistically if the command can actually be sent -- otherwise the button
+    // shows a state the conference never received and audioMuteStatusChanged never fires to
+    // correct it (nothing was toggled, so nothing reconciles).
+    if (!jitsiApiRef.current) return;
     const nextMuted = inCallMuted === null ? false : !inCallMuted;
     setInCallMuted(nextMuted);
     try {
-      jitsiApiRef.current?.executeCommand('toggleAudio');
+      jitsiApiRef.current.executeCommand('toggleAudio');
     } catch {}
   };
 
   const handleToggleInCallVideo = () => {
+    if (!jitsiApiRef.current) return;
     const nextVideo = !inCallVideo;
     setInCallVideo(nextVideo);
     try {
-      jitsiApiRef.current?.executeCommand('toggleVideo');
+      jitsiApiRef.current.executeCommand('toggleVideo');
     } catch {}
   };
 
