@@ -1,5 +1,7 @@
 import { Meeting } from '../models/Meeting';
 import { notifyCompany, notifyUser } from './createNotification';
+import { sendEmailAsync } from '../email/sender';
+import { emailConfig } from '../config/email';
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 
@@ -37,6 +39,54 @@ const fireReminder = async (
     } else {
       await notifyUser({ userId: meeting.createdBy, ...payload });
     }
+
+    // 1-Hour Email Reminder: send email to host and all attendees who haven't declined
+    if (flagField === 'notified60') {
+      try {
+        const populatedMeeting = await Meeting.findById(meeting._id).populate('createdBy', 'fullName email');
+        if (populatedMeeting) {
+          const roomUrl = `${emailConfig.appUrl}/meet/${populatedMeeting.roomSlug}`;
+          const dateTime = populatedMeeting.scheduledAt
+            ? new Date(populatedMeeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+            : 'In 1 hour';
+          const hostName = typeof populatedMeeting.createdBy === 'object' && populatedMeeting.createdBy
+            ? (populatedMeeting.createdBy as any).fullName || 'Organizer'
+            : 'Organizer';
+          const hostEmail = typeof populatedMeeting.createdBy === 'object' && populatedMeeting.createdBy
+            ? (populatedMeeting.createdBy as any).email
+            : null;
+
+          const recipients = new Set<string>();
+          if (hostEmail) recipients.add(hostEmail.toLowerCase());
+          (populatedMeeting.invitees || []).forEach((invEmail: string) => {
+            const rsvp = (populatedMeeting.rsvps || []).find((r) => r.email?.toLowerCase() === invEmail.toLowerCase());
+            if (!rsvp || rsvp.status !== 'declined') {
+              recipients.add(invEmail.toLowerCase());
+            }
+          });
+
+          for (const recipientEmail of recipients) {
+            sendEmailAsync({
+              to: recipientEmail,
+              templateName: 'E9_MEETING_INVITE',
+              subject: `Reminder: "${populatedMeeting.name}" starts in 1 hour - Toowix Meet`,
+              templateVariables: {
+                meeting_topic: populatedMeeting.name,
+                host_name: hostName,
+                date_time: dateTime,
+                room_url: roomUrl,
+                passcode: populatedMeeting.passcode || 'Not required',
+                accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${populatedMeeting._id}&email=${encodeURIComponent(recipientEmail)}&response=accepted`,
+                reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${populatedMeeting._id}&email=${encodeURIComponent(recipientEmail)}&response=declined`,
+              },
+            });
+          }
+        }
+      } catch (emailErr: any) {
+        console.error('[Notifications] Failed to send 1-hour email reminder:', emailErr.message);
+      }
+    }
+
     (meeting as any)[flagField] = true;
     await meeting.save();
   }

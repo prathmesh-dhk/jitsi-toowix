@@ -86,7 +86,8 @@
                 border: 0;
                 box-sizing: border-box;
                 display: block;
-                margin: 2px;
+                margin: 7px;
+                border-radius: $borderRadius !important;
             }
         }
     }

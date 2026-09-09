@@ -1,0 +1,30 @@
+{
+  "room": "verification-recording-1788850115701",
+  "screenShared": true,
+  "events": [
+    {
+      "name": "videoConferenceJoined",
+      "time": 1788849843540
+    },
+    {
+      "name": "recordingStatusChanged",
+      "on": true,
+      "time": 1788849849243
+    },
+    {
+      "name": "screenSharingStatusChanged",
+      "on": true,
+      "time": 1788849849411
+    },
+    {
+      "name": "screenSharingStatusChanged",
+      "on": false,
+      "time": 1788849914555
+    },
+    {
+      "name": "recordingStatusChanged",
+      "on": false,
+      "time": 1788849980115
+    }
+  ]
+}

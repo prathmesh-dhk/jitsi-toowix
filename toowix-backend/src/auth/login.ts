@@ -4,7 +4,6 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { User, IUserDocument } from '../models/User';
 import { Company, ICompanyDocument } from '../models/Company';
 import { Session } from '../models/Session';
-import { generateJitsiToken } from './jitsi-token';
 import { getFirebaseAuth } from '../config/firebase';
 import { parseUserAgent } from '../utils/parseUserAgent';
 
@@ -25,7 +24,7 @@ const recordSession = async (userId: any, req: AuthenticatedRequest): Promise<st
       ipAddress: req.ip || 'Unknown',
     });
   } catch (err: any) {
-    console.error('[Login Gate] Failed to record session:', err.message);
+    throw new Error('Could not create application session');
   }
   return sessionToken;
 };
@@ -43,7 +42,7 @@ export type LoginGateReasonCode =
 /**
  * POST /api/auth/login-gate
  * Tue-BE-2: The central login gate verifying authentication, email verification,
- * user status, and company approval lifecycle before issuing access and Jitsi tokens.
+ * user status, and company approval lifecycle before issuing an application session.
  */
 export const loginGateHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const firebaseUid = req.firebaseUid;
@@ -61,7 +60,7 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
     // 1. Locate User in MongoDB
     let user: IUserDocument | null = await User.findOne({ firebaseUid });
 
-    if (!user && req.firebaseEmail) {
+    if (!user && req.firebaseEmail && req.firebaseEmailVerified) {
       user = await User.findOne({ email: req.firebaseEmail.toLowerCase() });
       if (user) {
         user.firebaseUid = firebaseUid;
@@ -96,7 +95,7 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
     }
 
     // 3. Check User Status
-    if (user.status === 'SUSPENDED') {
+    if (user.status !== 'ACTIVE') {
       res.status(403).json({
         status: 'SUSPENDED_USER',
         error: 'Your user account has been suspended by an administrator',
@@ -118,19 +117,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     if (user.role === 'SUPER_ADMIN') {
       // Super Admin has global access
-      const jitsiToken = generateJitsiToken({
-        user: {
-          id: String(user._id),
-          name: user.fullName,
-          email: user.email,
-          avatar: user.avatarUrl,
-        },
-        features: {
-          moderator: true,
-          recording: true,
-          screenShare: true,
-        },
-      });
 
       // Synchronize Firebase Custom Claims
       try {
@@ -150,7 +136,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         status: 'ACTIVE',
         user,
         company: null,
-        jitsiToken,
         sessionToken,
       });
       return;
@@ -168,7 +153,7 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         domain !== 'hotmail.com'
       ) {
         const matchedCompany = await Company.findOne({
-          $or: [{ allowedDomains: domain }, { slug: domain.split('.')[0] }],
+          allowedDomains: domain,
         });
         if (matchedCompany) {
           user.companyId = matchedCompany._id as any;
@@ -179,19 +164,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     if (!user.companyId) {
       // Standalone user without company workspace — issue direct active token
-      const jitsiToken = generateJitsiToken({
-        user: {
-          id: String(user._id),
-          name: user.fullName,
-          email: user.email,
-          avatar: user.avatarUrl,
-        },
-        features: {
-          moderator: false,
-          recording: false,
-          screenShare: true,
-        },
-      });
 
       user.lastActiveAt = new Date();
       await user.save();
@@ -200,7 +172,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         status: 'ACTIVE',
         user,
         company: null,
-        jitsiToken,
         sessionToken,
       });
       return;
@@ -255,23 +226,7 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    // 7. All checks passed: Issue session & Jitsi JWT
-    const isModerator = user.role === 'COMPANY_ADMIN' || user.role === 'HOST';
-
-    const jitsiToken = generateJitsiToken({
-      user: {
-        id: String(user._id),
-        name: user.fullName,
-        email: user.email,
-        avatar: user.avatarUrl,
-      },
-      companyId: String(company._id),
-      features: {
-        moderator: isModerator,
-        recording: company.limits?.featureFlags?.recordingEnabled ?? true,
-        screenShare: true,
-      },
-    });
+    // 7. All checks passed: issue an application session. Meeting tokens require admission.
 
     // Sync Firebase Custom Claims
     try {
@@ -294,7 +249,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
       status: 'ACTIVE',
       user,
       company,
-      jitsiToken,
       sessionToken,
     });
   } catch (error: any) {

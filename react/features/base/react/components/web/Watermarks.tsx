@@ -234,31 +234,14 @@ function _mapStateToProps(state: IReduxState, ownProps: any) {
         JITSI_WATERMARK_LINK,
         SHOW_JITSI_WATERMARK
     } = interfaceConfig;
-    let _showJitsiWatermark = (
-        customizationReady && !customizationFailed
-        && SHOW_JITSI_WATERMARK)
-    || !isValidRoom;
-    let _logoUrl: string | undefined = logoImageUrl;
-    let _logoLink = logoClickUrl;
-
-    if (useDynamicBrandingData) {
-        if (isVpaasMeeting(state)) {
-            // don't show logo if request fails or no logo set for vpaas meetings
-            _showJitsiWatermark = !customizationFailed && Boolean(logoImageUrl);
-        } else if (defaultBranding) {
-            _logoUrl = defaultLogoUrl;
-            _logoLink = JITSI_WATERMARK_LINK;
-        }
-    } else {
-        // When there is no custom branding data use defaults
-        _logoUrl = ownProps.defaultJitsiLogoURL || defaultLogoUrl;
-        _logoLink = JITSI_WATERMARK_LINK;
-    }
+    let _showJitsiWatermark = false;
+    let _logoUrl: string | undefined = undefined;
+    let _logoLink = '';
 
     return {
         _logoLink,
         _logoUrl,
-        _showJitsiWatermark
+        _showJitsiWatermark: false
     };
 }
 

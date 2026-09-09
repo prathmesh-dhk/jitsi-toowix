@@ -18,8 +18,9 @@ export interface IJitsiFeaturesContext {
 
 export interface IGenerateJitsiTokenOptions {
   user: IJitsiUserContext;
-  room?: string; // specific room name or '*' for all rooms
+  room: string; // required exact room
   features?: Partial<IJitsiFeaturesContext>;
+  requireLobby?: boolean;
   companyId?: string | null;
   expiresInSeconds?: number;
 }
@@ -28,10 +29,11 @@ export interface IGenerateJitsiTokenOptions {
  * Generates a signed JWT token conforming to Prosody mod_auth_token specifications.
  */
 export const generateJitsiToken = (options: IGenerateJitsiTokenOptions): string => {
-  const { user, room = '*', features = {}, companyId, expiresInSeconds = jitsiConfig.tokenExpirySeconds } = options;
+  const { user, room, features = {}, companyId, expiresInSeconds = jitsiConfig.tokenExpirySeconds } = options;
 
+  if (!room || room === '*' || !/^[a-z0-9-]{3,100}$/.test(room)) throw new Error('An exact room is required');
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const expSeconds = nowSeconds + expiresInSeconds;
+  const expSeconds = nowSeconds + Math.min(expiresInSeconds, 900);
 
   const payload = {
     iss: jitsiConfig.appId,
@@ -44,14 +46,16 @@ export const generateJitsiToken = (options: IGenerateJitsiTokenOptions): string 
     context: {
       user: {
         id: user.id,
+        moderator: features.moderator ?? false,
         name: user.name,
         email: user.email,
         avatar: user.avatar || undefined,
       },
       group: companyId || 'default',
+      room: { lobby: options.requireLobby === true },
       features: {
         moderator: features.moderator ?? false,
-        recording: features.recording ?? true,
+        recording: features.recording ?? false,
         'screen-sharing': features.screenShare ?? true,
         livestreaming: features.livestreaming ?? false,
         transcription: features.transcription ?? false,
@@ -69,6 +73,7 @@ export const generateJitsiToken = (options: IGenerateJitsiTokenOptions): string 
  */
 export const verifyJitsiToken = (token: string): jwt.JwtPayload => {
   return jwt.verify(token, jitsiConfig.appSecret, {
+    algorithms: ['HS256'],
     issuer: jitsiConfig.appId,
     audience: jitsiConfig.appId,
   }) as jwt.JwtPayload;

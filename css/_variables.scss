@@ -13,20 +13,27 @@ $thumbnailsBorder: 2px;
 /**
  * Toolbar
  */
-$newToolbarBackgroundColor: #131519;
-$newToolbarSize: 48px;
+$newToolbarBackgroundColor: #202124;
+$newToolbarSize: 56px;
 $newToolbarSizeMobile: 60px;
 $newToolbarSizeWithPadding: calc(#{$newToolbarSize} + 24px);
 
 /**
  * Chat
  */
-$chatBackgroundColor: #131519;
+$chatBackgroundColor: #202124;
+
+/**
+ * Toowix + Google Meet Design Tokens
+ */
+$googleMeetCharcoal: #202124;
+$toowixPrimary: #4F46E5;
+$activeSpeakerBorderColor: #1a73e8;
 
 /**
  * Misc.
  */
-$borderRadius: 4px;
+$borderRadius: 20px;
 $scrollHeight: 7px;
 
 /**

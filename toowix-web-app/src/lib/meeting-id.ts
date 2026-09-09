@@ -20,7 +20,12 @@ export const generateUniqueMeetingId = (): string => {
  * Requirement 1.4
  */
 export const sanitizeCustomMeetingId = (input: string): string => {
-  return input
+  let code = input.trim();
+  try {
+    const url = new URL(code);
+    code = url.pathname.split('/').filter(Boolean).pop() || '';
+  } catch { code = code.split(/[?#]/)[0]; }
+  return code
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
@@ -29,9 +34,12 @@ export const sanitizeCustomMeetingId = (input: string): string => {
 };
 
 /**
- * Builds the full meeting room URL for Jitsi / Toowix
+ * Builds the full meeting room URL for Toowix Meet web app
  */
-export const getMeetingUrl = (roomId: string, domain = 'meet.toowix.com'): string => {
+export const getMeetingUrl = (roomId: string): string => {
   const cleanId = sanitizeCustomMeetingId(roomId);
-  return `https://${domain}/${cleanId}`;
+  const base = typeof window !== 'undefined' && window.location.origin
+    ? window.location.origin
+    : (import.meta.env.VITE_APP_URL || 'http://localhost:3000');
+  return `${base}/meet/${cleanId}`;
 };

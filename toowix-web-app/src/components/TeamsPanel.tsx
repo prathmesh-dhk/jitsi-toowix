@@ -116,7 +116,7 @@ export function TeamsPanel({ currentUserId, canManage }: ITeamsPanelProps) {
       setError('');
       const token = await auth.currentUser?.getIdToken();
       if (!token) return;
-      const response = await fetch(`${BACKEND_URL}/api/team/users`, { headers: { Authorization: `Bearer ${token}` } });
+      const response = await fetch(`${BACKEND_URL}/api/team/users`, { headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}` } });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Could not load the team');
       const mapped: ITeamUser[] = (data.users || []).map(mapUser);
@@ -136,7 +136,7 @@ export function TeamsPanel({ currentUserId, canManage }: ITeamsPanelProps) {
     const token = await auth.currentUser?.getIdToken();
     const response = await fetch(`${BACKEND_URL}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(options.headers || {}) },
+      headers: { 'Content-Type': 'application/json', 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${token}`, ...(options.headers || {}) },
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'The team could not be updated');

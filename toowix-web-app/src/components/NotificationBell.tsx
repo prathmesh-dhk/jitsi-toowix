@@ -70,7 +70,7 @@ export function NotificationBell({ isDark }: { isDark: boolean }) {
     if (!idToken) return;
     const query = category && category !== 'ALL' ? `?category=${category}` : '';
     const response = await fetch(`${BACKEND_URL}/api/notifications${query}`, {
-      headers: { Authorization: `Bearer ${idToken}` },
+      headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
     });
     const data = await response.json();
     if (response.ok) {
@@ -97,7 +97,7 @@ export function NotificationBell({ isDark }: { isDark: boolean }) {
   const markRead = async (id: string) => {
     const idToken = await auth.currentUser?.getIdToken();
     if (!idToken) return;
-    await fetch(`${BACKEND_URL}/api/notifications/${id}/read`, { method: 'POST', headers: { Authorization: `Bearer ${idToken}` } });
+    await fetch(`${BACKEND_URL}/api/notifications/${id}/read`, { method: 'POST', headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } });
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
     setUnreadCount((c) => Math.max(0, c - 1));
   };
@@ -105,7 +105,7 @@ export function NotificationBell({ isDark }: { isDark: boolean }) {
   const markAllRead = async () => {
     const idToken = await auth.currentUser?.getIdToken();
     if (!idToken) return;
-    await fetch(`${BACKEND_URL}/api/notifications/mark-all-read`, { method: 'POST', headers: { Authorization: `Bearer ${idToken}` } });
+    await fetch(`${BACKEND_URL}/api/notifications/mark-all-read`, { method: 'POST', headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } });
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     setUnreadCount(0);
   };

@@ -21,7 +21,7 @@ export const emailConfig: IEmailConfig = {
   fromName: process.env.EMAIL_FROM_NAME || 'Toowix Meet',
   fromEmail: process.env.EMAIL_FROM_ADDRESS || 'notifications@toowix.com',
   supportEmail: process.env.SUPPORT_EMAIL || 'support@toowix.com',
-  appUrl: process.env.APP_URL || 'https://meet.toowix.com',
+  appUrl: process.env.APP_URL || 'http://localhost:3000',
   smtp: process.env.SMTP_HOST
     ? {
         host: process.env.SMTP_HOST,

@@ -8,7 +8,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      ...(idToken ? { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } : {}),
       ...(options.headers || {}),
     },
   });

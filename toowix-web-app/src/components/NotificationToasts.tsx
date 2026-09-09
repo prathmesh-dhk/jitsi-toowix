@@ -33,7 +33,7 @@ export function NotificationToasts() {
       if (!idToken) return;
       try {
         const response = await fetch(`${BACKEND_URL}/api/notifications?unread=true`, {
-          headers: { Authorization: `Bearer ${idToken}` },
+          headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
         });
         const data = await response.json();
         if (!response.ok) return;

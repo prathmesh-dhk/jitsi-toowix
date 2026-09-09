@@ -12,8 +12,10 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
+    "noFallthroughCasesInSwitch": true,
     "typeRoots": ["./node_modules/@types"],
     "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

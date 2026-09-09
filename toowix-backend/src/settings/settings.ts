@@ -328,9 +328,9 @@ export const deactivateAccountHandler = async (req: AuthenticatedRequest, res: R
 };
 
 /**
- * GET /api/settings/security/sessions?currentSessionToken=xxx
+ * GET /api/settings/security/sessions
  * Real active-session list, sourced from Session records created at each login-gate
- * success. currentSessionToken (from the client's own localStorage) marks which row is
+ * success. X-Toowix-Session (already verified by middleware) marks which row is
  * "this device" -- Firebase doesn't expose that natively, so the client has to tell us.
  * IP addresses are shown in full only to the session's own owner (nobody else can query
  * another user's sessions anyway, since this always scopes to req.firebaseUid).
@@ -347,7 +347,7 @@ export const listSessionsHandler = async (req: AuthenticatedRequest, res: Respon
       .sort({ lastSeenAt: -1 })
       .limit(25);
 
-    const currentToken = req.query.currentSessionToken as string | undefined;
+    const currentToken = req.get('X-Toowix-Session');
 
     res.json({
       sessions: sessions.map((s) => ({
@@ -411,7 +411,7 @@ export const revokeOtherSessionsHandler = async (req: AuthenticatedRequest, res:
       res.status(404).json({ error: 'User profile not found' });
       return;
     }
-    const currentToken = req.body.currentSessionToken as string | undefined;
+    const currentToken = req.get('X-Toowix-Session');
 
     await Session.updateMany(
       { userId: user._id, revokedAt: null, ...(currentToken ? { sessionToken: { $ne: currentToken } } : {}) },

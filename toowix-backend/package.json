@@ -4,7 +4,7 @@
   "description": "Toowix Meet SaaS Backend Service (MongoDB Atlas + Firebase Auth + Jitsi Integration)",
   "main": "dist/src/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/email/templates','dist/src/email/templates',{recursive:true})\"",
     "start": "node dist/src/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "db:migrate": "ts-node migrations/runner.ts",

@@ -38,9 +38,8 @@ export function SecuritySection() {
   const isGoogleUser = auth.currentUser?.providerData.some((p) => p.providerId === 'google.com');
 
   const loadSessions = () => {
-    const currentSessionToken = localStorage.getItem('toowix_session_token') || '';
     settingsApi
-      .get<any>(`/security/sessions${currentSessionToken ? `?currentSessionToken=${encodeURIComponent(currentSessionToken)}` : ''}`)
+      .get<any>('/security/sessions')
       .then((data) => setSessions(data.sessions))
       .catch(() => setSessions([]));
   };
