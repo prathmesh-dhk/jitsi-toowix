@@ -15,7 +15,7 @@ export function mayAttend(meeting: any, user: any, company: any): boolean {
     : meeting.createdBy;
   if (user && String(creatorId) === String(user._id)) return true;
   if (meeting.type === 'Private') return !!user && (meeting.invitees || []).includes(user.email.toLowerCase());
-  if (meeting.type === 'Internal' && company?.meetingPolicy?.allowGuestAccess === false) {
+  if (meeting.type === 'Internal') {
     return !!user?.companyId && String(user.companyId) === String(meeting.companyId);
   }
   return !!user || company?.meetingPolicy?.allowGuestAccess !== false;
