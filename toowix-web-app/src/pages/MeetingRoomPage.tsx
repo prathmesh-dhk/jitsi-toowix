@@ -2659,6 +2659,16 @@ export function MeetingRoomPage() {
             );
           }
         });
+        // Remote participants are inserted with muted: true as a placeholder (see
+        // participantJoined above); without this, that placeholder is never corrected and every
+        // remote tile shows the mic-off badge permanently regardless of their real audio state.
+        on('participantMuted', ({ id, isMuted, mediaType }: any) => {
+          if (id && mediaType === 'audio') {
+            setRemoteParticipants((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, muted: !!isMuted } : p))
+            );
+          }
+        });
 
         on('videoConferenceJoined', (data: any) => {
           localParticipantIdRef.current = data?.id || 'local';
