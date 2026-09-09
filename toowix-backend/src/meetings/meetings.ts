@@ -161,78 +161,81 @@ export const createMeetingHandler = async (req: AuthenticatedRequest, res: Respo
         },
         user._id
       );
+    }
 
-      const roomUrl = `${emailConfig.appUrl}/meet/${meeting.roomSlug}`;
-      const dateTime = meeting.scheduledAt
-        ? new Date(meeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-        : 'Starting now';
+    const roomUrl = `${emailConfig.appUrl}/meet/${meeting.roomSlug}`;
+    const dateTime = meeting.scheduledAt
+      ? new Date(meeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      : 'Starting now';
 
-      // 1. Send invite to all explicitly invited emails
-      if (cleanInvitees && cleanInvitees.length > 0) {
-        cleanInvitees.forEach((inviteeEmail: string) => {
-          sendEmailAsync({
-            to: inviteeEmail,
-            templateName: 'E9_MEETING_INVITE',
-            subject: `${user.fullName} invited you to "${meeting.name}" - Toowix Meet`,
-            templateVariables: {
-              meeting_topic: meeting.name,
-              host_name: user.fullName,
-              date_time: dateTime,
-              room_url: roomUrl,
-              passcode: cleanPasscode || 'Not required',
-              accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(inviteeEmail)}&response=accepted`,
-              reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(inviteeEmail)}&response=declined`,
-            },
-            metadata: { companyId: String(user.companyId || ''), userId: String(user._id) },
-          });
-        });
-      }
-
-      // 2. Also send confirmation to the host/organizer
-      if (user.email) {
+    // 1. Send invite to all explicitly invited emails. This must run regardless of whether
+    // the creator belongs to a company -- it was previously nested inside `if
+    // (user.companyId)`, so a standalone (non-company) user's invitees never got an email
+    // at all, silently.
+    if (cleanInvitees && cleanInvitees.length > 0) {
+      cleanInvitees.forEach((inviteeEmail: string) => {
         sendEmailAsync({
-          to: user.email,
+          to: inviteeEmail,
           templateName: 'E9_MEETING_INVITE',
-          subject: `Meeting Scheduled: "${meeting.name}" - Toowix Meet`,
+          subject: `${user.fullName} invited you to "${meeting.name}" - Toowix Meet`,
           templateVariables: {
             meeting_topic: meeting.name,
-            host_name: `${user.fullName} (You)`,
+            host_name: user.fullName,
             date_time: dateTime,
             room_url: roomUrl,
             passcode: cleanPasscode || 'Not required',
-            accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(user.email)}&response=accepted`,
-            reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(user.email)}&response=declined`,
+            accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(inviteeEmail)}&response=accepted`,
+            reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(inviteeEmail)}&response=declined`,
           },
           metadata: { companyId: String(user.companyId || ''), userId: String(user._id) },
         });
-      }
+      });
+    }
 
-      // 3. E9 Meeting Invite email to active company members (if part of organization workspace)
-      if (user.companyId) {
-        User.find({ companyId: user.companyId, _id: { $ne: user._id }, status: 'ACTIVE' })
-          .select('email fullName')
-          .then((recipients) => {
-            recipients.forEach((recipient) => {
-              if (cleanInvitees && cleanInvitees.includes(recipient.email.toLowerCase())) return; // already sent above
-              sendEmailAsync({
-                to: recipient.email,
-                templateName: 'E9_MEETING_INVITE',
-                subject: `${user.fullName} invited you to "${meeting.name}" - Toowix Meet`,
-                templateVariables: {
-                  meeting_topic: meeting.name,
-                  host_name: user.fullName,
-                  date_time: dateTime,
-                  room_url: roomUrl,
-                  passcode: cleanPasscode || 'Not required',
-                  accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(recipient.email)}&response=accepted`,
-                  reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(recipient.email)}&response=declined`,
-                },
-                metadata: { companyId: String(user.companyId), userId: String(recipient._id) },
-              });
+    // 2. Also send confirmation to the host/organizer
+    if (user.email) {
+      sendEmailAsync({
+        to: user.email,
+        templateName: 'E9_MEETING_INVITE',
+        subject: `Meeting Scheduled: "${meeting.name}" - Toowix Meet`,
+        templateVariables: {
+          meeting_topic: meeting.name,
+          host_name: `${user.fullName} (You)`,
+          date_time: dateTime,
+          room_url: roomUrl,
+          passcode: cleanPasscode || 'Not required',
+          accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(user.email)}&response=accepted`,
+          reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(user.email)}&response=declined`,
+        },
+        metadata: { companyId: String(user.companyId || ''), userId: String(user._id) },
+      });
+    }
+
+    // 3. E9 Meeting Invite email to active company members (if part of organization workspace)
+    if (user.companyId) {
+      User.find({ companyId: user.companyId, _id: { $ne: user._id }, status: 'ACTIVE' })
+        .select('email fullName')
+        .then((recipients) => {
+          recipients.forEach((recipient) => {
+            if (cleanInvitees && cleanInvitees.includes(recipient.email.toLowerCase())) return; // already sent above
+            sendEmailAsync({
+              to: recipient.email,
+              templateName: 'E9_MEETING_INVITE',
+              subject: `${user.fullName} invited you to "${meeting.name}" - Toowix Meet`,
+              templateVariables: {
+                meeting_topic: meeting.name,
+                host_name: user.fullName,
+                date_time: dateTime,
+                room_url: roomUrl,
+                passcode: cleanPasscode || 'Not required',
+                accept_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(recipient.email)}&response=accepted`,
+                reject_url: `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${encodeURIComponent(recipient.email)}&response=declined`,
+              },
+              metadata: { companyId: String(user.companyId), userId: String(recipient._id) },
             });
-          })
-          .catch((err) => console.error('[Meetings] Failed to email company members about new meeting:', err.message));
-      }
+          });
+        })
+        .catch((err) => console.error('[Meetings] Failed to email company members about new meeting:', err.message));
     }
 
     res.status(201).json({ meeting: await meeting.populate('createdBy', 'fullName email avatarUrl') });
