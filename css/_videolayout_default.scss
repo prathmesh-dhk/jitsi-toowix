@@ -19,7 +19,10 @@
     aspect-ratio: 16 / 9;
     max-width: calc(100% - 32px);
     max-height: calc(100% - 156px);
-    border-radius: 22px;
+    // !important: an older rule (#largeVideo, #largeVideoWrapper, #largeVideoContainer {
+    // border-radius: $borderRadius !important }, further down this file) would otherwise win
+    // over this and force 24px instead of the measured 22px target for this specific card.
+    border-radius: 22px !important;
     overflow: hidden;
     box-shadow: none;
 }
@@ -260,8 +263,18 @@
 // avatar color (set from LargeVideoManager.updateAvatar(), which computes the same color the
 // small avatar circle uses via getAvatarColor()) instead of a bare avatar floating on the
 // plain page background. The circle avatar itself still renders centered inside.
+//
+// #dominantSpeaker is a CHILD of #largeVideoContainer (see LargeVideo.web.tsx), not a sibling
+// -- it must simply fill its already-correctly-sized parent at 100%, not re-apply the same
+// 66/90px viewport-relative sizing a second time (that double-shrinks it, nested inside the
+// outer box, which is exactly the "smaller tile inset inside a bigger frame" bug: the outer
+// #largeVideoContainer's own inline background -- Jitsi's interfaceConfig.DEFAULT_BACKGROUND
+// -- was showing through the gap around the double-shrunk inner box).
 #dominantSpeaker {
-    @include toowixSingleParticipantCard;
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
     visibility: hidden;
     display: flex;
     align-items: center;
