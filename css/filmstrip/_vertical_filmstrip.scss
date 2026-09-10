@@ -126,6 +126,12 @@
 
             flex-direction: column;
             flex-grow: 1;
+            // Jitsi's own "reduce-height" class (which reserves toolbar space) is only ever
+            // applied on mobile (see Filmstrip.tsx: shouldReduceHeight = reduceHeight &&
+            // isMobileBrowser()) -- on desktop nothing reserves space for the bottom toolbar,
+            // so the last card(s) can render behind it. Reserve that space unconditionally.
+            padding-bottom: $newToolbarSizeWithPadding;
+            box-sizing: border-box;
         }
 
         .resizable-filmstrip #remoteVideos .videocontainer {
@@ -172,6 +178,13 @@
             &.is-not-overflowing > div {
                 bottom: 0px;
             }
+        }
+
+        // Your own screen share is already the large main presentation area -- showing it a
+        // second time as a small filmstrip thumbnail (Jitsi's #filmstripLocalScreenShare) is a
+        // redundant duplicate of the same content, not a real participant.
+        #filmstripLocalScreenShare {
+            display: none;
         }
     }
 }

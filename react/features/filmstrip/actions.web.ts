@@ -226,6 +226,29 @@ export function setVerticalViewDimensions() {
                 - localScreenShareThumbnailHeight
                 - VERTICAL_FILMSTRIP_VERTICAL_MARGIN;
 
+            // calculateThumbnailSizeForVerticalView sizes remote tiles purely from
+            // width/aspect-ratio, with no notion of participant count or available height --
+            // for a small number of participants that leaves a large empty gap in the sidebar
+            // instead of the tiles evenly filling it (Google Meet-style). Grow tiles evenly to
+            // fill remoteVideosContainerHeight for 2+ participants (never shrink below their
+            // natural size -- once there isn't room, this no-ops and the existing hasScroll
+            // path below takes over at natural size). A true solo remote participant (1) is
+            // intentionally left at its natural size, not stretched to fill the whole sidebar.
+            if (numberOfRemoteParticipants >= 2 && thumbnails?.remote) {
+                const evenHeight = Math.floor(remoteVideosContainerHeight / numberOfRemoteParticipants)
+                    - TILE_VERTICAL_MARGIN;
+
+                if (evenHeight > thumbnails.remote.height) {
+                    thumbnails = {
+                        ...thumbnails,
+                        remote: {
+                            ...thumbnails.remote,
+                            height: evenHeight
+                        }
+                    };
+                }
+            }
+
             hasScroll
                 = remoteVideosContainerHeight
                     < (thumbnails?.remote.height + TILE_VERTICAL_MARGIN) * numberOfRemoteParticipants;
