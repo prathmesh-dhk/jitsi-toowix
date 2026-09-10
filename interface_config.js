@@ -62,7 +62,11 @@ var interfaceConfig = {
 
     ENABLE_DIAL_OUT: true,
 
-    FILM_STRIP_MAX_HEIGHT: 120,
+    // Toowix: Jitsi's stock value (120) is a thin thumbnail strip -- widened to a proper
+    // Google-Meet-style sidebar column so participant tiles during screen share/stage view
+    // actually fill the available width instead of rendering as small cards with dead space
+    // around them.
+    FILM_STRIP_MAX_HEIGHT: 280,
 
     GENERATE_ROOMNAMES_ON_WELCOME_PAGE: true,
 
