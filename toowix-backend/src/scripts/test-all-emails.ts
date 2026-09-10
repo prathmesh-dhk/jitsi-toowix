@@ -70,7 +70,7 @@ const templatesToTest: { name: EmailTemplateName; vars: Record<string, any> }[] 
       host_name: 'Alex Admin',
       meeting_topic: 'Q3 Product Strategy Review',
       date_time: 'Thursday, Sep 3, 2026 at 2:00 PM EST',
-      room_url: 'https://meet.toowix.com/meet/q3-strategy',
+      room_url: 'https://talk.toowix.com/meet/q3-strategy',
       passcode: '948271',
     },
   },

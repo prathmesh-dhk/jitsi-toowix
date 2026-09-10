@@ -149,11 +149,11 @@ export const runJitsiJwtIntegrationTest = async (): Promise<void> => {
 
     console.log('1. HOST / MODERATOR MEETING LINK (With full Host controls & Avatar):');
     console.log(`   Web App Player: http://localhost:3000/meet/${testRoom}?jwt=${hostToken}`);
-    console.log(`   Direct Jitsi:   https://meet.toowix.com/${testRoom}?jwt=${hostToken}\n`);
+    console.log(`   Direct Jitsi:   https://talk.toowix.com/${testRoom}?jwt=${hostToken}\n`);
 
     console.log('2. REGULAR MEMBER MEETING LINK (Attendee without Moderator rights):');
     console.log(`   Web App Player: http://localhost:3000/meet/${testRoom}?jwt=${memberToken}`);
-    console.log(`   Direct Jitsi:   https://meet.toowix.com/${testRoom}?jwt=${memberToken}\n`);
+    console.log(`   Direct Jitsi:   https://talk.toowix.com/${testRoom}?jwt=${memberToken}\n`);
 
     console.log('================================================================');
     console.log('   ALL JWT–JITSI INTEGRATION & GATING TESTS PASSED!             ');
