@@ -2576,6 +2576,10 @@ export function MeetingRoomPage() {
             SHOW_CHROME_EXTENSION_BANNER: false,
             TOOLBAR_BUTTONS: [],
             SETTINGS_SECTIONS: [],
+            // Jitsi's own join/leave toasts would duplicate the Toowix UI's own
+            // participantJoined/participantLeft-driven roster updates -- this is the
+            // supported config key for suppressing them (not a new custom flag).
+            DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
           },
         });
 
