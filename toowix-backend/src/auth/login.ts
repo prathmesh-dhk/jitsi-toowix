@@ -136,7 +136,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         status: 'ACTIVE',
         user,
         company: null,
-
         sessionToken,
       });
       return;
@@ -173,7 +172,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
         status: 'ACTIVE',
         user,
         company: null,
-
         sessionToken,
       });
       return;
@@ -251,7 +249,6 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
       status: 'ACTIVE',
       user,
       company,
-
       sessionToken,
     });
   } catch (error: any) {

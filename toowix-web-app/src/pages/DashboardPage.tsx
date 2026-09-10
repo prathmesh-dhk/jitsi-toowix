@@ -354,6 +354,43 @@ export function DashboardPage() {
     return matchesSearch;
   });
 
+  // Live/upcoming spotlight (Home tab) -- derived from the same allMeetings feed as the
+  // Upcoming tab, instead of hardcoded sample cards.
+  const nowMs = Date.now();
+  const isMeetingLiveNow = (m: IMeeting) => {
+    if (!m.scheduledAtIso || m.status === 'Cancelled') return false;
+    const start = new Date(m.scheduledAtIso).getTime();
+    const end = start + (m.durationMinutes || 60) * 60000;
+    return start <= nowMs && nowMs < end;
+  };
+  const liveMeetings = allMeetings
+    .filter(isMeetingLiveNow)
+    .sort((a, b) => new Date(a.scheduledAtIso as string).getTime() - new Date(b.scheduledAtIso as string).getTime());
+  const upcomingSorted = allMeetings
+    .filter((m) => m.isFuture && m.scheduledAtIso)
+    .sort((a, b) => new Date(a.scheduledAtIso as string).getTime() - new Date(b.scheduledAtIso as string).getTime());
+  const heroMeeting = liveMeetings[0] || upcomingSorted[0] || null;
+  const heroIsLive = !!liveMeetings[0];
+  const secondaryMeetings = (heroIsLive ? upcomingSorted : upcomingSorted.slice(1)).slice(0, 2);
+  const liveInCallParticipants = (heroMeeting?.participants || []).filter((p: any) => p.joinedAt && !p.leftAt);
+  const spotlightMeetings = [heroMeeting, ...secondaryMeetings].filter(Boolean) as IMeeting[];
+  const spotlightVisible = !searchQuery || spotlightMeetings.some(
+    (m) => m.name.toLowerCase().includes(searchQuery.toLowerCase()) || m.organizer.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const meetingTimeRange = (m: IMeeting): string => {
+    if (!m.scheduledAtIso) return '';
+    const start = new Date(m.scheduledAtIso);
+    const startLabel = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    if (!m.durationMinutes) return startLabel;
+    const end = new Date(start.getTime() + m.durationMinutes * 60000);
+    return `${startLabel} - ${end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+  };
+  const avatarPalette = [
+    { bg: isDark ? '#1E3A8A' : '#DBEAFE', fg: isDark ? '#93C5FD' : '#1D4ED8' },
+    { bg: isDark ? '#312E81' : '#E0E7FF', fg: isDark ? '#A5B4FC' : '#4338CA' },
+    { bg: isDark ? '#78350F' : '#FEF3C7', fg: isDark ? '#FDE68A' : '#B45309' },
+  ];
+
   return (
     <div className="dashboard-layout">
       <NotificationToasts />
@@ -946,7 +983,7 @@ export function DashboardPage() {
           {/* =======================================================================
               Upcoming Meetings Section
               ======================================================================= */}
-          {(!searchQuery || 'Weekly Standup'.toLowerCase().includes(searchQuery.toLowerCase())) && (
+          {spotlightVisible && (
             <section style={{ marginBottom: '36px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>
@@ -960,8 +997,15 @@ export function DashboardPage() {
                 </button>
               </div>
 
+              {!meetingsLoading && !heroMeeting ? (
+                <div style={{ backgroundColor: isDark ? '#131B2E' : '#FFFFFF', border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`, borderRadius: '12px', padding: '32px 20px', textAlign: 'center' }}>
+                  <p style={{ margin: '0 0 4px 0', fontSize: '14px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>No upcoming meetings</p>
+                  <p style={{ margin: 0, fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Schedule one to see it here.</p>
+                </div>
+              ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* LIVE Spotlight Hero Card (from Stitch) */}
+                {/* Spotlight Hero Card: live meeting if one is in progress, else the next upcoming meeting */}
+                {heroMeeting && (
                 <div
                   style={{
                     backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
@@ -976,59 +1020,101 @@ export function DashboardPage() {
 
                   <div className="dashboard-spotlight-card-content">
                     <div className="dashboard-spotlight-left">
-                      {/* Live Badge */}
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          color: '#EF4444',
-                          backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
-                          border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
-                          padding: '4px 10px',
-                          borderRadius: '20px',
-                          marginBottom: '12px',
-                        }}
-                      >
-                        <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
-                        LIVE NOW
-                      </span>
+                      {/* Live Badge (only when the meeting is actually in progress right now) */}
+                      {heroIsLive ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            color: '#EF4444',
+                            backgroundColor: isDark ? 'rgba(239, 68, 68, 0.15)' : '#FEE2E2',
+                            border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#FECACA'}`,
+                            padding: '4px 10px',
+                            borderRadius: '20px',
+                            marginBottom: '12px',
+                          }}
+                        >
+                          <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
+                          LIVE NOW
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            color: isDark ? '#818CF8' : '#4F46E5',
+                            backgroundColor: isDark ? 'rgba(99, 102, 241, 0.15)' : '#EEF2FF',
+                            border: `1px solid ${isDark ? 'rgba(99, 102, 241, 0.3)' : '#C7D2FE'}`,
+                            padding: '4px 10px',
+                            borderRadius: '20px',
+                            marginBottom: '12px',
+                          }}
+                        >
+                          NEXT UP
+                        </span>
+                      )}
 
                       <h3 style={{ fontSize: '22px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 6px 0', letterSpacing: '-0.3px' }}>
-                        Weekly Standup
+                        {heroMeeting.name}
                       </h3>
                       <p style={{ fontSize: '14px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 14px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <Clock size={16} /> 10:00 AM - 10:30 AM &bull; Room: weekly-standup
+                        <Clock size={16} /> {meetingTimeRange(heroMeeting)} &bull; Room: {heroMeeting.roomSlug}
                       </p>
 
-                      {/* Participant Bubble Stack */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE', color: isDark ? '#93C5FD' : '#1D4ED8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}` }}>
-                            SJ
-                          </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#312E81' : '#E0E7FF', color: isDark ? '#A5B4FC' : '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
-                            JD
-                          </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#78350F' : '#FEF3C7', color: isDark ? '#FDE68A' : '#B45309', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 700, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
-                            AK
-                          </div>
-                          <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', color: isDark ? '#9CA3AF' : '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
-                            +4
-                          </div>
+                      {/* Participant Bubble Stack (real in-call attendees, live meetings only) */}
+                      {heroIsLive && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          {liveInCallParticipants.length > 0 ? (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center' }}>
+                                {liveInCallParticipants.slice(0, 3).map((p: any, i: number) => (
+                                  <div
+                                    key={p.email || p.name || i}
+                                    style={{
+                                      width: '30px', height: '30px', borderRadius: '50%',
+                                      backgroundColor: avatarPalette[i % avatarPalette.length].bg,
+                                      color: avatarPalette[i % avatarPalette.length].fg,
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      fontSize: '11px', fontWeight: 700,
+                                      border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`,
+                                      marginLeft: i === 0 ? 0 : '-8px',
+                                    }}
+                                  >
+                                    {initialsOf(p.name || p.email || '?')}
+                                  </div>
+                                ))}
+                                {liveInCallParticipants.length > 3 && (
+                                  <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: isDark ? '#1E293B' : '#F3F4F6', color: isDark ? '#9CA3AF' : '#4B5563', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 600, border: `2px solid ${isDark ? '#131B2E' : '#FFFFFF'}`, marginLeft: '-8px' }}>
+                                    +{liveInCallParticipants.length - 3}
+                                  </div>
+                                )}
+                              </div>
+                              <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>
+                                {liveInCallParticipants.length === 1
+                                  ? `${liveInCallParticipants[0].name || liveInCallParticipants[0].email} in call`
+                                  : `${liveInCallParticipants[0].name || liveInCallParticipants[0].email} and ${liveInCallParticipants.length - 1} other${liveInCallParticipants.length - 1 === 1 ? '' : 's'} in call`}
+                              </span>
+                            </>
+                          ) : (
+                            <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>No one has joined yet</span>
+                          )}
                         </div>
-                        <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>
-                          Sarah, John, and 5 others in call
-                        </span>
-                      </div>
+                      )}
+                      {!heroIsLive && (
+                        <span style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#4B5563' }}>Organized by {heroMeeting.organizer}</span>
+                      )}
                     </div>
 
                     {/* Join Action CTA */}
                     <div>
                       <button
-                        onClick={() => navigate('/meet/weekly-standup', { state: { participation: "account" } })}
+                        onClick={() => navigate(`/meet/${heroMeeting.roomSlug}`, { state: { participation: "account" } })}
                         className="dashboard-spotlight-btn"
                         style={{
                           padding: '12px 32px',
@@ -1054,88 +1140,56 @@ export function DashboardPage() {
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* Secondary Upcoming Row */}
+                {secondaryMeetings.length > 0 && (
                 <div className="dashboard-upcoming-grid">
-                  <div
-                    style={{
-                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
-                      borderRadius: '12px',
-                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
-                      padding: '16px 20px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#3B82F6' }} />
-                      <div>
-                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
-                          Product Sync: Q3 Roadmap
-                        </h4>
-                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Clock size={13} /> 1:30 PM - 2:30 PM
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => navigate('/meet/product-sync-q3', { state: { participation: "account" } })}
+                  {secondaryMeetings.map((m, i) => (
+                    <div
+                      key={m.id}
                       style={{
-                        padding: '6px 14px',
-                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        color: isDark ? '#F9FAFB' : '#141B2B',
-                        cursor: 'pointer',
+                        backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
+                        borderRadius: '12px',
+                        border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
+                        padding: '16px 20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
                       }}
                     >
-                      Join
-                    </button>
-                  </div>
-
-                  <div
-                    style={{
-                      backgroundColor: isDark ? '#131B2E' : '#FFFFFF',
-                      borderRadius: '12px',
-                      border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
-                      padding: '16px 20px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: '#10B981' }} />
-                      <div>
-                        <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
-                          Design Review
-                        </h4>
-                        <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Clock size={13} /> 4:00 PM - 5:00 PM
-                        </p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '4px', height: '40px', borderRadius: '4px', backgroundColor: i % 2 === 0 ? '#3B82F6' : '#10B981' }} />
+                        <div>
+                          <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
+                            {m.name}
+                          </h4>
+                          <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Clock size={13} /> {meetingTimeRange(m)}
+                          </p>
+                        </div>
                       </div>
+                      <button
+                        onClick={() => navigate(`/meet/${m.roomSlug}`, { state: { participation: "account" } })}
+                        style={{
+                          padding: '6px 14px',
+                          backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                          border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
+                          borderRadius: '6px',
+                          fontSize: '13px',
+                          fontWeight: 600,
+                          color: isDark ? '#F9FAFB' : '#141B2B',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Join
+                      </button>
                     </div>
-                    <button
-                      onClick={() => navigate('/meet/design-review', { state: { participation: "account" } })}
-                      style={{
-                        padding: '6px 14px',
-                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-                        border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`,
-                        borderRadius: '6px',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        color: isDark ? '#F9FAFB' : '#141B2B',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Join
-                    </button>
-                  </div>
+                  ))}
                 </div>
+                )}
               </div>
+              )}
             </section>
           )}
 

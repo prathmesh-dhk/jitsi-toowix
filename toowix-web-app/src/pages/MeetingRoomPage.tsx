@@ -2639,23 +2639,10 @@ export function MeetingRoomPage() {
           } catch {}
         });
         on('audioMuteStatusChanged', ({ muted }: any) => setInCallMuted(muted));
+        // Reconciles the local video button with the real conference state -- without this,
+        // a failed/no-op toggleVideo command (host force-mute, camera error, or the API not
+        // being ready yet) leaves the button showing the opposite of what's actually on-air.
         on('videoMuteStatusChanged', ({ muted }: any) => setInCallVideo(!muted));
-        // Keep each remote participant's actual mute/video state in sync instead of the
-        // permanent muted:true placeholder set on participantJoined -- without this, a
-        // participant who unmutes never updates in the custom cards/roster.
-        on('participantMuted', (data: any) => {
-          const id = data?.id || data?.participantId;
-          if (!id) return;
-          const muted = typeof data?.muted === 'boolean' ? data.muted : true;
-          const mediaType = data?.mediaType || data?.type;
-          setRemoteParticipants((prev) =>
-            prev.map((p) => {
-              if (p.id !== id) return p;
-              if (mediaType === 'video') return { ...p, video: !muted };
-              return { ...p, muted };
-            })
-          );
-        });
         on('errorOccurred', (data: any) => {
           const errorCode = data?.error?.name || data?.error?.type || data?.type || '';
           console.warn('Jitsi errorOccurred:', errorCode);
@@ -2684,6 +2671,24 @@ export function MeetingRoomPage() {
           if (data && data.id) {
             setRemoteParticipants((prev) =>
               prev.map((p) => (p.id === data.id ? { ...p, raisedHand: !!data.handRaised } : p))
+            );
+          }
+        });
+        // Remote participants are inserted with muted: true as a placeholder (see
+        // participantJoined above); without this, that placeholder is never corrected and every
+        // remote tile shows the mic-off badge permanently regardless of their real audio state.
+        on('participantMuted', ({ id, isMuted, mediaType }: any) => {
+          if (!id) return;
+          if (mediaType === 'audio') {
+            setRemoteParticipants((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, muted: !!isMuted } : p))
+            );
+          } else if (mediaType === 'video') {
+            // Remote participants are inserted with video: false as a placeholder (see
+            // participantJoined above); reconcile it the same way audio does, otherwise a
+            // participant who turns their camera on never updates in the custom cards/roster.
+            setRemoteParticipants((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, video: !isMuted } : p))
             );
           }
         });
@@ -2826,18 +2831,23 @@ export function MeetingRoomPage() {
   }, [remoteScreenStream]);
 
   const handleToggleInCallMic = () => {
+    // Only flip optimistically if the command can actually be sent -- otherwise the button
+    // shows a state the conference never received and audioMuteStatusChanged never fires to
+    // correct it (nothing was toggled, so nothing reconciles).
+    if (!jitsiApiRef.current) return;
     const nextMuted = inCallMuted === null ? false : !inCallMuted;
     setInCallMuted(nextMuted);
     try {
-      jitsiApiRef.current?.executeCommand('toggleAudio');
+      jitsiApiRef.current.executeCommand('toggleAudio');
     } catch {}
   };
 
   const handleToggleInCallVideo = () => {
+    if (!jitsiApiRef.current) return;
     const nextVideo = !inCallVideo;
     setInCallVideo(nextVideo);
     try {
-      jitsiApiRef.current?.executeCommand('toggleVideo');
+      jitsiApiRef.current.executeCommand('toggleVideo');
     } catch {}
   };
 

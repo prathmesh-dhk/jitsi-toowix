@@ -17,6 +17,9 @@ router.post('/verify-email', verifyIdentityToken, verifyEmailHandler);
 // Sends our own Toowix-branded E1 template instead of Firebase's default verification email
 router.post('/send-verification-email', verifyIdentityToken, sendVerificationEmailHandler);
 
+// Sends our own Toowix-branded E1 template instead of Firebase's default verification email
+router.post('/send-verification-email', verifyFirebaseToken, sendVerificationEmailHandler);
+
 // Tue-BE-2: Login Gate
 router.post('/login-gate', verifyIdentityToken, loginGateHandler);
 

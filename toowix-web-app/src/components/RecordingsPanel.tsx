@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Download, Edit3, Eye, FileAudio, FileText, FolderInput, LockKeyhole, MoreVertical, Play, Search, Share2, SlidersHorizontal, Trash2, Video, Clock, Database, ChevronLeft, ChevronRight, X, Check } from 'lucide-react';
+import { Copy, Download, Edit3, Eye, FileAudio, FileText, FolderInput, LockKeyhole, MoreVertical, Play, Search, Share2, SlidersHorizontal, Trash2, Video, Clock, Database, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { ActionMenu, IActionMenuItem } from './ActionMenu';
 import { ShareRecordingModal } from './ShareRecordingModal';
@@ -166,8 +166,19 @@ export function RecordingsPanel() {
     ...(recording.archiveUrl ? [{ label: 'Download all files — ZIP', icon: <Download size={15} />, detail: formatSize(recording.archiveSizeBytes || 0), onClick: () => downloadFile(recording.archiveUrl, `${recording.name}.zip`) }] : []),
   ];
 
-  const playRecording = (recording: IRecording) => {
-    setPlayingRecording(recording);
+  const playRecording = async (recording: IRecording) => {
+    if (!recording.fileUrl) {
+      window.alert('No video file is available for this recording.');
+      return;
+    }
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return;
+    // A <video> element can't send an Authorization header, so the token travels
+    // as a query param here -- the backend's streaming route accepts either.
+    setPlayingRecording({
+      ...recording,
+      fileUrl: `${BACKEND_URL}/api/recordings/${recording.id}/stream?token=${encodeURIComponent(token)}`,
+    });
   };
 
   const copyRecordingLink = async (recording: IRecording) => {

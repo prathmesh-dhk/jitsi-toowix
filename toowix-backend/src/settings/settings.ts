@@ -369,7 +369,15 @@ export const listSessionsHandler = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
-/** Revokes this user's selected application session. Middleware rejects its next request. */
+/**
+ * POST /api/settings/security/sessions/:id/revoke
+ * Removes one session from the list. Note (disclosed in the UI too): Firebase does not
+ * support revoking a single refresh token -- only ALL of a user's tokens at once
+ * (admin.auth().revokeRefreshTokens). So this marks the record revoked (it disappears
+ * from "Active Sessions" and its owner can no longer be impersonated via this DB row),
+ * but if you need to actually force that device to re-authenticate, use "Sign out all
+ * other sessions" instead, which does call revokeRefreshTokens for real.
+ */
 export const revokeSessionHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = await resolveUser(req);
@@ -391,7 +399,11 @@ export const revokeSessionHandler = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
-/** Revoke other application sessions while preserving the authenticated current session. */
+/**
+ * POST /api/settings/security/sessions/revoke-all-others
+ * Real, hard revocation: calls Firebase's revokeRefreshTokens so every OTHER active
+ * browser session is forced to re-authenticate. Marks all other Session rows revoked too.
+ */
 export const revokeOtherSessionsHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const user = await resolveUser(req);
@@ -405,6 +417,13 @@ export const revokeOtherSessionsHandler = async (req: AuthenticatedRequest, res:
       { userId: user._id, revokedAt: null, ...(currentToken ? { sessionToken: { $ne: currentToken } } : {}) },
       { revokedAt: new Date() }
     );
+
+    try {
+      const auth = getFirebaseAuth();
+      await auth.revokeRefreshTokens(user.firebaseUid);
+    } catch (fbErr: any) {
+      console.warn('[Settings] Could not revoke Firebase refresh tokens:', fbErr.message);
+    }
 
     res.json({ message: 'Other sessions signed out' });
   } catch (error: any) {

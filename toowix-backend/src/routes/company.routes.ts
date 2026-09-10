@@ -11,4 +11,7 @@ router.post('/register', verifyIdentityToken, registerCompanyHandler);
 router.get('/meeting-policy', verifyFirebaseToken, getMeetingPolicyHandler);
 router.patch('/meeting-policy', verifyFirebaseToken, updateMeetingPolicyHandler);
 
+router.get('/meeting-policy', verifyFirebaseToken, getMeetingPolicyHandler);
+router.patch('/meeting-policy', verifyFirebaseToken, updateMeetingPolicyHandler);
+
 export default router;

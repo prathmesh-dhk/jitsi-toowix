@@ -128,7 +128,7 @@ const CompanySchema = new Schema<ICompanyDocument>(
       allowGuestAccess: { type: Boolean, default: true },
       requireLobby: { type: Boolean, default: false },
       recordingEnabled: { type: Boolean, default: true },
-      autoRecording: { type: Boolean, default: false },
+      autoRecording: { type: Boolean, default: true },
       allowScreenShare: { type: Boolean, default: true },
       micLockEnabled: { type: Boolean, default: true },
       maxMeetingDurationMinutes: { type: Number, default: null },

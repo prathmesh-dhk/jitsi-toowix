@@ -29,6 +29,153 @@ const resolveUser = async (req: AuthenticatedRequest) => {
 };
 
 /**
+ * GET /api/meetings/room/:roomSlug
+ * Public (no auth) -- the meeting room page needs this for anonymous/guest visitors too,
+ * since joining a room doesn't require being logged in. Returns only what the room UI
+ * needs to decide lobby behavior: type and who the organizer is (id, name -- not email,
+ * to avoid leaking contact info to anonymous guests).
+ */
+export const getMeetingByRoomSlugHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const meeting = await Meeting.findOne({ roomSlug: String(req.params.roomSlug).trim().toLowerCase() })
+      .populate('createdBy', 'fullName email');
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+    const organizer = meeting.createdBy as any;
+    const organizerEmail = String((organizer as any)?.email || '').toLowerCase();
+    const inviteRestricted = meeting.type === 'Private' && !!meeting.invitees && meeting.invitees.length > 0;
+    const requestEmail = req.query.email ? String(req.query.email).trim().toLowerCase() : null;
+    const accessAllowed = !inviteRestricted
+      || (!!requestEmail && (requestEmail === organizerEmail || meeting.invitees!.includes(requestEmail)));
+
+    // Records by default (companies can opt out via their meeting policy); standalone
+    // meetings (no company) have no policy to opt out with, so they default to on too.
+    let autoRecording = true;
+    let requireLobbyPolicy = false;
+    let allowScreenShare = true;
+    let micLockEnabled = false;
+    if (meeting.companyId) {
+      const company = await Company.findById(meeting.companyId).select('meetingPolicy');
+      autoRecording = company?.meetingPolicy?.autoRecording !== false;
+      requireLobbyPolicy = !!company?.meetingPolicy?.requireLobby;
+      allowScreenShare = company?.meetingPolicy?.allowScreenShare !== false;
+      micLockEnabled = !!company?.meetingPolicy?.micLockEnabled;
+    }
+
+    res.json({
+      meeting: {
+        id: meeting._id,
+        name: meeting.name,
+        description: meeting.description || null,
+        type: meeting.type,
+        organizerId: organizer?._id || organizer,
+        organizerName: organizer?.fullName || 'Unknown',
+        cancelled: !!meeting.cancelledAt,
+        inviteRestricted,
+        accessAllowed,
+        // autoRecording depends on the Jitsi deployment actually having Jibri configured --
+        // same real-world caveat as the manual toolbar Record button, not a stronger guarantee.
+        autoRecording,
+        requireLobbyPolicy,
+        allowScreenShare,
+        micLockEnabled,
+      },
+    });
+  } catch (error: any) {
+    console.error('[Meetings] Error fetching meeting by room slug:', error.message);
+    res.status(500).json({ error: 'Failed to fetch meeting' });
+  }
+};
+
+/**
+ * POST /api/meetings/room/:roomSlug/attendance/join
+ * Public (no auth) -- records a real join event for whoever is actually in the call
+ * (logged-in company member or anonymous guest). This is what backs the "Meeting
+ * Attendance" / People page with real data instead of an always-empty list.
+ * Body: { name, email? } -- email omitted for a guest with no account.
+ */
+export const recordAttendanceJoinHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const meeting = await Meeting.findOne({ roomSlug: String(req.params.roomSlug).trim().toLowerCase() });
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+
+    const name = String(req.body.name || 'Guest').trim() || 'Guest';
+    const email = req.body.email ? String(req.body.email).trim().toLowerCase() : `guest-${Date.now()}@unauthenticated.local`;
+
+    let organizerEmail: string | null = null;
+    const organizer = await User.findById(meeting.createdBy).select('email');
+    organizerEmail = organizer?.email || null;
+
+    // Private meetings with an invitee list: only the organizer or a listed email may join.
+    // A guest with no real email (unauthenticated.local placeholder) never matches, so
+    // Private+invitees effectively also blocks anonymous guests -- which is the point.
+    if (meeting.type === 'Private' && meeting.invitees && meeting.invitees.length > 0) {
+      const allowed = email === organizerEmail || meeting.invitees.includes(email);
+      if (!allowed) {
+        res.status(403).json({ error: 'This is a private meeting. Your email is not on the invite list.' });
+        return;
+      }
+    }
+
+    const participant = {
+      name,
+      email,
+      role: email === organizerEmail ? 'Organizer' : 'Participant',
+      joinedAt: new Date(),
+      leftAt: null,
+      timeSpentMinutes: null,
+      attendanceStatus: 'Attended',
+    } as any;
+
+    meeting.participants = meeting.participants || [];
+    meeting.participants.push(participant);
+    await meeting.save();
+
+    const savedEntry = meeting.participants[meeting.participants.length - 1] as any;
+    res.status(201).json({ participantEntryId: savedEntry._id });
+  } catch (error: any) {
+    console.error('[Meetings] Error recording attendance join:', error.message);
+    res.status(500).json({ error: 'Failed to record attendance' });
+  }
+};
+
+/**
+ * POST /api/meetings/room/:roomSlug/attendance/leave
+ * Public (no auth). Body: { participantEntryId }
+ */
+export const recordAttendanceLeaveHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const meeting = await Meeting.findOne({ roomSlug: String(req.params.roomSlug).trim().toLowerCase() });
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+
+    const entry = (meeting.participants || []).find((p: any) => String(p._id) === String(req.body.participantEntryId));
+    if (!entry) {
+      res.status(404).json({ error: 'Attendance entry not found' });
+      return;
+    }
+
+    const leftAt = new Date();
+    entry.leftAt = leftAt;
+    if (entry.joinedAt) {
+      entry.timeSpentMinutes = Math.max(0, Math.round((leftAt.getTime() - new Date(entry.joinedAt).getTime()) / 60000));
+    }
+    await meeting.save();
+    res.json({ message: 'Attendance updated' });
+  } catch (error: any) {
+    console.error('[Meetings] Error recording attendance leave:', error.message);
+    res.status(500).json({ error: 'Failed to record attendance' });
+  }
+};
+
+/**
  * POST /api/meetings
  * Creates a meeting (instant or scheduled) tied to the caller's company (or
  * to the caller directly, for a standalone user with no company workspace).
