@@ -1,23 +1,29 @@
-// Toowix/Google-Meet style single-participant card: a capped-width, centered 16:9 tile with
-// clear background space on all sides, not a full-bleed panel -- used for both #dominantSpeaker
-// (no-video avatar state) and #largeVideoContainer (real-video state) so they're the exact
-// same box. This can only ever paint when there is truly one participant: .tile-view/
-// .stage-filmstrip (2+ participants) already force #dominantSpeaker and
-// #largeVideoElementsContainer to display:none (see filmstrip/_tile_view_overrides.scss), so
-// this can never affect the grid or stage-filmstrip layouts. clamp() caps at 1050px on desktop
-// (~960-1050px target at 1920px wide) and shrinks through tablet/mobile widths without
-// overflowing.
+// Toowix/Google-Meet style single-participant card: height-driven (not width-driven -- the
+// card's height is fixed by the available vertical space between the header and the toolbar,
+// and its width is derived from that via aspect-ratio, matching a real Meet-style stage where
+// the constraint is "fit between header and controls", not "fill X% of the screen width").
+// Used for both #dominantSpeaker (no-video avatar state) and #largeVideoContainer (real-video
+// state) so they're the exact same box. This can only ever paint when there is truly one
+// participant: .tile-view/.stage-filmstrip (2+ participants) already force #dominantSpeaker
+// and #largeVideoElementsContainer to display:none (see filmstrip/_tile_view_overrides.scss),
+// so this can never affect the grid or stage-filmstrip layouts.
+//
+// 66px top / 90px bottom reproduce the measured target exactly at a 1916x926 viewport:
+// height = 926 - 66 - 90 = 770px, width = 770 * 16/9 = 1369px (matches the measured tile).
 @mixin toowixSingleParticipantCard {
     position: absolute;
-    inset: 0;
-    margin: auto !important;
-    width: clamp(260px, 85vw, 1050px);
+    top: 66px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: calc(100% - 156px);
     aspect-ratio: 16 / 9;
-    max-height: calc(100% - 32px);
     max-width: calc(100% - 32px);
-    border-radius: $borderRadius;
+    max-height: calc(100% - 156px);
+    border-radius: 22px;
     overflow: hidden;
+    box-shadow: none;
 }
+
 
 #videoconference_page {
     min-height: 100%;
@@ -135,8 +141,28 @@
     @include toowixSingleParticipantCard;
 }
 
+// Small-viewport fallback: below ~700px tall or ~700px wide (tablet/mobile), the fixed
+// 66px/90px header/toolbar offsets can leave too little room -- switch to width-driven sizing
+// with a 16px page margin instead, still capped to 16:9 and never overflowing the viewport.
+@media (max-height: 700px), (max-width: 700px) {
+    #dominantSpeaker,
+    #largeVideoContainer {
+        top: 56px;
+        left: 16px;
+        right: 16px;
+        bottom: 40px;
+        width: auto;
+        height: auto;
+        max-width: calc(100% - 32px);
+        max-height: calc(100% - 96px);
+        transform: none;
+    }
+}
+
 #largeVideoWrapper {
-    box-shadow: 0 0 20px -2px #444;
+    // No outer shadow/halo/frame around the tile -- the tile's own background fill (colored
+    // per-participant, or the real video) already reaches all the way to its rounded edges.
+    box-shadow: none;
 }
 
 #largeVideo,
@@ -254,7 +280,6 @@
     overflow: hidden;
     visibility: inherit;
     border-radius: 50%;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .dynamic-shadow {
@@ -376,4 +401,13 @@
     top: calc(50% + 30px);
     white-space: nowrap;
     width: 100%;
+}
+
+// The local participant is already shown in the main single-participant card (#dominantSpeaker
+// / #largeVideoContainer above) -- showing them a second time as a small floating filmstrip
+// thumbnail is a duplicate. Hide the filmstrip specifically when it contains only the local
+// tile and nothing else; the moment a second (remote) tile appears, this selector stops
+// matching and the filmstrip shows normally, so multi-participant self-view is untouched.
+.filmstrip:not(:has(.videocontainer:not(#localVideoContainer))) {
+    display: none;
 }
