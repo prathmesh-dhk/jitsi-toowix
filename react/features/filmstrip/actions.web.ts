@@ -235,8 +235,15 @@ export function setVerticalViewDimensions() {
             // path below takes over at natural size). A true solo remote participant (1) is
             // intentionally left at its natural size, not stretched to fill the whole sidebar.
             if (numberOfRemoteParticipants >= 2 && thumbnails?.remote) {
-                const evenHeight = Math.floor(remoteVideosContainerHeight / numberOfRemoteParticipants)
+                const rawEvenHeight = Math.floor(remoteVideosContainerHeight / numberOfRemoteParticipants)
                     - TILE_VERTICAL_MARGIN;
+
+                // Capped at 1.35x the tile width -- filling all available height with only a
+                // couple of participants would otherwise stretch each card into an absurdly
+                // tall vertical bar. Google Meet's sidebar cards stay a sane, roughly-portrait
+                // shape and just leave a bit of breathing room rather than doing that.
+                const maxSaneHeight = Math.floor((thumbnails.remote.width ?? 0) * 1.35);
+                const evenHeight = Math.min(rawEvenHeight, maxSaneHeight);
 
                 if (evenHeight > thumbnails.remote.height) {
                     thumbnails = {
