@@ -1,3 +1,12 @@
+// Lock the whole meeting page to the viewport, no scrollbars in either direction, regardless
+// of what any inner container (sidebar, stage, filmstrip) does -- !important since some inner
+// elements set their own overflow: auto/scroll via inline styles.
+html, body, #videoconference_page {
+    overflow: hidden !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+}
+
 // Toowix/Google-Meet style single-participant card: height-driven (not width-driven -- the
 // card's height is fixed by the available vertical space between the header and the toolbar,
 // and its width is derived from that via aspect-ratio, matching a real Meet-style stage where

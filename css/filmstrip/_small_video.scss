@@ -41,4 +41,15 @@
         color: #FFFFFF;
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
+
+    // The browser's default focus outline is always a square rectangle -- it doesn't follow
+    // border-radius even on a rounded element, so a rounded tile shows a square blue ring when
+    // clicked/focused. Replace it with an inset box-shadow ring instead, which does respect
+    // border-radius, so it stays rounded.
+    &:focus,
+    &:focus-visible {
+        outline: none;
+        box-shadow: inset 0 0 0 2px #8AB4F8;
+        border-radius: $borderRadius !important;
+    }
 }

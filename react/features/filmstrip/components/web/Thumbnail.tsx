@@ -12,6 +12,7 @@ import { sendAnalytics } from '../../../analytics/functions';
 import { IReduxState, IStore } from '../../../app/types';
 import { isTranslationDeliveryPending } from '../../../audio-translation/functions';
 import Avatar from '../../../base/avatar/components/Avatar';
+import { getAvatarColor } from '../../../base/avatar/functions';
 import { isMobileBrowser } from '../../../base/environment/utils';
 import { translate } from '../../../base/i18n/functions';
 import VideoTrack from '../../../base/media/components/web/VideoTrack';
@@ -337,7 +338,7 @@ const defaultStyles = (theme: Theme) => {
             left: 0,
             height: '100%',
             width: '100%',
-            borderRadius: '4px',
+            borderRadius: '24px',
             backgroundColor: theme.palette.thumbnailBackground
         },
 
@@ -346,7 +347,10 @@ const defaultStyles = (theme: Theme) => {
             width: '100%',
             height: '100%',
             zIndex: 9,
-            borderRadius: '4px',
+            // 'inherit' (not a hardcoded 4px) so the active-speaker/raised-hand/translation
+            // hover-and-status overlay always matches the tile's own rounding (24px) instead
+            // of showing square corners on a rounded card.
+            borderRadius: 'inherit',
             pointerEvents: 'none' as const
         },
 
@@ -433,6 +437,31 @@ const defaultStyles = (theme: Theme) => {
         }
     };
 };
+
+/**
+ * Darkens a '#rrggbb' hex color by blending it toward black. Used so a no-camera tile's
+ * background is a darker shade of the same participant color the avatar circle itself uses
+ * (getAvatarColor), instead of one flat theme color for every participant -- keeps the circle
+ * visibly distinct from the tile behind it while still being "their color, not a fixed color".
+ *
+ * @param {string} hex - The color to darken, as '#rrggbb'.
+ * @param {number} amount - 0 (unchanged) to 1 (black).
+ * @returns {string}
+ */
+function _darkenHexColor(hex: string, amount: number) {
+    const match = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex ?? '');
+
+    if (!match) {
+        return hex;
+    }
+
+    const factor = 1 - amount;
+    const channel = (h: string) => Math.round(parseInt(h, 16) * factor)
+        .toString(16)
+        .padStart(2, '0');
+
+    return `#${channel(match[1])}${channel(match[2])}${channel(match[3])}`;
+}
 
 /**
  * Implements a thumbnail.
@@ -1102,7 +1131,12 @@ class Thumbnail extends Component<IProps, IState> {
                 {!_gifSrc && (local
                     ? <span id = 'localVideoWrapper'>{video}</span>
                     : video)}
-                <div className = { classes.containerBackground } />
+                <div
+                    className = { classes.containerBackground }
+                    style = { name ? {
+                        background: `radial-gradient(circle, ${_darkenHexColor(getAvatarColor(name, []), 0.45)} 0%, ${
+                            _darkenHexColor(getAvatarColor(name, []), 0.6)} 100%)`
+                    } : undefined } />
                 {/* put the bottom container before the top container in the dom,
                 because it contains the participant name that should be announced first by screen readers */}
                 <div
