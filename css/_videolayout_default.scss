@@ -144,6 +144,26 @@
     @include toowixSingleParticipantCard;
 }
 
+// Screen sharing must NOT use the capped single-participant-camera card sizing -- it should
+// keep occupying the full stage area exactly as before, since a shared screen's own aspect
+// ratio/content needs the space, not a fixed 16:9 camera-sized box. #largeVideoContainer.
+// desktop-video-stage is only added (LargeVideo.web.tsx) when the large-video track is a
+// screen share, local or remote, so untouched camera-only single-participant view still gets
+// the capped card above.
+#largeVideoContainer.desktop-video-stage {
+    position: absolute;
+    inset: 0;
+    top: 0;
+    left: 0;
+    transform: none;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    aspect-ratio: unset;
+    border-radius: $borderRadius !important;
+}
+
 // Small-viewport fallback: below ~700px tall or ~700px wide (tablet/mobile), the fixed
 // 66px/90px header/toolbar offsets can leave too little room -- switch to width-driven sizing
 // with a 16px page margin instead, still capped to 16:9 and never overflowing the viewport.

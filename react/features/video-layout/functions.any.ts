@@ -98,8 +98,13 @@ export function shouldDisplayTileView(state: IReduxState) {
         // We pinned a participant
         || getPinnedParticipant(state)
 
-        // It's a 1-on-1 meeting
-        || participantCount < 3
+        // Toowix: a true solo call (just the local participant, nobody else) stays in
+        // large-video mode -- but 2+ participants (including the local user) should use the
+        // responsive grid like every other participant count, not Jitsi's default "1-on-1
+        // calls get a big tile + small filmstrip" behavior. Threshold changed from < 3 to < 2
+        // per the required Google-Meet-style grid spec (2 participants = two equal side-by-side
+        // tiles, not one large tile + a corner thumbnail).
+        || participantCount < 2
 
         // There is a shared YouTube video in the meeting
         || isVideoPlaying(state)
