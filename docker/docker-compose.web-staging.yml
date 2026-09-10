@@ -1,0 +1,51 @@
+# STAGING-ONLY override: adds a SEPARATE `web-staging` service running the custom-built
+# Toowix-styled Jitsi web image, on the SAME meet.jitsi network as the real
+# Prosody/Jicofo/JVB (so it can serve real conferences against the live backend), but on a
+# server-local-only port (127.0.0.1, never exposed externally) and completely independent of
+# the production `web` service (jitsi-stack-web-1), which this file does not reference or
+# modify in any way.
+#
+# Usage (run from /opt/toowix/jitsi-stack on the server, next to the real docker-compose.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.web-staging.yml up -d web-staging
+#
+# This only creates/starts the new `web-staging` service. It does not restart, recreate, or
+# otherwise touch prosody/jicofo/jvb/coturn/web, since their service definitions are
+# unchanged by adding this file.
+#
+# Access (server binds to 127.0.0.1 only): from your own machine,
+#   ssh -L 8543:localhost:8543 root@192.168.22.59
+# then open https://localhost:8543/<room-name> in the browser (self-signed cert -- accept the
+# one-time browser warning). Repeat the same tunnel command from a second device/network for
+# two-participant testing.
+#
+# Teardown / instant revert (leaves the real `web` service completely untouched):
+#   docker compose -f docker-compose.yml -f docker-compose.web-staging.yml rm -sf web-staging
+
+services:
+  web-staging:
+    image: toowix-jitsi-web:staging
+    restart: "no"
+    ports:
+      - '127.0.0.1:8543:8443'
+    environment:
+      - PUBLIC_URL
+      - JVB_ADVERTISE_IPS
+      - ENABLE_AUTH
+      - ENABLE_GUESTS
+      - AUTH_TYPE
+      - JWT_APP_ID
+      - JWT_APP_SECRET
+      - JWT_ACCEPTED_ISSUERS
+      - JWT_ACCEPTED_AUDIENCES
+      - ENABLE_P2P
+      - ENABLE_XMPP_WEBSOCKET
+      - XMPP_DOMAIN
+      - XMPP_AUTH_DOMAIN
+      - XMPP_MUC_DOMAIN
+      - XMPP_GUEST_DOMAIN
+      - XMPP_BOSH_URL_BASE
+      - TZ
+    networks:
+      meet.jitsi:
+    depends_on:
+      - jvb
