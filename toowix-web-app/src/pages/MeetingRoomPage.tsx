@@ -973,10 +973,6 @@ export function MeetingRoomPage() {
       set.delete(oldest);
     }
   };
-  const presenterPeerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const viewerPeerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const presenterIceQueuesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
-  const iceCandidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
   const lastSignalTimestampRef = useRef<number>(Date.now() - 5000);
   const pipVideoRef = useRef<HTMLVideoElement | null>(null);
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -2504,7 +2500,7 @@ export function MeetingRoomPage() {
     leaveMeeting('You ended the meeting for everyone.');
   };
 
-  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'meet.toowix.com';
+  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
   const loadJitsiScript = useCallback((): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -2647,6 +2643,21 @@ export function MeetingRoomPage() {
         // a failed/no-op toggleVideo command (host force-mute, camera error, or the API not
         // being ready yet) leaves the button showing the opposite of what's actually on-air.
         on('videoMuteStatusChanged', ({ muted }: any) => setInCallVideo(!muted));
+        on('errorOccurred', (data: any) => {
+          const errorCode = data?.error?.name || data?.error?.type || data?.type || '';
+          console.warn('Jitsi errorOccurred:', errorCode);
+          if (/conference\.connectionError|connection\.dropped|connection\.otherError/i.test(errorCode)) {
+            setCallError('Connection to the meeting server failed. Check your network and try rejoining.');
+          } else if (/conference\.iceFailed|ice/i.test(errorCode)) {
+            setCallError('Media connection failed (ICE/network issue). Try rejoining or switching networks.');
+          } else if (/microphone|mic/i.test(errorCode)) {
+            setCallError('Microphone error. Check that a microphone is connected and permitted.');
+          } else if (/camera/i.test(errorCode)) {
+            setCallError('Camera error. Check that a camera is connected and permitted.');
+          } else if (errorCode) {
+            setCallError('A meeting error occurred. If audio/video stops working, try rejoining.');
+          }
+        });
         on('recordingStatusChanged', ({ on: enabled }: any) => {
           setRecording(!!enabled);
           if (enabled) {
@@ -2667,9 +2678,17 @@ export function MeetingRoomPage() {
         // participantJoined above); without this, that placeholder is never corrected and every
         // remote tile shows the mic-off badge permanently regardless of their real audio state.
         on('participantMuted', ({ id, isMuted, mediaType }: any) => {
-          if (id && mediaType === 'audio') {
+          if (!id) return;
+          if (mediaType === 'audio') {
             setRemoteParticipants((prev) =>
               prev.map((p) => (p.id === id ? { ...p, muted: !!isMuted } : p))
+            );
+          } else if (mediaType === 'video') {
+            // Remote participants are inserted with video: false as a placeholder (see
+            // participantJoined above); reconcile it the same way audio does, otherwise a
+            // participant who turns their camera on never updates in the custom cards/roster.
+            setRemoteParticipants((prev) =>
+              prev.map((p) => (p.id === id ? { ...p, video: !isMuted } : p))
             );
           }
         });
@@ -2721,7 +2740,17 @@ export function MeetingRoomPage() {
     }
   }, [hasJoined]);
 
-  // In-call camera stream acquisition (independent of preview cleanup)
+  // In-call camera stream acquisition (independent of preview cleanup).
+  //
+  // Jitsi (via the now-visible iframe) is the sole owner of the microphone/camera tracks that
+  // are actually published to the conference -- this stream is NOT used for that, and the old
+  // custom video tiles it used to feed for the main stage are now visually covered by the real
+  // Jitsi surface (see the zIndex:5 container above). It is kept, narrowly, only because the
+  // Document Picture-in-Picture window (a floating window outside the tab, see
+  // DocumentPipContent/initPipStream) needs local camera frames to composite, and the Jitsi
+  // IFrame API cannot hand out its internal MediaStreamTracks across origins -- there is no
+  // supported way to capture frames from the real conference video for that floating window.
+  // Selecting the same deviceId Jitsi is using keeps it from silently diverging in practice.
   useEffect(() => {
     if (!hasJoined) {
       if (inCallStreamRef.current) {
@@ -2939,49 +2968,18 @@ export function MeetingRoomPage() {
     } catch {}
   };
 
-  const handleToggleScreenShare = async () => {
-    if (isScreenSharing) {
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((t) => t.stop());
-        screenStreamRef.current = null;
-        setScreenStream(null);
-      }
-      setIsScreenSharing(false);
-      presenterPeerConnectionsRef.current.forEach((pc) => pc.close());
-      presenterPeerConnectionsRef.current.clear();
-      presenterIceQueuesRef.current.clear();
-      postRoomSignal('SCREEN_SHARE_STOPPED', { presenterSessionId: sessionIdRef.current });
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: { frameRate: 30 },
-          audio: false,
-        });
-        screenStreamRef.current = stream;
-        setScreenStream(stream);
-        setIsScreenSharing(true);
-
-        // Notify room that presenter started sharing
-        postRoomSignal('SCREEN_SHARE_STARTED', {
-          presenter: displayName || 'Participant',
-          presenterSessionId: sessionIdRef.current,
-        });
-
-        stream.getVideoTracks()[0].onended = () => {
-          setIsScreenSharing(false);
-          if (screenStreamRef.current) {
-            screenStreamRef.current.getTracks().forEach((t) => t.stop());
-            screenStreamRef.current = null;
-            setScreenStream(null);
-          }
-          presenterPeerConnectionsRef.current.forEach((pc) => pc.close());
-          presenterPeerConnectionsRef.current.clear();
-          presenterIceQueuesRef.current.clear();
-          postRoomSignal('SCREEN_SHARE_STOPPED', { presenterSessionId: sessionIdRef.current });
-        };
-      } catch (err: any) {
-        console.warn('Screen share cancelled or not allowed:', err);
-      }
+  // Screen sharing goes through Jitsi's own supported command so it's transmitted over the
+  // real JVB/TURN media path (with system/tab audio where the browser supports it) instead of
+  // a separate STUN-only RTCPeerConnection mesh. isScreenSharing itself is kept in sync by the
+  // screenSharingStatusChanged listener registered in the Jitsi init effect, not set here --
+  // Jitsi may reject or the user may cancel the OS share picker, so we let the event confirm
+  // the real outcome rather than assuming success.
+  const handleToggleScreenShare = () => {
+    try {
+      jitsiApiRef.current?.executeCommand('toggleShareScreen');
+    } catch (err) {
+      console.warn('toggleShareScreen failed:', err);
+      setCallError('Could not start screen sharing. Please try again.');
     }
   };
 
@@ -3003,124 +3001,11 @@ export function MeetingRoomPage() {
 
       if (type === 'MEETING_ENDED_FOR_EVERYONE') {
         leaveMeeting('The host has ended the meeting for everyone.');
-      } else if (type === 'SCREEN_SHARE_STARTED') {
-        setRemotePresenterName(payload?.presenter || sender);
-        // Viewer sends join request to presenter for per-peer connection
-        postRoomSignal('WEBRTC_JOIN_PRESENTATION', {}, payload?.presenterSessionId || senderSessionId);
-      } else if (type === 'SCREEN_SHARE_STOPPED') {
-        setRemoteScreenStream(null);
-        setRemotePresenterName(null);
-        if (viewerPeerConnectionRef.current) {
-          viewerPeerConnectionRef.current.close();
-          viewerPeerConnectionRef.current = null;
-        }
-        iceCandidateQueueRef.current = [];
-      } else if (type === 'WEBRTC_JOIN_PRESENTATION') {
-        // We are the presenter: a viewer wants to receive our stream
-        if (!screenStreamRef.current) return;
-        try {
-          const pc = new RTCPeerConnection({
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          });
-          presenterPeerConnectionsRef.current.set(senderSessionId, pc);
-          screenStreamRef.current.getTracks().forEach((track) => {
-            pc.addTrack(track, screenStreamRef.current!);
-          });
-
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate }, senderSessionId);
-            }
-          };
-
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          postRoomSignal('WEBRTC_OFFER', { sdp: offer }, senderSessionId);
-        } catch (e) {
-          console.warn('Presenter peer connection error:', e);
-        }
-      } else if (type === 'WEBRTC_OFFER') {
-        // Viewer receives offer from presenter
-        if (isScreenSharing) return;
-        setRemotePresenterName(sender);
-
-        try {
-          if (viewerPeerConnectionRef.current) {
-            viewerPeerConnectionRef.current.close();
-          }
-          const pc = new RTCPeerConnection({
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          });
-          viewerPeerConnectionRef.current = pc;
-
-          pc.ontrack = (event) => {
-            if (event.streams && event.streams[0]) {
-              setRemoteScreenStream(event.streams[0]);
-            }
-          };
-
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              postRoomSignal('WEBRTC_ICE', { candidate: event.candidate }, senderSessionId);
-            }
-          };
-
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-
-          // Flush any buffered candidates
-          for (const cand of iceCandidateQueueRef.current) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-          }
-          iceCandidateQueueRef.current = [];
-
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          postRoomSignal('WEBRTC_ANSWER', { sdp: answer }, senderSessionId);
-        } catch (e) {
-          console.warn('Viewer peer connection error:', e);
-        }
-      } else if (type === 'WEBRTC_ANSWER') {
-        // Presenter receives answer from viewer
-        const pc = presenterPeerConnectionsRef.current.get(senderSessionId);
-        if (pc && payload?.sdp) {
-          try {
-            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-            const queue = presenterIceQueuesRef.current.get(senderSessionId) || [];
-            for (const cand of queue) {
-              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-            }
-            presenterIceQueuesRef.current.delete(senderSessionId);
-          } catch (e) {
-            console.warn('Set remote desc error on presenter:', e);
-          }
-        }
-      } else if (type === 'WEBRTC_ICE') {
-        if (payload?.candidate) {
-          if (presenterPeerConnectionsRef.current.has(senderSessionId)) {
-            const pc = presenterPeerConnectionsRef.current.get(senderSessionId)!;
-            if (pc.remoteDescription) {
-              await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
-            } else {
-              if (!presenterIceQueuesRef.current.has(senderSessionId)) {
-                presenterIceQueuesRef.current.set(senderSessionId, []);
-              }
-              presenterIceQueuesRef.current.get(senderSessionId)!.push(payload.candidate);
-            }
-          } else if (viewerPeerConnectionRef.current) {
-            const pc = viewerPeerConnectionRef.current;
-            if (pc.remoteDescription) {
-              await pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
-            } else {
-              iceCandidateQueueRef.current.push(payload.candidate);
-            }
-          }
-        }
+        // SCREEN_SHARE_STARTED/STOPPED and the WEBRTC_* mesh signal types are no longer
+        // handled here: screen sharing now goes through Jitsi's own toggleShareScreen
+        // command and JVB media path (see handleToggleScreenShare below), so remote
+        // screen-share video arrives as a normal track in the Jitsi surface itself --
+        // no separate custom RTCPeerConnection mesh or STUN-only signaling is needed.
       } else if (type === 'HAND_TOGGLED') {
         const isRaised = Boolean(payload?.raised);
         const personName = payload?.name || sender || 'Participant';
@@ -3183,15 +3068,87 @@ export function MeetingRoomPage() {
     };
   }, [hasJoined, roomId, isScreenSharing, postRoomSignal]);
 
+  // Apply a device change to the live conference via Jitsi's real device APIs -- updating only
+  // React state here would leave the UI showing one device while Jitsi keeps using another.
+  // Falls back to the system default and surfaces an error toast if the switch itself fails
+  // (e.g. the device was unplugged between selection and the call).
+  const applyJitsiDevice = useCallback(
+    async (kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string) => {
+      const api = jitsiApiRef.current;
+      if (!api || !hasJoined) return;
+      try {
+        const label = media.devices.find((d) => d.deviceId === deviceId)?.label || '';
+        if (kind === 'audioInput') await api.setAudioInputDevice(label, deviceId);
+        else if (kind === 'videoInput') await api.setVideoInputDevice(label, deviceId);
+        else await api.setAudioOutputDevice(label, deviceId);
+      } catch (err) {
+        console.warn(`Failed to switch ${kind}:`, err);
+        setCallError(
+          kind === 'audioOutput'
+            ? 'Could not switch speaker/output device. Falling back to the system default.'
+            : `Could not switch ${kind === 'audioInput' ? 'microphone' : 'camera'}. It may be disconnected or in use by another app.`
+        );
+      }
+    },
+    [hasJoined, media.devices]
+  );
+
   const handleSelectAudioDevice = (devId: string) => {
     setAudioId(devId);
     setShowAudioMenu(false);
+    void applyJitsiDevice('audioInput', devId);
   };
 
   const handleSelectVideoDevice = (devId: string) => {
     setVideoId(devId);
     setShowVideoMenu(false);
+    void applyJitsiDevice('videoInput', devId);
   };
+
+  const handleSelectOutputDevice = (devId: string) => {
+    setOutputId(devId);
+    void applyJitsiDevice('audioOutput', devId);
+  };
+
+  // Refresh the device list from Jitsi's own view of available devices once in-call, and fall
+  // back to the system default automatically if the currently selected device disappears
+  // (e.g. a USB headset is unplugged mid-call).
+  useEffect(() => {
+    if (!hasJoined) return;
+    const api = jitsiApiRef.current;
+    if (!api) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = await api.getAvailableDevices();
+        if (cancelled || !result) return;
+        const { audioInput, videoInput, audioOutput } = result as {
+          audioInput?: MediaDeviceInfo[];
+          videoInput?: MediaDeviceInfo[];
+          audioOutput?: MediaDeviceInfo[];
+        };
+        if (audioId && audioInput && !audioInput.some((d) => d.deviceId === audioId)) {
+          setAudioId('');
+          setCallError('Your microphone was disconnected. Switched to the system default.');
+        }
+        if (videoId && videoInput && !videoInput.some((d) => d.deviceId === videoId)) {
+          setVideoId('');
+          setCallError('Your camera was disconnected. Switched to the system default.');
+        }
+        if (outputId && audioOutput && !audioOutput.some((d) => d.deviceId === outputId)) {
+          setOutputId('');
+        }
+      } catch {
+        // getAvailableDevices isn't supported on every browser/platform; ignore silently.
+      }
+    };
+    void refresh();
+    navigator.mediaDevices?.addEventListener('devicechange', refresh);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
+    };
+  }, [hasJoined, audioId, videoId, outputId]);
 
   // ===========================================================================
   // STAGE 2: IN-MEETING VIEW (Google Meet Visual Truth Matching Image 1)
@@ -3239,6 +3196,49 @@ export function MeetingRoomPage() {
             50% { opacity: 0.4; }
           }
         `}</style>
+
+        {/* Call/device/connection error banner (mic/camera permission, ICE/JVB failures, device
+            switch failures, screen-share errors, etc.) -- surfaced via setCallError so failures
+            are never silent. Dismissible; does not end the call by itself. */}
+        {callError && (
+          <div
+            style={{
+              position: 'fixed',
+              top: '56px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              backgroundColor: '#202124',
+              border: '1px solid #EA4335',
+              borderRadius: '12px',
+              padding: '10px 16px',
+              color: '#FFFFFF',
+              fontSize: '13px',
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
+              zIndex: 500,
+              maxWidth: '480px',
+              animation: 'slideInRight 0.2s ease',
+            }}
+          >
+            <span>{callError}</span>
+            <button
+              onClick={() => setCallError('')}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#9AA0A6',
+                cursor: 'pointer',
+                display: 'flex',
+                padding: 0,
+              }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Active Recording Toast Notification */}
         {recordingToast && (
@@ -3426,6 +3426,28 @@ export function MeetingRoomPage() {
             overflow: 'hidden',
           }}
         >
+          {/* Real Jitsi conference surface: this is the actual media plane. It owns the
+              microphone/camera/screen-share tracks and renders real local + remote video via
+              JitsiMeetExternalAPI's own tile layout. The IFrame API cannot hand raw remote
+              MediaStreamTracks to custom React <video> elements (cross-origin), so this iframe
+              -- not the avatar-only cards below, which remain as an inert visual fallback until
+              the API finishes loading -- is what participants actually see. Native Jitsi
+              toolbar/watermark/branding are suppressed via configOverwrite/interfaceConfigOverwrite
+              below; the Toowix header, toolbar and dialogs stay as overlays on top (z-index 10+). */}
+          <div
+            ref={jitsiContainerRef}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              zIndex: 5,
+              borderRadius: '24px',
+              overflow: 'hidden',
+              backgroundColor: '#000000',
+            }}
+          />
+
           {/* Main Participant Stage: Presentation Mode (Local OR Remote Presenter) OR Single Card OR Multi-Participant Grid */}
           {isScreenSharing || remoteScreenStream ? (
             /* Presentation Mode: Main Stage Screen Share + Filmstrip of Attendees (Google Meet style) */
@@ -5447,21 +5469,6 @@ export function MeetingRoomPage() {
           </div>
         ))}
 
-        {/* Headless Jitsi WebRTC Container (kept alive for audio/video signaling with NO visible watermark or default toolbar) */}
-        <div
-          ref={jitsiContainerRef}
-          style={{
-            position: 'absolute',
-            width: '1px',
-            height: '1px',
-            opacity: 0,
-            pointerEvents: 'none',
-            overflow: 'hidden',
-            bottom: 0,
-            right: 0,
-          }}
-        />
-
         {/* Share Modal */}
         <ShareMeetingModal
           isOpen={showShareModal}
@@ -6615,7 +6622,7 @@ export function MeetingRoomPage() {
                 </label>
                 <select
                   value={audioId}
-                  onChange={(e) => setAudioId(e.target.value)}
+                  onChange={(e) => handleSelectAudioDevice(e.target.value)}
                   style={{
                     width: '100%',
                     padding: '10px',
@@ -6644,7 +6651,7 @@ export function MeetingRoomPage() {
                 </label>
                 <select
                   value={videoId}
-                  onChange={(e) => setVideoId(e.target.value)}
+                  onChange={(e) => handleSelectVideoDevice(e.target.value)}
                   style={{
                     width: '100%',
                     padding: '10px',
@@ -6673,7 +6680,7 @@ export function MeetingRoomPage() {
                 </label>
                 <select
                   value={outputId}
-                  onChange={(e) => setOutputId(e.target.value)}
+                  onChange={(e) => handleSelectOutputDevice(e.target.value)}
                   style={{
                     width: '100%',
                     padding: '10px',

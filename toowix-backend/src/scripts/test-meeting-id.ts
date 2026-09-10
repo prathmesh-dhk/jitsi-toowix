@@ -33,7 +33,7 @@ export const sanitizeCustomMeetingId = (input: string): string => {
     .replace(/^-|-$/g, '');
 };
 
-export const getMeetingUrl = (roomId: string, domain = 'meet.toowix.com'): string => {
+export const getMeetingUrl = (roomId: string, domain = 'talk.toowix.com'): string => {
   let cleanId = sanitizeCustomMeetingId(roomId);
   if (!cleanId) {
     cleanId = generateUniqueMeetingId();
@@ -166,10 +166,10 @@ export function runMeetingIdVerificationTests() {
   ];
 
   for (const roomName of integrationRooms) {
-    const fullUrl = getMeetingUrl(roomName, 'meet.toowix.com');
+    const fullUrl = getMeetingUrl(roomName, 'talk.toowix.com');
     const jitsiParsed = simulateJitsiRoomParser(fullUrl);
 
-    assert(jitsiParsed.hostname === 'meet.toowix.com', `Host resolved: ${jitsiParsed.hostname}`);
+    assert(jitsiParsed.hostname === 'talk.toowix.com', `Host resolved: ${jitsiParsed.hostname}`);
     assert(jitsiParsed.room === roomName, `Jitsi room extracted exactly: "${jitsiParsed.room}" === "${roomName}"`);
     assert(jitsiParsed.protocol === 'https:', `Protocol is secure HTTPS`);
   }

@@ -314,7 +314,7 @@ export function DashboardPage() {
     if (!joinCodeInput.trim()) return;
 
     let input = joinCodeInput.trim();
-    // Support full URLs like https://meet.toowix.com/meet/my-room
+    // Support full URLs like https://talk.toowix.com/meet/my-room
     if (input.includes('/meet/')) {
       input = input.substring(input.lastIndexOf('/meet/') + 6);
     }

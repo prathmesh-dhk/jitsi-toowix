@@ -15,6 +15,6 @@ if (process.env.NODE_ENV === 'production' && (!process.env.JITSI_APP_SECRET || p
 export const jitsiConfig: IJitsiConfig = {
   appId: process.env.JITSI_APP_ID || 'toowix-meet',
   appSecret: process.env.JITSI_APP_SECRET || 'toowix-secret-dev-key-change-in-prod',
-  domain: process.env.JITSI_DOMAIN || 'meet.toowix.com',
+  domain: process.env.JITSI_DOMAIN || 'talk.toowix.com',
   tokenExpirySeconds: parseInt(process.env.JITSI_TOKEN_EXPIRY_SECONDS || '900', 10), // capped at 15 minutes by the issuer
 };
