@@ -210,14 +210,24 @@
     }
 }
 
+// Toowix/Google-Meet style: when there's no video, the whole large-video tile is filled with
+// the participant's own avatar color (set from LargeVideoManager.updateAvatar(), which computes
+// the same color the small avatar circle uses via getAvatarColor()) instead of a bare avatar
+// floating on the plain page background. Inset from the edges like a real tile, rounded to
+// match the rest of the Toowix design. The circle avatar itself still renders centered inside.
 #dominantSpeaker {
     visibility: hidden;
-    width: 300px;
-    height: 300px;
-    margin: auto;
-    position: relative;
-    top: 50%;
-    transform: translateY(-50%);
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    border-radius: $borderRadius;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease;
 }
 
 #dominantSpeakerAvatarContainer,
@@ -227,12 +237,11 @@
 }
 
 #dominantSpeakerAvatarContainer {
-    top: 102px;
-    margin: auto;
     position: relative;
     overflow: hidden;
     visibility: inherit;
     border-radius: 50%;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .dynamic-shadow {
