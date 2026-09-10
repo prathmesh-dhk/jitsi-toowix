@@ -2740,73 +2740,28 @@ export function MeetingRoomPage() {
     }
   }, [hasJoined]);
 
-  // In-call camera stream acquisition (independent of preview cleanup).
-  //
-  // Jitsi (via the now-visible iframe) is the sole owner of the microphone/camera tracks that
-  // are actually published to the conference -- this stream is NOT used for that, and the old
-  // custom video tiles it used to feed for the main stage are now visually covered by the real
-  // Jitsi surface (see the zIndex:5 container above). It is kept, narrowly, only because the
-  // Document Picture-in-Picture window (a floating window outside the tab, see
-  // DocumentPipContent/initPipStream) needs local camera frames to composite, and the Jitsi
-  // IFrame API cannot hand out its internal MediaStreamTracks across origins -- there is no
-  // supported way to capture frames from the real conference video for that floating window.
-  // Selecting the same deviceId Jitsi is using keeps it from silently diverging in practice.
+  // In-call camera: Jitsi (via the visible iframe) is the SOLE owner of the microphone/camera
+  // tracks actually published to the conference -- there is no second getUserMedia() capture
+  // here anymore. inCallStream/inCallStreamRef are kept declared (always null while joined)
+  // purely because every consumer (the self-view tiles here, the PiP canvas compositor in
+  // drawPipFrame, and DocumentPipContent) already has a graceful avatar/initial fallback for
+  // when there is no local stream -- see the `inCallVideo && inCallStream ? <video/> : <avatar>`
+  // pattern used throughout. So local self-view in the main stage and in PiP now shows an
+  // avatar instead of a live thumbnail; that is the accepted trade-off for not opening a
+  // second camera capture while Jitsi already owns the device (the IFrame API cannot hand out
+  // its internal MediaStreamTracks across origins, so there is no supported way to source real
+  // frames for those secondary surfaces from the real conference video).
   useEffect(() => {
-    if (!hasJoined) {
-      if (inCallStreamRef.current) {
-        inCallStreamRef.current.getTracks().forEach((t) => t.stop());
-        inCallStreamRef.current = null;
-        setInCallStream(null);
-      }
-      return;
+    if (inCallStreamRef.current) {
+      inCallStreamRef.current.getTracks().forEach((t) => t.stop());
+      inCallStreamRef.current = null;
+      setInCallStream(null);
     }
-
-    if (!inCallVideo || cameraPermissionError) {
-      if (inCallStreamRef.current) {
-        inCallStreamRef.current.getTracks().forEach((t) => t.stop());
-        inCallStreamRef.current = null;
-        setInCallStream(null);
-      }
-      if (inCallVideoRef.current) {
-        inCallVideoRef.current.srcObject = null;
-      }
-      return;
+    if (inCallVideoRef.current) {
+      inCallVideoRef.current.srcObject = null;
     }
-
-    let active = true;
-    const acquireInCallVideo = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: videoId ? { deviceId: { exact: videoId } } : true,
-          audio: false,
-        });
-        if (!active) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        if (inCallStreamRef.current) {
-          inCallStreamRef.current.getTracks().forEach((t) => t.stop());
-        }
-        inCallStreamRef.current = stream;
-        setInCallStream(stream);
-        if (inCallVideoRef.current) {
-          inCallVideoRef.current.srcObject = stream;
-          inCallVideoRef.current.play().catch(() => {});
-        }
-        initPipStreamRef.current();
-      } catch (err) {
-        console.warn('In-call camera stream error:', err);
-      }
-    };
-
-    acquireInCallVideo();
-
-    return () => {
-      active = false;
-    };
-    // initPipStream intentionally omitted: called via initPipStreamRef so PiP re-inits
-    // (e.g. from screen-share toggles) never re-trigger camera reacquisition (item 3).
-  }, [hasJoined, inCallVideo, videoId, cameraPermissionError]);
+    initPipStreamRef.current();
+  }, [hasJoined, inCallVideo, cameraPermissionError]);
 
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
@@ -3438,9 +3393,15 @@ export function MeetingRoomPage() {
             ref={jitsiContainerRef}
             style={{
               position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
+              top: 0,
+              bottom: 0,
+              left: 0,
+              // Actually shrink the surface (not just let the panel cover it) when a side panel
+              // is open, so Jitsi's own internal tile layout reflows to fit the visible area
+              // instead of arranging tiles for the full width and having some end up hidden
+              // behind the panel. 376px = panel's own 360px width + its 16px left margin.
+              right: activePanel ? '376px' : 0,
+              transition: 'right 0.2s ease',
               zIndex: 5,
               borderRadius: '24px',
               overflow: 'hidden',
@@ -3448,8 +3409,13 @@ export function MeetingRoomPage() {
             }}
           />
 
-          {/* Main Participant Stage: Presentation Mode (Local OR Remote Presenter) OR Single Card OR Multi-Participant Grid */}
-          {isScreenSharing || remoteScreenStream ? (
+          {/* Legacy avatar-only stage markup below: permanently disabled dead code, kept only
+              as a visual/structural reference. The real Jitsi surface above (zIndex:5, this is
+              the actual media plane now) is what renders video -- this old markup is exactly
+              the original bug (avatar cards with no video ever attached to them) and must never
+              be re-enabled without giving it real tracks. Safe to delete entirely in a follow-up
+              cleanup once the real surface has been visually verified in production. */}
+          {false && (isScreenSharing || remoteScreenStream ? (
             /* Presentation Mode: Main Stage Screen Share + Filmstrip of Attendees (Google Meet style) */
             <div
               style={{
@@ -4145,7 +4111,7 @@ export function MeetingRoomPage() {
                 );
               })}
             </div>
-          )}
+          ))}
 
           {/* ── Global Live Captions Overlay (works in ALL layouts) ── */}
           {captionsEnabled && (
