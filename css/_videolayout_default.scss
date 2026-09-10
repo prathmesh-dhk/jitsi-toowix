@@ -1,3 +1,24 @@
+// Toowix/Google-Meet style single-participant card: a capped-width, centered 16:9 tile with
+// clear background space on all sides, not a full-bleed panel -- used for both #dominantSpeaker
+// (no-video avatar state) and #largeVideoContainer (real-video state) so they're the exact
+// same box. This can only ever paint when there is truly one participant: .tile-view/
+// .stage-filmstrip (2+ participants) already force #dominantSpeaker and
+// #largeVideoElementsContainer to display:none (see filmstrip/_tile_view_overrides.scss), so
+// this can never affect the grid or stage-filmstrip layouts. clamp() caps at 1050px on desktop
+// (~960-1050px target at 1920px wide) and shrinks through tablet/mobile widths without
+// overflowing.
+@mixin toowixSingleParticipantCard {
+    position: absolute;
+    inset: 0;
+    margin: auto !important;
+    width: clamp(260px, 85vw, 1050px);
+    aspect-ratio: 16 / 9;
+    max-height: calc(100% - 32px);
+    max-width: calc(100% - 32px);
+    border-radius: $borderRadius;
+    overflow: hidden;
+}
+
 #videoconference_page {
     min-height: 100%;
     position: relative;
@@ -106,13 +127,12 @@
     }
 }
 
+// Real camera video (single-participant case) uses the exact same capped, centered card as
+// the no-video avatar state above (#dominantSpeaker) -- the inner <video> already has
+// object-fit: cover (see the #largeVideo, #largeVideoWrapper rule below), so it fills this
+// box correctly without distorting the aspect ratio.
 #largeVideoContainer {
-    height: 100%;
-    width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    margin: 0 !important;
+    @include toowixSingleParticipantCard;
 }
 
 #largeVideoWrapper {
@@ -210,20 +230,13 @@
     }
 }
 
-// Toowix/Google-Meet style: when there's no video, the whole large-video tile is filled with
-// the participant's own avatar color (set from LargeVideoManager.updateAvatar(), which computes
-// the same color the small avatar circle uses via getAvatarColor()) instead of a bare avatar
-// floating on the plain page background. Inset from the edges like a real tile, rounded to
-// match the rest of the Toowix design. The circle avatar itself still renders centered inside.
+// when there's no video, the whole large-video tile is filled with the participant's own
+// avatar color (set from LargeVideoManager.updateAvatar(), which computes the same color the
+// small avatar circle uses via getAvatarColor()) instead of a bare avatar floating on the
+// plain page background. The circle avatar itself still renders centered inside.
 #dominantSpeaker {
+    @include toowixSingleParticipantCard;
     visibility: hidden;
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-    border-radius: $borderRadius;
-    overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
