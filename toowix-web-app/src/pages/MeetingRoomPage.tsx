@@ -2103,13 +2103,23 @@ export function MeetingRoomPage() {
   }, []);
 
   useEffect(() => {
-    if (!displayName && auth.currentUser) {
-      setDisplayName(auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || '');
-    } else if (!displayName) {
-      // Restore guest name saved from previous session (for seamless rejoin)
-      const savedName = localStorage.getItem('toowix_guest_displayName');
-      if (savedName) setDisplayName(savedName);
+    if (displayName) return;
+    // Restore guest name saved from previous session (for seamless rejoin)
+    const savedName = localStorage.getItem('toowix_guest_displayName');
+    if (savedName) {
+      setDisplayName(savedName);
+      return;
     }
+    // auth.currentUser is often still null here because Firebase restores the
+    // session asynchronously after mount -- subscribe instead of reading it once,
+    // otherwise a logged-in user's name never gets picked up and the meeting
+    // falls back to a generic guest name/avatar.
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (user) {
+        setDisplayName((current) => current || user.displayName || user.email?.split('@')[0] || '');
+      }
+    });
+    return unsubscribe;
   }, [displayName]);
 
   // Real-time media preview hook (cleaned up cleanly on joining)
@@ -2576,6 +2586,10 @@ export function MeetingRoomPage() {
             SHOW_CHROME_EXTENSION_BANNER: false,
             TOOLBAR_BUTTONS: [],
             SETTINGS_SECTIONS: [],
+            // Jitsi's own join/leave toasts would duplicate the Toowix UI's own
+            // participantJoined/participantLeft-driven roster updates -- this is the
+            // supported config key for suppressing them (not a new custom flag).
+            DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
           },
         });
 

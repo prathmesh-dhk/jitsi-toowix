@@ -433,6 +433,20 @@ export class VideoContainer extends LargeContainer {
             // stream won't be played. Normally if we attach a new stream we won't resize the video element until the
             // stream has been played. But setting width/height to 0 will prevent the video from playing.
 
+            // Force-fill the container instead of leaving (or falling back to) whatever box a
+            // previous resize with a real video stream computed. Without this, switching from
+            // camera-on to avatar-only (camera off) leaves the wrapper stuck at the last fitted
+            // video box -- a small, off-center tile -- rather than the full, centered container
+            // the avatar (#dominantSpeaker) is meant to be centered within.
+            this.$wrapper.css({
+                width: '100%',
+                height: '100%',
+                top: 0,
+                bottom: 'auto',
+                left: 0,
+                right: 'auto'
+            });
+
             return;
         }
 
