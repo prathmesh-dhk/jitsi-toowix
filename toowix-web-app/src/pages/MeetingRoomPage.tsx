@@ -1,5 +1,6 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
+import { useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
@@ -859,7 +860,7 @@ export function MeetingRoomPage() {
   const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
   const [remoteParticipants, setRemoteParticipants] = useState<
-    Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean }>
+    Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
   >([]);
   const [currentTime, setCurrentTime] = useState(() =>
     new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -2245,7 +2246,10 @@ export function MeetingRoomPage() {
         setIsModerator(!!data.isHost || !!data.moderator);
         attendanceTokenRef.current = data.attendanceToken;
         attendanceEntryIdRef.current = data.participantEntryId;
-        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        // Deliberately NOT stopping mediaStreamRef's tracks here -- useJitsiMeeting adopts this
+        // exact live prejoin stream (see the existingStream option below) instead of stopping it
+        // and asking the browser for a fresh one, so real hardware never sees a
+        // stop-then-immediately-reacquire race for the same camera/mic.
         setInWaitingRoom(false);
         setHasJoined(true);
       } else if (data.status === 'WAITING') {
@@ -2284,7 +2288,8 @@ export function MeetingRoomPage() {
           setJwtToken(data.jitsiToken);
           attendanceTokenRef.current = data.attendanceToken;
           attendanceEntryIdRef.current = data.participantEntryId;
-          mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+          // Same as the direct-admission path above -- leave the prejoin stream alone, it gets
+          // adopted by useJitsiMeeting.
           setInWaitingRoom(false);
           setHasJoined(true);
         } else if (data.status === 'DENIED') {
@@ -2462,14 +2467,9 @@ export function MeetingRoomPage() {
         localStorage.setItem('toowix_guest_displayName', displayName);
       }
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      const api = jitsiApiRef.current;
-      jitsiApiRef.current = null;
-      try {
-        api?.executeCommand('hangup');
-      } catch {}
-      try {
-        api?.dispose();
-      } catch {}
+      // The lib-jitsi-meet connection/room itself is torn down by useJitsiMeeting's own
+      // cleanup effect when this page unmounts (which navigate() below triggers) -- no
+      // explicit hangup/dispose call needed here.
       navigate('/meeting-ended', {
         replace: true,
         state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round(meetingSeconds / 60), displayName },
@@ -2488,9 +2488,6 @@ export function MeetingRoomPage() {
       postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
     } catch {}
     try {
-      jitsiApiRef.current?.executeCommand('endConference');
-    } catch {}
-    try {
       const headers = await accountHeaders();
       await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
         method: 'POST',
@@ -2502,218 +2499,109 @@ export function MeetingRoomPage() {
 
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
-  const loadJitsiScript = useCallback((): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      if ((window as any).JitsiMeetExternalAPI) {
-        resolve();
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = `https://${jitsiDomain}/external_api.js`;
-      script.async = true;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Jitsi external API script'));
-      document.body.appendChild(script);
-    });
-  }, [jitsiDomain]);
+  // Direct lib-jitsi-meet integration -- no IFrame, no external_api.js. We own the real
+  // local/remote MediaStreamTracks directly now, which is what lets the self-view tile, PiP
+  // compositor and remote participant tiles below show real video instead of avatars (the
+  // IFrame API could never hand those out across origins -- see the removed dead-code comment
+  // this replaced).
+  const jitsiMeeting = useJitsiMeeting({
+    jitsiDomain,
+    roomName: roomId,
+    jwt: jwtToken || undefined,
+    displayName: displayName.trim() || 'Participant',
+    enabled: hasJoined && Boolean(jwtToken),
+    startWithAudioMuted: !micEnabled,
+    startWithVideoMuted: !videoEnabled || cameraPermissionError,
+    // The prejoin lobby's already-open camera/mic (see useMediaPreview) -- adopted directly
+    // instead of stopped-then-reacquired, so joining never races real hardware for the device.
+    existingStream: mediaStreamRef.current,
+    audioDeviceId: audioId,
+    videoDeviceId: videoId,
+    onKicked: () => leaveMeeting('You were removed from the meeting by a moderator.')
+  });
+
+  // Reconcile the custom mic/video buttons and self-view with the real conference state.
+  useEffect(() => {
+    setInCallMuted(jitsiMeeting.localAudioMuted);
+  }, [ jitsiMeeting.localAudioMuted ]);
+  useEffect(() => {
+    setInCallVideo(!jitsiMeeting.localVideoMuted);
+  }, [ jitsiMeeting.localVideoMuted ]);
+  useEffect(() => {
+    inCallStreamRef.current = jitsiMeeting.localCameraStream;
+    setInCallStream(jitsiMeeting.localCameraStream);
+  }, [ jitsiMeeting.localCameraStream ]);
+  useEffect(() => {
+    screenStreamRef.current = jitsiMeeting.localScreenStream;
+    setScreenStream(jitsiMeeting.localScreenStream);
+  }, [ jitsiMeeting.localScreenStream ]);
+  useEffect(() => {
+    setIsScreenSharing(jitsiMeeting.isScreenSharing);
+  }, [ jitsiMeeting.isScreenSharing ]);
+  useEffect(() => {
+    setRemoteScreenStream(jitsiMeeting.remoteScreenShare?.stream || null);
+    setRemotePresenterName(jitsiMeeting.remoteScreenShare?.presenterName || null);
+  }, [ jitsiMeeting.remoteScreenShare ]);
+  useEffect(() => {
+    if (jitsiMeeting.error) {
+      setCallError(jitsiMeeting.error);
+    }
+  }, [ jitsiMeeting.error ]);
+  // Camera-specific failures are surfaced separately from jitsiMeeting.error (which covers
+  // connection/mic/general failures) so a camera problem never gets conflated with -- or blocks
+  // -- an otherwise-working audio-only join. Reuses the same existing banner, no new UI.
+  useEffect(() => {
+    if (jitsiMeeting.cameraError) {
+      setCallError(jitsiMeeting.cameraError);
+    }
+  }, [ jitsiMeeting.cameraError ]);
+  // The custom camera on/off button reflects real track availability, not just mute state -- if
+  // the camera failed at join time, inCallVideo must show "off" (not a live-but-invisible mute)
+  // so clicking it goes through toggleVideo's retry path instead of trying to unmute a track
+  // that doesn't exist.
+  useEffect(() => {
+    if (!jitsiMeeting.hasVideoTrack) {
+      setInCallVideo(false);
+    }
+  }, [ jitsiMeeting.hasVideoTrack ]);
+
+  // Map the hook's remote-participant record into the array shape the existing UI/roster
+  // already expects (id, name, muted, video, raisedHand[, stream/audioStream for tiles]).
+  useEffect(() => {
+    const list = Object.values(jitsiMeeting.remoteParticipants);
+
+    setRemoteParticipants((prev) =>
+      list.map((r) => {
+        const existing = prev.find((p) => p.id === r.id);
+
+        return {
+          id: r.id,
+          name: r.name,
+          muted: r.muted,
+          video: r.video,
+          raisedHand: existing?.raisedHand || false,
+          stream: r.stream,
+          audioStream: r.audioStream,
+        } as any;
+      })
+    );
+    setRemoteParticipantCount(list.length);
+  }, [ jitsiMeeting.remoteParticipants ]);
 
   useEffect(() => {
     if (!hasJoined || !jwtToken) return;
-    let disposed = false;
-    const listeners: Array<[string, (...args: any[]) => void]> = [];
+    if (jitsiMeeting.joined) {
+      localParticipantIdRef.current = 'local';
+      recordAttendanceJoin();
+    }
+  }, [ hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin ]);
 
-    loadJitsiScript()
-      .then(() => {
-        if (disposed || !jitsiContainerRef.current) return;
-        const JitsiMeetExternalAPI = (window as any).JitsiMeetExternalAPI;
-
-        const api = new JitsiMeetExternalAPI(jitsiDomain, {
-          roomName: roomId,
-          parentNode: jitsiContainerRef.current,
-          jwt: jwtToken,
-          devices: {
-            audioInput: media.devices.find((d) => d.deviceId === audioId)?.label,
-            videoInput: media.devices.find((d) => d.deviceId === videoId)?.label,
-            audioOutput: media.devices.find((d) => d.deviceId === outputId)?.label,
-          },
-          width: '100%',
-          height: '100%',
-          userInfo: { displayName: displayName.trim() || 'Participant' },
-          configOverwrite: {
-            prejoinPageEnabled: false,
-            prejoinConfig: { enabled: false, hideDisplayName: true },
-            requireDisplayName: false,
-            startWithAudioMuted: !micEnabled,
-            startWithVideoMuted: !videoEnabled || cameraPermissionError,
-            disableDeepLinking: true,
-            disableInviteFunctions: true,
-            doNotStoreRoom: true,
-            hideConferenceSubject: true,
-            hideConferenceTimer: true,
-            hideRecordingLabel: true,
-            hideParticipantsStats: true,
-            toolbarButtons: [],
-            toolbarConfig: { alwaysVisible: false, initialTimeout: 0 },
-            disableScreensharing: false,
-            p2p: { enabled: false },
-            enableEndConference: false,
-          },
-          interfaceConfigOverwrite: {
-            SHOW_JITSI_WATERMARK: false,
-            SHOW_WATERMARK_FOR_GUESTS: false,
-            JITSI_WATERMARK_LINK: '',
-            SHOW_BRAND_WATERMARK: false,
-            BRAND_WATERMARK_LINK: '',
-            SHOW_POWERED_BY: false,
-            DEFAULT_LOGO_URL: '',
-            DEFAULT_WELCOME_PAGE_LOGO_URL: '',
-            APP_NAME: 'Toowix Meet',
-            NATIVE_APP_NAME: 'Toowix Meet',
-            PROVIDER_NAME: 'Toowix',
-            MOBILE_APP_PROMO: false,
-            HIDE_DEEP_LINKING_LOGO: true,
-            DISPLAY_WELCOME_PAGE_CONTENT: false,
-            SHOW_CHROME_EXTENSION_BANNER: false,
-            TOOLBAR_BUTTONS: [],
-            SETTINGS_SECTIONS: [],
-            // Jitsi's own join/leave toasts would duplicate the Toowix UI's own
-            // participantJoined/participantLeft-driven roster updates -- this is the
-            // supported config key for suppressing them (not a new custom flag).
-            DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
-          },
-        });
-
-        jitsiApiRef.current = api;
-        const on = (name: string, listener: (...args: any[]) => void) => {
-          api.addListener(name, listener);
-          listeners.push([name, listener]);
-        };
-
-        on('participantJoined', (data: any) => {
-          const pName = (data?.displayName || 'Participant').trim();
-          setRemoteParticipants((prev) => {
-            // Deduplicate: remove any existing entry with same id OR same name
-            const filtered = prev.filter(
-              (p) => p.id !== data?.id && p.name.trim().toLowerCase() !== pName.toLowerCase()
-            );
-            // Never add the local user as a remote participant (prevents ghost self-card on rejoin)
-            const localName = (displayName || '').trim().toLowerCase();
-            if (localName && pName.toLowerCase() === localName) {
-              setRemoteParticipantCount(filtered.length);
-              return filtered;
-            }
-            const next = [...filtered, { id: data?.id || String(Date.now()), name: pName, muted: true, video: false }];
-            setRemoteParticipantCount(next.length);
-            return next;
-          });
-        });
-        on('participantLeft', (data: any) => {
-          setRemoteParticipants((prev) => {
-            const next = prev.filter((p) => p.id !== data?.id);
-            setRemoteParticipantCount(next.length);
-            return next;
-          });
-        });
-        on('videoConferenceLeft', () => leaveMeeting('You left the meeting.'));
-        on('readyToClose', () => leaveMeeting('You left the meeting.'));
-        on('participantKickedOut', (data: any) => {
-          const kickedId = data?.kicked?.id || data?.id;
-          const isLocal = data?.kicked?.local || kickedId === localParticipantIdRef.current || kickedId === 'local';
-          if (isLocal) {
-            leaveMeeting('You were removed from the meeting by a moderator.');
-          } else if (kickedId) {
-            setRemoteParticipants((prev) => {
-              const next = prev.filter((p) => p.id !== kickedId);
-              setRemoteParticipantCount(next.length);
-              return next;
-            });
-          }
-        });
-        on('endpointTextMessageReceived', (event: any) => {
-          try {
-            const raw = event?.data?.eventData?.text || event?.text || '';
-            if (raw.includes('MEETING_ENDED_FOR_EVERYONE')) {
-              leaveMeeting('The host has ended the meeting for everyone.');
-              return;
-            }
-            if (raw.startsWith('{') && handleIncomingSignalRef.current) {
-              const sig = JSON.parse(raw);
-              handleIncomingSignalRef.current(sig);
-            }
-          } catch {}
-        });
-        on('audioMuteStatusChanged', ({ muted }: any) => setInCallMuted(muted));
-        // Reconciles the local video button with the real conference state -- without this,
-        // a failed/no-op toggleVideo command (host force-mute, camera error, or the API not
-        // being ready yet) leaves the button showing the opposite of what's actually on-air.
-        on('videoMuteStatusChanged', ({ muted }: any) => setInCallVideo(!muted));
-        on('errorOccurred', (data: any) => {
-          const errorCode = data?.error?.name || data?.error?.type || data?.type || '';
-          console.warn('Jitsi errorOccurred:', errorCode);
-          if (/conference\.connectionError|connection\.dropped|connection\.otherError/i.test(errorCode)) {
-            setCallError('Connection to the meeting server failed. Check your network and try rejoining.');
-          } else if (/conference\.iceFailed|ice/i.test(errorCode)) {
-            setCallError('Media connection failed (ICE/network issue). Try rejoining or switching networks.');
-          } else if (/microphone|mic/i.test(errorCode)) {
-            setCallError('Microphone error. Check that a microphone is connected and permitted.');
-          } else if (/camera/i.test(errorCode)) {
-            setCallError('Camera error. Check that a camera is connected and permitted.');
-          } else if (errorCode) {
-            setCallError('A meeting error occurred. If audio/video stops working, try rejoining.');
-          }
-        });
-        on('recordingStatusChanged', ({ on: enabled }: any) => {
-          setRecording(!!enabled);
-          if (enabled) {
-            setRecordingToast('Recording: on');
-          } else {
-            setRecordingToast(null);
-          }
-        });
-        on('screenSharingStatusChanged', ({ on: enabled }: any) => setIsScreenSharing(!!enabled));
-        on('raiseHandUpdated', (data: any) => {
-          if (data && data.id) {
-            setRemoteParticipants((prev) =>
-              prev.map((p) => (p.id === data.id ? { ...p, raisedHand: !!data.handRaised } : p))
-            );
-          }
-        });
-        // Remote participants are inserted with muted: true as a placeholder (see
-        // participantJoined above); without this, that placeholder is never corrected and every
-        // remote tile shows the mic-off badge permanently regardless of their real audio state.
-        on('participantMuted', ({ id, isMuted, mediaType }: any) => {
-          if (!id) return;
-          if (mediaType === 'audio') {
-            setRemoteParticipants((prev) =>
-              prev.map((p) => (p.id === id ? { ...p, muted: !!isMuted } : p))
-            );
-          } else if (mediaType === 'video') {
-            // Remote participants are inserted with video: false as a placeholder (see
-            // participantJoined above); reconcile it the same way audio does, otherwise a
-            // participant who turns their camera on never updates in the custom cards/roster.
-            setRemoteParticipants((prev) =>
-              prev.map((p) => (p.id === id ? { ...p, video: !isMuted } : p))
-            );
-          }
-        });
-
-        on('videoConferenceJoined', (data: any) => {
-          localParticipantIdRef.current = data?.id || 'local';
-          recordAttendanceJoin();
-        });
-      })
-      .catch(() => setCallError('Conference could not load. Exit and try joining again.'));
-
+  useEffect(() => {
     return () => {
-      disposed = true;
       recordAttendanceLeave();
-      if (jitsiApiRef.current) {
-        listeners.forEach(([name, listener]) => jitsiApiRef.current.removeListener(name, listener));
-        jitsiApiRef.current.dispose();
-        jitsiApiRef.current = null;
-      }
     };
-  }, [hasJoined]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ hasJoined ]);
 
   // Periodic check if meeting was ended for everyone by host (fast 1-second interval)
   useEffect(() => {
@@ -2744,28 +2632,38 @@ export function MeetingRoomPage() {
     }
   }, [hasJoined]);
 
-  // In-call camera: Jitsi (via the visible iframe) is the SOLE owner of the microphone/camera
-  // tracks actually published to the conference -- there is no second getUserMedia() capture
-  // here anymore. inCallStream/inCallStreamRef are kept declared (always null while joined)
-  // purely because every consumer (the self-view tiles here, the PiP canvas compositor in
-  // drawPipFrame, and DocumentPipContent) already has a graceful avatar/initial fallback for
-  // when there is no local stream -- see the `inCallVideo && inCallStream ? <video/> : <avatar>`
-  // pattern used throughout. So local self-view in the main stage and in PiP now shows an
-  // avatar instead of a live thumbnail; that is the accepted trade-off for not opening a
-  // second camera capture while Jitsi already owns the device (the IFrame API cannot hand out
-  // its internal MediaStreamTracks across origins, so there is no supported way to source real
-  // frames for those secondary surfaces from the real conference video).
+  // In-call camera: with the direct lib-jitsi-meet integration we own the real local camera
+  // MediaStreamTrack ourselves (see useJitsiMeeting above, synced into inCallStream) -- unlike
+  // the old IFrame, which owned the camera exclusively and could never hand a MediaStreamTrack
+  // across origins to this DOM. inCallStream is now genuinely live while joined, so the
+  // self-view tiles below, the PiP canvas compositor and DocumentPipContent all render a real
+  // thumbnail instead of the avatar fallback they still gracefully fall back to when it's null
+  // (e.g. camera off, still connecting).
+  //
+  // inCallVideoRef is reused across three conditionally-rendered layouts (single/grid/
+  // presentation sidebar), so a plain effect can miss a remount when the visible layout swaps
+  // without inCallVideo/inCallStream themselves changing -- setInCallVideoNode (used as the
+  // ref callback below) attaches on every mount directly, and this effect re-attaches
+  // whenever the stream itself changes while a node is already mounted.
   useEffect(() => {
-    if (inCallStreamRef.current) {
-      inCallStreamRef.current.getTracks().forEach((t) => t.stop());
-      inCallStreamRef.current = null;
-      setInCallStream(null);
-    }
     if (inCallVideoRef.current) {
-      inCallVideoRef.current.srcObject = null;
+      if (inCallVideo && inCallStream) {
+        inCallVideoRef.current.srcObject = inCallStream;
+        inCallVideoRef.current.play().catch(() => {});
+      } else {
+        inCallVideoRef.current.srcObject = null;
+      }
     }
     initPipStreamRef.current();
-  }, [hasJoined, inCallVideo, cameraPermissionError]);
+  }, [hasJoined, inCallVideo, inCallStream, cameraPermissionError]);
+
+  const setInCallVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    inCallVideoRef.current = node;
+    if (node && inCallVideo && inCallStream) {
+      node.srcObject = inCallStream;
+      node.play().catch(() => {});
+    }
+  }, [inCallVideo, inCallStream]);
 
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
@@ -2790,24 +2688,11 @@ export function MeetingRoomPage() {
   }, [remoteScreenStream]);
 
   const handleToggleInCallMic = () => {
-    // Only flip optimistically if the command can actually be sent -- otherwise the button
-    // shows a state the conference never received and audioMuteStatusChanged never fires to
-    // correct it (nothing was toggled, so nothing reconciles).
-    if (!jitsiApiRef.current) return;
-    const nextMuted = inCallMuted === null ? false : !inCallMuted;
-    setInCallMuted(nextMuted);
-    try {
-      jitsiApiRef.current.executeCommand('toggleAudio');
-    } catch {}
+    jitsiMeeting.toggleAudio();
   };
 
   const handleToggleInCallVideo = () => {
-    if (!jitsiApiRef.current) return;
-    const nextVideo = !inCallVideo;
-    setInCallVideo(nextVideo);
-    try {
-      jitsiApiRef.current.executeCommand('toggleVideo');
-    } catch {}
+    jitsiMeeting.toggleVideo();
   };
 
   useEffect(() => {
@@ -2832,22 +2717,26 @@ export function MeetingRoomPage() {
     }
   }, [inCallVideo]);
 
-  // Recording state is NOT set optimistically here. `recording` and `recordingToast` are
-  // driven solely by the real `recordingStatusChanged` External API event (see the `on(...)`
-  // handler above), which reflects actual Jibri on/off status. This only requests the
-  // start/stop and shows a transient "requesting" message distinct from that real confirmation.
+  // Recording is not tracked via a real Jibri status event in this first pass (the IFrame's
+  // recordingStatusChanged event doesn't exist on the direct lib-jitsi-meet path) -- this
+  // requests start/stop directly against the JitsiConference and sets `recording` optimistically.
+  // Follow-up: subscribe to room-level recording status if/when Jibri confirmation is needed.
   const handleToggleRecording = () => {
+    const room = jitsiMeeting.room.current;
+
     if (recording) {
       setRecordingToast('Stopping recording…');
       setTimeout(() => setRecordingToast((t) => (t === 'Stopping recording…' ? null : t)), 3500);
       try {
-        jitsiApiRef.current?.executeCommand('stopRecording', 'file');
+        room?.stopRecording?.();
+        setRecording(false);
       } catch {}
     } else {
       setRecordingToast('Requesting recording…');
       setTimeout(() => setRecordingToast((t) => (t === 'Requesting recording…' ? null : t)), 3500);
       try {
-        jitsiApiRef.current?.executeCommand('startRecording', { mode: 'file' });
+        room?.startRecording?.({ mode: 'file' });
+        setRecording(true);
       } catch {}
     }
   };
@@ -2859,9 +2748,9 @@ export function MeetingRoomPage() {
       setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
     }, 2400);
     setShowReactions(false);
-    try {
-      jitsiApiRef.current?.executeCommand('sendReaction', emoji);
-    } catch {}
+    // Broadcast via the same HTTP signal channel chat/raise-hand already use (real-time and
+    // Jitsi-independent), so other participants also see the floating emoji.
+    postRoomSignal('REACTION', { emoji, name: displayName || 'Participant' });
   };
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
@@ -2923,23 +2812,18 @@ export function MeetingRoomPage() {
     setTimeout(() => setHandRaisedToast(null), 3000);
     postRoomSignal('HAND_TOGGLED', { raised: nextRaised, name: displayName || 'Participant' });
     try {
-      jitsiApiRef.current?.executeCommand('toggleRaiseHand');
+      jitsiMeeting.room.current?.setLocalParticipantProperty?.('raisedHand', nextRaised);
     } catch {}
   };
 
-  // Screen sharing goes through Jitsi's own supported command so it's transmitted over the
-  // real JVB/TURN media path (with system/tab audio where the browser supports it) instead of
-  // a separate STUN-only RTCPeerConnection mesh. isScreenSharing itself is kept in sync by the
-  // screenSharingStatusChanged listener registered in the Jitsi init effect, not set here --
-  // Jitsi may reject or the user may cancel the OS share picker, so we let the event confirm
-  // the real outcome rather than assuming success.
+  // Screen sharing goes through lib-jitsi-meet's real JVB media path (replaceTrack swaps the
+  // published camera track for a desktop track) -- not a separate STUN-only RTCPeerConnection
+  // mesh. isScreenSharing is kept in sync from the hook's own state (set only after the OS
+  // share picker actually succeeds), not optimistically here.
   const handleToggleScreenShare = () => {
-    try {
-      jitsiApiRef.current?.executeCommand('toggleShareScreen');
-    } catch (err) {
-      console.warn('toggleShareScreen failed:', err);
+    jitsiMeeting.toggleScreenShare().catch(() => {
       setCallError('Could not start screen sharing. Please try again.');
-    }
+    });
   };
 
   // Real-time WebRTC Signaling Listener for incoming presentation & peer stream
@@ -2998,6 +2882,16 @@ export function MeetingRoomPage() {
             text,
           },
         ]);
+      } else if (type === 'REACTION') {
+        const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
+
+        if (!emoji) return;
+        const id = Date.now() + Math.random();
+
+        setFloatingEmojis((prev) => [...prev, { id, emoji, left: 45 + (Math.random() * 10 - 5) }]);
+        setTimeout(() => {
+          setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
+        }, 2400);
       }
     };
 
@@ -3027,19 +2921,15 @@ export function MeetingRoomPage() {
     };
   }, [hasJoined, roomId, isScreenSharing, postRoomSignal]);
 
-  // Apply a device change to the live conference via Jitsi's real device APIs -- updating only
-  // React state here would leave the UI showing one device while Jitsi keeps using another.
-  // Falls back to the system default and surfaces an error toast if the switch itself fails
-  // (e.g. the device was unplugged between selection and the call).
+  // Apply a device change to the live conference via lib-jitsi-meet's own replaceTrack --
+  // updating only React state here would leave the UI showing one device while the conference
+  // keeps publishing another. Falls back to the system default and surfaces an error toast if
+  // the switch itself fails (e.g. the device was unplugged between selection and the call).
   const applyJitsiDevice = useCallback(
     async (kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string) => {
-      const api = jitsiApiRef.current;
-      if (!api || !hasJoined) return;
+      if (!hasJoined) return;
       try {
-        const label = media.devices.find((d) => d.deviceId === deviceId)?.label || '';
-        if (kind === 'audioInput') await api.setAudioInputDevice(label, deviceId);
-        else if (kind === 'videoInput') await api.setVideoInputDevice(label, deviceId);
-        else await api.setAudioOutputDevice(label, deviceId);
+        await jitsiMeeting.switchDevice(kind, deviceId);
       } catch (err) {
         console.warn(`Failed to switch ${kind}:`, err);
         setCallError(
@@ -3049,7 +2939,7 @@ export function MeetingRoomPage() {
         );
       }
     },
-    [hasJoined, media.devices]
+    [hasJoined, jitsiMeeting]
   );
 
   const handleSelectAudioDevice = (devId: string) => {
@@ -3069,36 +2959,34 @@ export function MeetingRoomPage() {
     void applyJitsiDevice('audioOutput', devId);
   };
 
-  // Refresh the device list from Jitsi's own view of available devices once in-call, and fall
-  // back to the system default automatically if the currently selected device disappears
-  // (e.g. a USB headset is unplugged mid-call).
+  // Refresh the device list from the browser's own device APIs once in-call (no Jitsi
+  // dependency), and fall back to the system default automatically if the currently selected
+  // device disappears (e.g. a USB headset is unplugged mid-call).
   useEffect(() => {
     if (!hasJoined) return;
-    const api = jitsiApiRef.current;
-    if (!api) return;
     let cancelled = false;
     const refresh = async () => {
       try {
-        const result = await api.getAvailableDevices();
+        const result = await navigator.mediaDevices?.enumerateDevices();
+
         if (cancelled || !result) return;
-        const { audioInput, videoInput, audioOutput } = result as {
-          audioInput?: MediaDeviceInfo[];
-          videoInput?: MediaDeviceInfo[];
-          audioOutput?: MediaDeviceInfo[];
-        };
-        if (audioId && audioInput && !audioInput.some((d) => d.deviceId === audioId)) {
+        const audioInput = result.filter((d) => d.kind === 'audioinput');
+        const videoInput = result.filter((d) => d.kind === 'videoinput');
+        const audioOutput = result.filter((d) => d.kind === 'audiooutput');
+
+        if (audioId && audioInput.length && !audioInput.some((d) => d.deviceId === audioId)) {
           setAudioId('');
           setCallError('Your microphone was disconnected. Switched to the system default.');
         }
-        if (videoId && videoInput && !videoInput.some((d) => d.deviceId === videoId)) {
+        if (videoId && videoInput.length && !videoInput.some((d) => d.deviceId === videoId)) {
           setVideoId('');
           setCallError('Your camera was disconnected. Switched to the system default.');
         }
-        if (outputId && audioOutput && !audioOutput.some((d) => d.deviceId === outputId)) {
+        if (outputId && audioOutput.length && !audioOutput.some((d) => d.deviceId === outputId)) {
           setOutputId('');
         }
       } catch {
-        // getAvailableDevices isn't supported on every browser/platform; ignore silently.
+        // enumerateDevices isn't supported on every browser/platform; ignore silently.
       }
     };
     void refresh();
@@ -3385,41 +3273,34 @@ export function MeetingRoomPage() {
             overflow: 'hidden',
           }}
         >
-          {/* Real Jitsi conference surface: this is the actual media plane. It owns the
-              microphone/camera/screen-share tracks and renders real local + remote video via
-              JitsiMeetExternalAPI's own tile layout. The IFrame API cannot hand raw remote
-              MediaStreamTracks to custom React <video> elements (cross-origin), so this iframe
-              -- not the avatar-only cards below, which remain as an inert visual fallback until
-              the API finishes loading -- is what participants actually see. Native Jitsi
-              toolbar/watermark/branding are suppressed via configOverwrite/interfaceConfigOverwrite
-              below; the Toowix header, toolbar and dialogs stay as overlays on top (z-index 10+). */}
-          <div
-            ref={jitsiContainerRef}
-            style={{
-              position: 'absolute',
-              top: 0,
-              bottom: 0,
-              left: 0,
-              // Actually shrink the surface (not just let the panel cover it) when a side panel
-              // is open, so Jitsi's own internal tile layout reflows to fit the visible area
-              // instead of arranging tiles for the full width and having some end up hidden
-              // behind the panel. 376px = panel's own 360px width + its 16px left margin.
-              right: activePanel ? '376px' : 0,
-              transition: 'right 0.2s ease',
-              zIndex: 5,
-              borderRadius: '24px',
-              overflow: 'hidden',
-              backgroundColor: '#000000',
-            }}
-          />
+          {/* Live audio elements for every remote participant -- always mounted regardless of
+              which visual layout (single/grid/presentation) is active below, so audio never
+              drops when the layout switches. Not visible; video is rendered per-layout below. */}
+          {remoteParticipants.map((remote: any) => (
+            <audio
+              key={`audio-${remote.id}`}
+              autoPlay
+              ref={(el) => {
+                // Setting .srcObject always triggers the media load algorithm even when
+                // reassigning the same value -- this ref callback is inline (recreated every
+                // render) and this component re-renders every second from its own timers, so
+                // without this guard the remote video/audio would reload and blank out
+                // constantly instead of only when the stream object actually changes.
+                if (el && remote.audioStream && el.srcObject !== remote.audioStream) {
+                  el.srcObject = remote.audioStream;
+                  el.play().catch(() => {});
+                }
+              }}
+            />
+          ))}
 
-          {/* Legacy avatar-only stage markup below: permanently disabled dead code, kept only
+          {/* Google-Meet-style stage markup below: was previously dead code behind an IFrame
               as a visual/structural reference. The real Jitsi surface above (zIndex:5, this is
               the actual media plane now) is what renders video -- this old markup is exactly
               the original bug (avatar cards with no video ever attached to them) and must never
               be re-enabled without giving it real tracks. Safe to delete entirely in a follow-up
               cleanup once the real surface has been visually verified in production. */}
-          {false && (isScreenSharing || remoteScreenStream ? (
+          {(isScreenSharing || remoteScreenStream ? (
             /* Presentation Mode: Main Stage Screen Share + Filmstrip of Attendees (Google Meet style) */
             <div
               style={{
@@ -3549,7 +3430,7 @@ export function MeetingRoomPage() {
                 >
                   {inCallVideo ? (
                     <video
-                      ref={inCallVideoRef}
+                      ref={setInCallVideoNode}
                       autoPlay
                       playsInline
                       muted
@@ -3651,22 +3532,36 @@ export function MeetingRoomPage() {
                         justifyContent: 'center',
                       }}
                     >
-                      <div
-                        style={{
-                          width: '44px',
-                          height: '44px',
-                          borderRadius: '50%',
-                          backgroundColor: rTheme.avatarBg,
-                          color: '#FFFFFF',
-                          fontSize: '20px',
-                          fontWeight: 500,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {rInitial}
-                      </div>
+                      {(remote as any).video && (remote as any).stream ? (
+                        <video
+                          autoPlay
+                          playsInline
+                          ref={(el) => {
+                            if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
+                              el.srcObject = (remote as any).stream;
+                              el.play().catch(() => {});
+                            }
+                          }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '44px',
+                            height: '44px',
+                            borderRadius: '50%',
+                            backgroundColor: rTheme.avatarBg,
+                            color: '#FFFFFF',
+                            fontSize: '20px',
+                            fontWeight: 500,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {rInitial}
+                        </div>
+                      )}
                       <div
                         style={{
                           position: 'absolute',
@@ -3752,7 +3647,7 @@ export function MeetingRoomPage() {
               {/* Camera-ON State */}
               {inCallVideo ? (
                 <video
-                  ref={inCallVideoRef}
+                  ref={setInCallVideoNode}
                   autoPlay
                   playsInline
                   muted
@@ -3909,7 +3804,7 @@ export function MeetingRoomPage() {
               >
                 {inCallVideo ? (
                   <video
-                    ref={inCallVideoRef}
+                    ref={setInCallVideoNode}
                     autoPlay
                     playsInline
                     muted
@@ -4025,35 +3920,49 @@ export function MeetingRoomPage() {
                       justifyContent: 'center',
                     }}
                   >
-                    <div
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        backgroundColor: remoteTheme.tileBg,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
+                    {(remote as any).video && (remote as any).stream ? (
+                      <video
+                        autoPlay
+                        playsInline
+                        ref={(el) => {
+                          if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
+                            el.srcObject = (remote as any).stream;
+                            el.play().catch(() => {});
+                          }
+                        }}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
+                      />
+                    ) : (
                       <div
                         style={{
-                          width: remoteParticipants.length <= 1 ? '96px' : '72px',
-                          height: remoteParticipants.length <= 1 ? '96px' : '72px',
-                          borderRadius: '50%',
-                          backgroundColor: remoteTheme.avatarBg,
-                          color: '#FFFFFF',
-                          fontSize: remoteParticipants.length <= 1 ? '44px' : '32px',
-                          fontWeight: 500,
-                          fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+                          width: '100%',
+                          height: '100%',
+                          backgroundColor: remoteTheme.tileBg,
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
                         }}
                       >
-                        {initial}
+                        <div
+                          style={{
+                            width: remoteParticipants.length <= 1 ? '96px' : '72px',
+                            height: remoteParticipants.length <= 1 ? '96px' : '72px',
+                            borderRadius: '50%',
+                            backgroundColor: remoteTheme.avatarBg,
+                            color: '#FFFFFF',
+                            fontSize: remoteParticipants.length <= 1 ? '44px' : '32px',
+                            fontWeight: 500,
+                            fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                          }}
+                        >
+                          {initial}
+                        </div>
                       </div>
-                    </div>
+                    )}
                     {/* Remote Participant Name in Bottom-Left */}
                     <div
                       style={{

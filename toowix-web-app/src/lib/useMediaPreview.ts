@@ -36,6 +36,14 @@ export function useMediaPreview(
 ) {
   const stream = useRef<MediaStream | null>(null);
   const preview = useRef<HTMLVideoElement | null>(null);
+  // Plain synchronous assignment during render (NOT inside a useEffect) -- this must be visible
+  // to the mic/camera effects' cleanup functions in the SAME commit that flips `joined` to true,
+  // before those cleanups run. An effect-based sync (`useEffect(() => { ref.current = joined }, [joined])`)
+  // would update too late: React runs ALL cleanups for a commit before ANY effect setups
+  // (including this sync one), so the cleanup would still see the previous render's stale value.
+  const joinedRef = useRef(joined);
+
+  joinedRef.current = joined;
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [micError, setMicError] = useState('');
   const [cameraError, setCameraError] = useState('');
@@ -92,10 +100,12 @@ export function useMediaPreview(
   // 2. Microphone Capture & Level Meter (Isolated Lifecycle)
   useEffect(() => {
     if (joined) {
-      if (audioTrackRef.current) {
-        audioTrackRef.current.stop();
-        audioTrackRef.current = null;
-      }
+      // Ownership of the live track transfers to the conference at this point (see
+      // MeetingRoomPage's handleJoinMeeting -- it hands this exact track to lib-jitsi-meet via
+      // createLocalTracksFromMediaStreams instead of stopping it and asking for a fresh one, to
+      // avoid a real-hardware "device busy" race between the two). Just stop tracking it here
+      // for the level meter/preview; do NOT call .stop() -- that would kill the conference's mic.
+      audioTrackRef.current = null;
       if (audioContextRef.current) {
         void audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
@@ -205,7 +215,13 @@ export function useMediaPreview(
         void audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
       }
-      if (audioTrackRef.current) {
+      // This cleanup fires on EVERY dependency change, including the joined:false -> true
+      // transition itself (React runs the previous effect instance's cleanup before the new
+      // "if (joined)" branch above even executes) -- joinedRef.current already reflects the NEW
+      // value by the time this runs (see its declaration), so skip stopping the track here when
+      // we're transitioning into joined; ownership is transferring to the conference, not being
+      // torn down. Only a genuine unmount-while-not-joined or a real audioId change should stop it.
+      if (!joinedRef.current && audioTrackRef.current) {
         audioTrackRef.current.stop();
         audioTrackRef.current = null;
       }
@@ -216,10 +232,10 @@ export function useMediaPreview(
   // 3. Camera Capture (Isolated Lifecycle - Failure will NOT block Mic)
   useEffect(() => {
     if (joined) {
-      if (videoTrackRef.current) {
-        videoTrackRef.current.stop();
-        videoTrackRef.current = null;
-      }
+      // See the matching comment in the microphone effect above -- ownership transfers to the
+      // conference, so just stop tracking the track here, don't stop the hardware track itself.
+      videoTrackRef.current = null;
+
       return;
     }
 
@@ -277,7 +293,8 @@ export function useMediaPreview(
 
     return () => {
       active = false;
-      if (videoTrackRef.current) {
+      // See the matching comment in the microphone effect's cleanup above.
+      if (!joinedRef.current && videoTrackRef.current) {
         videoTrackRef.current.stop();
         videoTrackRef.current = null;
       }
@@ -298,21 +315,16 @@ export function useMediaPreview(
     }
   }, [video]);
 
-  // Full cleanup on unmount or when joining
+  // Full cleanup on unmount or when joining. NOTE: stream.current (and its tracks) is
+  // deliberately left alone here when joined -- MeetingRoomPage hands this exact live
+  // MediaStream to lib-jitsi-meet (createLocalTracksFromMediaStreams) instead of us stopping it
+  // and the conference asking for a fresh one, so real hardware never sees a
+  // stop-then-immediately-reacquire race. The conference becomes responsible for eventually
+  // stopping these tracks (on leave/unmount), not this hook, once joined is true.
   useEffect(() => {
     if (joined) {
-      if (audioTrackRef.current) {
-        audioTrackRef.current.stop();
-        audioTrackRef.current = null;
-      }
-      if (videoTrackRef.current) {
-        videoTrackRef.current.stop();
-        videoTrackRef.current = null;
-      }
-      if (stream.current) {
-        stream.current.getTracks().forEach((t) => t.stop());
-        stream.current = null;
-      }
+      audioTrackRef.current = null;
+      videoTrackRef.current = null;
       if (audioContextRef.current) {
         void audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;

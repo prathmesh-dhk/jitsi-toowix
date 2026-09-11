@@ -264,6 +264,7 @@ function HomePage() {
 }
 
 import { MeetingRoomPage } from './pages/MeetingRoomPage';
+import { DirectMeetingRoomPage } from './pages/DirectMeetingRoomPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
@@ -294,6 +295,9 @@ export default function App() {
           <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
+          {/* New direct lib-jitsi-meet path -- no iframe, real tracks in real <video>
+              elements. Separate route, zero risk to the working /meet/:roomId iframe flow. */}
+          <Route path="/meet-direct/:roomId" element={<DirectMeetingRoomPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signin" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
