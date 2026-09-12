@@ -268,6 +268,19 @@ export function useJitsiMeeting({
   const [ isScreenSharing, setIsScreenSharing ] = useState(false);
   const [ remoteParticipants, setRemoteParticipants ] = useState<Record<string, IRemoteParticipant>>({});
   const [ remoteScreenShare, setRemoteScreenShare ] = useState<{ stream: MediaStream; presenterName: string } | null>(null);
+  // Native Jitsi/JVB-computed dominant speaker (real audio-level based detection, not a
+  // client-side guess) -- 'local' when the local user is currently the loudest, a remote
+  // participant id otherwise, or null before anyone has spoken. Drives speaker-view auto-follow.
+  const [ dominantSpeakerId, setDominantSpeakerId ] = useState<string | null>(null);
+  const [ localParticipantId, setLocalParticipantId ] = useState<string | null>(null);
+  // Real, JVB/Jibri-confirmed recording state -- driven by RECORDER_STATE_CHANGED, which fires
+  // for EVERY participant (it rides XMPP presence broadcast to the whole room, not just the
+  // person who clicked start), unlike a locally-optimistic flag that only the initiator would
+  // ever see. recordingSessionId is required by stopRecording(sessionID) -- calling stop
+  // without it silently fails to send a clean stop signal to Jibri, which is what was producing
+  // unplayable/corrupt recordings (Jibri needs a real stop to finalize the file).
+  const [ recording, setRecording ] = useState(false);
+  const recordingSessionIdRef = useRef<string | null>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
   // one exists. Read by toggleAudio/toggleVideo/switchDevice/toggleScreenShare, which are
@@ -473,7 +486,39 @@ export function useJitsiMeeting({
               if (isStale()) {
                 return;
               }
+              setLocalParticipantId(room.myUserId());
               setJoined(true);
+            });
+
+            // Native, JVB-computed dominant speaker -- fires with the local user's own id when
+            // they're the loudest, matching localParticipantIdRef.current, so the caller can
+            // tell "local" and "a specific remote participant" apart with a single id.
+            room.on(JitsiMeetJS.events.conference.DOMINANT_SPEAKER_CHANGED, (id: string) => {
+              if (isStale()) {
+                return;
+              }
+              setDominantSpeakerId(id);
+            });
+
+            // Real Jibri recording status -- rides XMPP presence, so every participant (not
+            // just whoever clicked start) receives it, and it reflects Jibri's actual
+            // confirmed state (on/off/pending/error), not an optimistic guess.
+            room.on(JitsiMeetJS.events.conference.RECORDER_STATE_CHANGED, (session: any) => {
+              if (isStale()) {
+                return;
+              }
+              const status = session?.getStatus?.();
+
+              if (status === 'on') {
+                recordingSessionIdRef.current = session.getID();
+                setRecording(true);
+              } else if (status === 'off' || status === '') {
+                recordingSessionIdRef.current = null;
+                setRecording(false);
+              }
+              // 'pending' and other transitional statuses: leave `recording` as-is: not yet
+              // confirmed on, and stopping too is more useful as "still recording until told
+              // otherwise" than flickering the UI on every intermediate state.
             });
 
             room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, (errorType: string) => {
@@ -655,6 +700,10 @@ export function useJitsiMeeting({
       setIsScreenSharing(false);
       setError(null);
       setCameraError(null);
+      setDominantSpeakerId(null);
+      setLocalParticipantId(null);
+      setRecording(false);
+      recordingSessionIdRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ enabled, jwt, roomName, jitsiDomain ]);
@@ -791,6 +840,34 @@ export function useJitsiMeeting({
     }
   }, []);
 
+  // startRecording/stopRecording wrap the raw JitsiConference API correctly: stopRecording
+  // REQUIRES the session id returned by startRecording (calling it with no id, as the previous
+  // direct room.stopRecording() call at the page level did, never sends Jibri a proper stop --
+  // Jibri only cleanly finalizes the file on a real stop, which is why recordings looked like
+  // they captured but wouldn't play back). `recording` itself is the real RECORDER_STATE_CHANGED-
+  // driven state above, not set optimistically here.
+  const startRecording = useCallback(async () => {
+    const room = roomRef.current;
+
+    if (!room) {
+      throw new Error('Not connected to the conference yet.');
+    }
+    const session = await room.startRecording({ mode: 'file' });
+
+    if (session?.getID) {
+      recordingSessionIdRef.current = session.getID();
+    }
+  }, []);
+
+  const stopRecording = useCallback(async () => {
+    const room = roomRef.current;
+
+    if (!room || !recordingSessionIdRef.current) {
+      return;
+    }
+    await room.stopRecording(recordingSessionIdRef.current);
+  }, []);
+
   useEffect(() => {
     toggleScreenShareRef.current = () => { void toggleScreenShare(); };
   }, [ toggleScreenShare ]);
@@ -878,9 +955,14 @@ export function useJitsiMeeting({
     isScreenSharing,
     remoteParticipants,
     remoteScreenShare,
+    dominantSpeakerId,
+    localParticipantId,
+    recording,
     toggleAudio,
     toggleVideo,
     toggleScreenShare,
+    startRecording,
+    stopRecording,
     switchDevice,
     room: roomRef
   };

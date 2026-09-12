@@ -42,6 +42,8 @@ import {
   Radio,
   Send,
   UserPlus,
+  Maximize,
+  Minimize,
 } from 'lucide-react';
 import { useTheme } from '../lib/theme';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
@@ -191,7 +193,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
     if (node) {
       node.srcObject = activeScreenStream;
       if (activeScreenStream) {
-        node.play().catch(() => {});
+        node.play().catch(() => { });
       }
     }
   }, [activeScreenStream]);
@@ -201,7 +203,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
     if (node) {
       if (inCallVideo && inCallStream) {
         node.srcObject = inCallStream;
-        node.play().catch(() => {});
+        node.play().catch(() => { });
       } else {
         node.srcObject = null;
       }
@@ -213,7 +215,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
     if (screenVideoRef.current) {
       screenVideoRef.current.srcObject = activeScreenStream;
       if (activeScreenStream) {
-        screenVideoRef.current.play().catch(() => {});
+        screenVideoRef.current.play().catch(() => { });
       }
     }
   }, [activeScreenStream]);
@@ -223,7 +225,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
     if (localVideoRef.current) {
       if (inCallVideo && inCallStream) {
         localVideoRef.current.srcObject = inCallStream;
-        localVideoRef.current.play().catch(() => {});
+        localVideoRef.current.play().catch(() => { });
       } else {
         localVideoRef.current.srcObject = null;
       }
@@ -866,6 +868,47 @@ export function MeetingRoomPage() {
     new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   );
   const [activePanel, setActivePanel] = useState<'chat' | 'people' | 'info' | 'host' | 'activities' | null>(null);
+  // Jitsi-style tile view toggle: ON (default) shows the equal-size participant grid; OFF shows
+  // one large pinned participant with the rest in a filmstrip sidebar. Shortcut 'W' toggles.
+  const [tileViewEnabled, setTileViewEnabled] = useState(true);
+  const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+
+  // Keyboard shortcuts (Jitsi/Google Meet convention): 'w' tile view, 'm' mic, 'v' camera,
+  // 'f' full screen. mic/video/fullscreen go through refs (toggleInCallMicRef etc.) synced
+  // elsewhere, not called directly, since this effect mounts once (empty deps) before those
+  // handlers exist -- the refs avoid the stale-closure problem that would otherwise cause.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      // Ignore combos (Ctrl/Alt/Meta+key) so browser/OS shortcuts on the same letter still work.
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+      }
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        setTileViewEnabled((prev) => !prev);
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        toggleInCallMicRef.current();
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        toggleInCallVideoRef.current();
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreenRef.current();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showVideoMenu, setShowVideoMenu] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
@@ -934,9 +977,10 @@ export function MeetingRoomPage() {
   // their dependency array -- its identity changes with isScreenSharing/remoteScreenStream,
   // and depending on it directly was re-running unrelated effects (item 3: camera
   // reacquisition) every time anyone started/stopped screen sharing.
-  const initPipStreamRef = useRef<() => void>(() => {});
+  const initPipStreamRef = useRef<() => void>(() => { });
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showOtherWaysModal, setShowOtherWaysModal] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const localParticipantIdRef = useRef<string>('local');
   const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -987,10 +1031,11 @@ export function MeetingRoomPage() {
   const pipDisplayNameRef = useRef('');
   const pipAutoTriggeredRef = useRef(false);
   const pipInCallVideoRef = useRef(inCallVideo);
-  const toggleInCallMicRef = useRef<() => void>(() => {});
-  const toggleInCallVideoRef = useRef<() => void>(() => {});
-  const toggleRaiseHandRef = useRef<() => void>(() => {});
-  const leaveMeetingRef = useRef<() => void>(() => {});
+  const toggleInCallMicRef = useRef<() => void>(() => { });
+  const toggleInCallVideoRef = useRef<() => void>(() => { });
+  const toggleFullscreenRef = useRef<() => void>(() => { });
+  const toggleRaiseHandRef = useRef<() => void>(() => { });
+  const leaveMeetingRef = useRef<() => void>(() => { });
   const pipInCallMutedRef = useRef<boolean | null>(null);
   const pipIsHandRaisedRef = useRef(false);
   const hasJoinedRef = useRef(hasJoined);
@@ -1007,7 +1052,7 @@ export function MeetingRoomPage() {
     if (!captionsEnabled) {
       // Stop any active recognition session
       if (speechRecognitionRef.current) {
-        try { speechRecognitionRef.current.stop(); } catch {}
+        try { speechRecognitionRef.current.stop(); } catch { }
         speechRecognitionRef.current = null;
       }
       setCaptionText('');
@@ -1057,20 +1102,20 @@ export function MeetingRoomPage() {
     recognition.onend = () => {
       // Auto-restart so captions stay active as long as enabled
       if (captionsEnabled && speechRecognitionRef.current === recognition) {
-        try { recognition.start(); } catch {}
+        try { recognition.start(); } catch { }
       }
     };
 
     try {
       recognition.start();
       speechRecognitionRef.current = recognition;
-    } catch {}
+    } catch { }
 
     return () => {
-      try { recognition.stop(); } catch {}
+      try { recognition.stop(); } catch { }
       speechRecognitionRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [captionsEnabled]);
 
   // Dev-only PiP diagnostics -- trigger source, lifecycle phase/kind/origin/requestId,
@@ -1096,7 +1141,7 @@ export function MeetingRoomPage() {
         videoTrackState: track?.readyState ?? null,
         ...details,
       });
-    } catch {}
+    } catch { }
   };
 
   // ── Keep PiP refs in sync with live state ────────────────────────────────
@@ -1618,7 +1663,7 @@ export function MeetingRoomPage() {
   const setupPipWindow = (pipWin: any, isManual: boolean) => {
     // If call was left while request was pending, immediately close window
     if (!hasJoinedRef.current) {
-      try { pipWin.close(); } catch {}
+      try { pipWin.close(); } catch { }
       return;
     }
 
@@ -1626,7 +1671,7 @@ export function MeetingRoomPage() {
     [...document.head.querySelectorAll('style, link[rel="stylesheet"]')].forEach((el) => {
       try {
         pipWin.document.head.appendChild(el.cloneNode(true));
-      } catch {}
+      } catch { }
     });
     pipWin.document.body.style.margin = '0';
     pipWin.document.body.style.backgroundColor = '#1E1F21';
@@ -1677,7 +1722,7 @@ export function MeetingRoomPage() {
     // chrome around it) -- never do that; the canvas path already handles screen share.
     if (!isSyntheticStreamHealthy(pipCanvasStreamRef.current)) {
       if (pipCanvasStreamRef.current) {
-        try { pipCanvasStreamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+        try { pipCanvasStreamRef.current.getTracks().forEach((t) => t.stop()); } catch { }
         pipCanvasStreamRef.current = null;
       }
     }
@@ -1691,7 +1736,7 @@ export function MeetingRoomPage() {
     (vid as any).autoPictureInPicture = true;
     vid.setAttribute('autopictureinpicture', 'true');
     if (vid.paused) {
-      vid.play().catch(() => {});
+      vid.play().catch(() => { });
     }
   }, []);
 
@@ -1717,7 +1762,7 @@ export function MeetingRoomPage() {
     if (!vid || !primingStream) return;
     if (vid.srcObject !== primingStream) {
       vid.srcObject = primingStream;
-      vid.play().catch(() => {});
+      vid.play().catch(() => { });
     }
   }, [hasJoined, inCallStream]);
 
@@ -1770,7 +1815,7 @@ export function MeetingRoomPage() {
         }
         stopPipDraw();
       } else if (closingKind === 'document') {
-        try { documentPipWindowRef.current?.close(); } catch {}
+        try { documentPipWindowRef.current?.close(); } catch { }
       }
     } finally {
       // Only finalize to idle if this operation still owns the lifecycle -- a native close
@@ -1840,7 +1885,7 @@ export function MeetingRoomPage() {
             height: 500,
           });
           if (!isCurrent()) {
-            try { pipWin.close(); } catch {}
+            try { pipWin.close(); } catch { }
             return;
           }
           setupPipWindow(pipWin, origin === 'manual');
@@ -1872,7 +1917,7 @@ export function MeetingRoomPage() {
       if (!vid) return;
       initPipStream();
       if (vid.paused) {
-        try { await vid.play(); } catch {}
+        try { await vid.play(); } catch { }
       }
       if (!isCurrent()) return;
 
@@ -1891,7 +1936,7 @@ export function MeetingRoomPage() {
       try {
         await (vid as any).requestPictureInPicture();
         if (!isCurrent()) {
-          try { await (document as any).exitPictureInPicture(); } catch {}
+          try { await (document as any).exitPictureInPicture(); } catch { }
           return;
         }
         lc.phase = 'open';
@@ -1951,7 +1996,7 @@ export function MeetingRoomPage() {
   const handleTogglePiP = useCallback(async () => {
     pipUserEnabledRef.current = true;
     setShowPipEnableCTA(false);
-    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch { }
     const lc = pipLifecycleRef.current;
     if (lc.phase === 'open') {
       await closePip();
@@ -1968,6 +2013,35 @@ export function MeetingRoomPage() {
     handleTogglePiPRef.current = handleTogglePiP;
   }, [openPip, handleTogglePiP]);
 
+  // Full screen: uses the real browser Fullscreen API on the whole page (not a screen-share
+  // capture) -- same as Google Meet/Zoom's "Full screen" toggle. Tracks the browser's own
+  // fullscreenchange event so the button/icon stays correct even if the user exits via Esc or
+  // the browser's native UI instead of clicking the button again.
+  const handleToggleFullscreen = useCallback(async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // Fullscreen can be denied by the browser (e.g. not user-gesture-triggered, or an
+      // embedding iframe without allowfullscreen) -- fail silently, nothing else to do.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    toggleFullscreenRef.current = handleToggleFullscreen;
+  }, [handleToggleFullscreen]);
+
   // Tab switch listener: cleanup and cancellation ONLY. Automatic OPENING is handled solely
   // by the Media Session 'enterpictureinpicture' handler registered below -- see the comment
   // above openPip for why calling the same open routine directly from visibilitychange used
@@ -1981,22 +2055,22 @@ export function MeetingRoomPage() {
           logPipDiagnostic('trigger', { source: 'media-session' });
           triggerAutoPiPRef.current?.();
         });
-      } catch {}
+      } catch { }
       try {
         navigator.mediaSession.setActionHandler('togglemicrophone' as any, () => {
           toggleInCallMicRef.current();
         });
-      } catch {}
+      } catch { }
       try {
         navigator.mediaSession.setActionHandler('togglecamera' as any, () => {
           toggleInCallVideoRef.current();
         });
-      } catch {}
+      } catch { }
       try {
         navigator.mediaSession.setActionHandler('hangup' as any, () => {
           leaveMeetingRef.current();
         });
-      } catch {}
+      } catch { }
     }
 
     const handleVisibility = () => {
@@ -2038,7 +2112,7 @@ export function MeetingRoomPage() {
           navigator.mediaSession.setActionHandler('togglemicrophone' as any, null);
           navigator.mediaSession.setActionHandler('togglecamera' as any, null);
           navigator.mediaSession.setActionHandler('hangup' as any, null);
-        } catch {}
+        } catch { }
       }
       stopPipDraw();
       if (pipCanvasStreamRef.current) {
@@ -2046,12 +2120,12 @@ export function MeetingRoomPage() {
         pipCanvasStreamRef.current = null;
       }
       if (documentPipWindowRef.current) {
-        try { documentPipWindowRef.current.close(); } catch {}
+        try { documentPipWindowRef.current.close(); } catch { }
         documentPipWindowRef.current = null;
         setDocumentPipActive(false);
       }
       if ((document as any).pictureInPictureElement) {
-        (document as any).exitPictureInPicture().catch(() => {});
+        (document as any).exitPictureInPicture().catch(() => { });
       }
       if (pipVideoRef.current) {
         pipVideoRef.current.srcObject = null;
@@ -2078,20 +2152,20 @@ export function MeetingRoomPage() {
     if (!pipSupported) return;
     if (pipUserEnabledRef.current) return;
     let dismissed = false;
-    try { dismissed = localStorage.getItem('toowix_pip_cta_seen') === '1'; } catch {}
+    try { dismissed = localStorage.getItem('toowix_pip_cta_seen') === '1'; } catch { }
     if (dismissed) return;
     const timer = setTimeout(() => setShowPipEnableCTA(true), 4000);
     return () => clearTimeout(timer);
   }, [hasJoined]);
 
   const handleEnablePipCTA = () => {
-    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch { }
     setShowPipEnableCTA(false);
     handleTogglePiPRef.current?.();
   };
 
   const handleDismissPipCTA = () => {
-    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch {}
+    try { localStorage.setItem('toowix_pip_cta_seen', '1'); } catch { }
     setShowPipEnableCTA(false);
   };
 
@@ -2212,7 +2286,7 @@ export function MeetingRoomPage() {
   // ---------------------------------------------------------------------------
   const handleJoinMeeting = async (audioOnly: boolean = false) => {
     if (!meetingInfo || meetingInfo.cancelled || joining || leavingRef.current) return;
-    try { initPipStream(); } catch {}
+    try { initPipStream(); } catch { }
     setJoining(true);
     setAdmissionError('');
 
@@ -2306,7 +2380,7 @@ export function MeetingRoomPage() {
         if (data.hostAnnouncement !== undefined) {
           setHostAnnouncement(data.hostAnnouncement);
         }
-      } catch {}
+      } catch { }
     }, 2000);
 
     return () => {
@@ -2323,7 +2397,7 @@ export function MeetingRoomPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestId: waitingRequestId }),
       });
-    } catch {}
+    } catch { }
     setInWaitingRoom(false);
     navigate('/', { replace: true });
   };
@@ -2346,7 +2420,7 @@ export function MeetingRoomPage() {
         if (active && Array.isArray(data.waiting)) {
           setPendingQueue(data.waiting);
         }
-      } catch {}
+      } catch { }
     };
 
     pollQueue();
@@ -2367,7 +2441,7 @@ export function MeetingRoomPage() {
         body: JSON.stringify({ requestId: id, admitAll }),
       });
       setPendingQueue((prev) => (admitAll ? [] : prev.filter((p) => p.id !== id)));
-    } catch {}
+    } catch { }
   };
 
   const handleDenyParticipant = async (id: string) => {
@@ -2379,7 +2453,7 @@ export function MeetingRoomPage() {
         body: JSON.stringify({ requestId: id }),
       });
       setPendingQueue((prev) => prev.filter((p) => p.id !== id));
-    } catch {}
+    } catch { }
   };
 
   const handleBroadcastAnnouncement = async () => {
@@ -2393,7 +2467,7 @@ export function MeetingRoomPage() {
       });
       setShowAnnounceDialog(false);
       setAnnouncementText('');
-    } catch {}
+    } catch { }
   };
 
   // Meeting duration timer
@@ -2442,7 +2516,7 @@ export function MeetingRoomPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ attendanceToken: attendanceTokenRef.current }),
-    }).catch(() => {});
+    }).catch(() => { });
   }, [roomId]);
 
   const recordAttendanceLeave = useCallback(() => {
@@ -2454,7 +2528,7 @@ export function MeetingRoomPage() {
       headers: { 'Content-Type': 'application/json' },
       keepalive: true,
       body: JSON.stringify({ attendanceToken: token }),
-    }).catch(() => {});
+    }).catch(() => { });
   }, [roomId]);
 
   const leaveMeeting = useCallback(
@@ -2486,14 +2560,14 @@ export function MeetingRoomPage() {
     // actually terminates the conference for everyone regardless of whether this arrives.
     try {
       postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
-    } catch {}
+    } catch { }
     try {
       const headers = await accountHeaders();
       await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
       });
-    } catch {}
+    } catch { }
     leaveMeeting('You ended the meeting for everyone.');
   };
 
@@ -2523,30 +2597,30 @@ export function MeetingRoomPage() {
   // Reconcile the custom mic/video buttons and self-view with the real conference state.
   useEffect(() => {
     setInCallMuted(jitsiMeeting.localAudioMuted);
-  }, [ jitsiMeeting.localAudioMuted ]);
+  }, [jitsiMeeting.localAudioMuted]);
   useEffect(() => {
     setInCallVideo(!jitsiMeeting.localVideoMuted);
-  }, [ jitsiMeeting.localVideoMuted ]);
+  }, [jitsiMeeting.localVideoMuted]);
   useEffect(() => {
     inCallStreamRef.current = jitsiMeeting.localCameraStream;
     setInCallStream(jitsiMeeting.localCameraStream);
-  }, [ jitsiMeeting.localCameraStream ]);
+  }, [jitsiMeeting.localCameraStream]);
   useEffect(() => {
     screenStreamRef.current = jitsiMeeting.localScreenStream;
     setScreenStream(jitsiMeeting.localScreenStream);
-  }, [ jitsiMeeting.localScreenStream ]);
+  }, [jitsiMeeting.localScreenStream]);
   useEffect(() => {
     setIsScreenSharing(jitsiMeeting.isScreenSharing);
-  }, [ jitsiMeeting.isScreenSharing ]);
+  }, [jitsiMeeting.isScreenSharing]);
   useEffect(() => {
     setRemoteScreenStream(jitsiMeeting.remoteScreenShare?.stream || null);
     setRemotePresenterName(jitsiMeeting.remoteScreenShare?.presenterName || null);
-  }, [ jitsiMeeting.remoteScreenShare ]);
+  }, [jitsiMeeting.remoteScreenShare]);
   useEffect(() => {
     if (jitsiMeeting.error) {
       setCallError(jitsiMeeting.error);
     }
-  }, [ jitsiMeeting.error ]);
+  }, [jitsiMeeting.error]);
   // Camera-specific failures are surfaced separately from jitsiMeeting.error (which covers
   // connection/mic/general failures) so a camera problem never gets conflated with -- or blocks
   // -- an otherwise-working audio-only join. Reuses the same existing banner, no new UI.
@@ -2554,7 +2628,7 @@ export function MeetingRoomPage() {
     if (jitsiMeeting.cameraError) {
       setCallError(jitsiMeeting.cameraError);
     }
-  }, [ jitsiMeeting.cameraError ]);
+  }, [jitsiMeeting.cameraError]);
   // The custom camera on/off button reflects real track availability, not just mute state -- if
   // the camera failed at join time, inCallVideo must show "off" (not a live-but-invisible mute)
   // so clicking it goes through toggleVideo's retry path instead of trying to unmute a track
@@ -2563,7 +2637,26 @@ export function MeetingRoomPage() {
     if (!jitsiMeeting.hasVideoTrack) {
       setInCallVideo(false);
     }
-  }, [ jitsiMeeting.hasVideoTrack ]);
+  }, [jitsiMeeting.hasVideoTrack]);
+
+  // Speaker view (tile view OFF) auto-follows whoever is actually talking -- real, JVB-computed
+  // dominant speaker detection, not a guess. Maps the hook's raw id to the 'local' sentinel the
+  // speaker-view render already understands when the local user is the one speaking. Manually
+  // clicking a tile still overrides this (see setPinnedParticipantId below); this effect only
+  // fires again the next time the dominant speaker genuinely changes.
+  useEffect(() => {
+    if (!jitsiMeeting.dominantSpeakerId) return;
+    const isLocal = jitsiMeeting.dominantSpeakerId === jitsiMeeting.localParticipantId;
+
+    setPinnedParticipantId(isLocal ? 'local' : jitsiMeeting.dominantSpeakerId);
+  }, [jitsiMeeting.dominantSpeakerId, jitsiMeeting.localParticipantId]);
+
+  // Real recording state (RECORDER_STATE_CHANGED) -- this fires identically for every
+  // participant in the room, not just whoever clicked start, so the blinking "REC" indicator
+  // below is accurate for everyone.
+  useEffect(() => {
+    setRecording(jitsiMeeting.recording);
+  }, [jitsiMeeting.recording]);
 
   // Map the hook's remote-participant record into the array shape the existing UI/roster
   // already expects (id, name, muted, video, raisedHand[, stream/audioStream for tiles]).
@@ -2586,7 +2679,7 @@ export function MeetingRoomPage() {
       })
     );
     setRemoteParticipantCount(list.length);
-  }, [ jitsiMeeting.remoteParticipants ]);
+  }, [jitsiMeeting.remoteParticipants]);
 
   useEffect(() => {
     if (!hasJoined || !jwtToken) return;
@@ -2594,14 +2687,14 @@ export function MeetingRoomPage() {
       localParticipantIdRef.current = 'local';
       recordAttendanceJoin();
     }
-  }, [ hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin ]);
+  }, [hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin]);
 
   useEffect(() => {
     return () => {
       recordAttendanceLeave();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ hasJoined ]);
+  }, [hasJoined]);
 
   // Periodic check if meeting was ended for everyone by host (fast 1-second interval)
   useEffect(() => {
@@ -2614,7 +2707,7 @@ export function MeetingRoomPage() {
         if (data.ended || data.cancelled) {
           leaveMeeting('The host has ended the meeting for everyone.');
         }
-      } catch {}
+      } catch { }
     }, 1000);
     return () => clearInterval(interval);
   }, [hasJoined, roomId, leaveMeeting]);
@@ -2649,7 +2742,7 @@ export function MeetingRoomPage() {
     if (inCallVideoRef.current) {
       if (inCallVideo && inCallStream) {
         inCallVideoRef.current.srcObject = inCallStream;
-        inCallVideoRef.current.play().catch(() => {});
+        inCallVideoRef.current.play().catch(() => { });
       } else {
         inCallVideoRef.current.srcObject = null;
       }
@@ -2661,7 +2754,7 @@ export function MeetingRoomPage() {
     inCallVideoRef.current = node;
     if (node && inCallVideo && inCallStream) {
       node.srcObject = inCallStream;
-      node.play().catch(() => {});
+      node.play().catch(() => { });
     }
   }, [inCallVideo, inCallStream]);
 
@@ -2670,7 +2763,7 @@ export function MeetingRoomPage() {
     if (presentationVideoRef.current) {
       if (isScreenSharing && screenStreamRef.current) {
         presentationVideoRef.current.srcObject = screenStreamRef.current;
-        presentationVideoRef.current.play().catch(() => {});
+        presentationVideoRef.current.play().catch(() => { });
       } else {
         presentationVideoRef.current.srcObject = null;
       }
@@ -2682,7 +2775,7 @@ export function MeetingRoomPage() {
     if (remotePresentationVideoRef.current) {
       remotePresentationVideoRef.current.srcObject = remoteScreenStream;
       if (remoteScreenStream) {
-        remotePresentationVideoRef.current.play().catch(() => {});
+        remotePresentationVideoRef.current.play().catch(() => { });
       }
     }
   }, [remoteScreenStream]);
@@ -2705,7 +2798,7 @@ export function MeetingRoomPage() {
     if ('mediaSession' in navigator && 'setMicrophoneActive' in navigator.mediaSession) {
       try {
         (navigator.mediaSession as any).setMicrophoneActive(!inCallMuted);
-      } catch {}
+      } catch { }
     }
   }, [inCallMuted]);
 
@@ -2713,31 +2806,30 @@ export function MeetingRoomPage() {
     if ('mediaSession' in navigator && 'setCameraActive' in navigator.mediaSession) {
       try {
         (navigator.mediaSession as any).setCameraActive(inCallVideo);
-      } catch {}
+      } catch { }
     }
   }, [inCallVideo]);
 
-  // Recording is not tracked via a real Jibri status event in this first pass (the IFrame's
-  // recordingStatusChanged event doesn't exist on the direct lib-jitsi-meet path) -- this
-  // requests start/stop directly against the JitsiConference and sets `recording` optimistically.
-  // Follow-up: subscribe to room-level recording status if/when Jibri confirmation is needed.
-  const handleToggleRecording = () => {
-    const room = jitsiMeeting.room.current;
-
+  // `recording` itself is driven by jitsiMeeting.recording (real, RECORDER_STATE_CHANGED-based,
+  // visible to every participant -- see the sync effect near the other jitsiMeeting.* effects
+  // below) -- this just requests the start/stop and shows a transient toast for the request
+  // itself, distinct from the real confirmation.
+  const handleToggleRecording = async () => {
     if (recording) {
       setRecordingToast('Stopping recording…');
       setTimeout(() => setRecordingToast((t) => (t === 'Stopping recording…' ? null : t)), 3500);
       try {
-        room?.stopRecording?.();
-        setRecording(false);
-      } catch {}
+        await jitsiMeeting.stopRecording();
+      } catch { }
     } else {
       setRecordingToast('Requesting recording…');
       setTimeout(() => setRecordingToast((t) => (t === 'Requesting recording…' ? null : t)), 3500);
       try {
-        room?.startRecording?.({ mode: 'file' });
-        setRecording(true);
-      } catch {}
+        await jitsiMeeting.startRecording();
+      } catch {
+        setRecordingToast(null);
+        setCallError('Could not start recording. Please try again.');
+      }
     }
   };
 
@@ -2800,7 +2892,7 @@ export function MeetingRoomPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(signalData),
         });
-      } catch {}
+      } catch { }
     },
     [roomId, displayName]
   );
@@ -2813,7 +2905,7 @@ export function MeetingRoomPage() {
     postRoomSignal('HAND_TOGGLED', { raised: nextRaised, name: displayName || 'Participant' });
     try {
       jitsiMeeting.room.current?.setLocalParticipantProperty?.('raisedHand', nextRaised);
-    } catch {}
+    } catch { }
   };
 
   // Screen sharing goes through lib-jitsi-meet's real JVB media path (replaceTrack swaps the
@@ -2912,7 +3004,7 @@ export function MeetingRoomPage() {
             handleIncomingSignal(sig);
           }
         }
-      } catch {}
+      } catch { }
     }, 600);
 
     return () => {
@@ -3288,7 +3380,7 @@ export function MeetingRoomPage() {
                 // constantly instead of only when the stream object actually changes.
                 if (el && remote.audioStream && el.srcObject !== remote.audioStream) {
                   el.srcObject = remote.audioStream;
-                  el.play().catch(() => {});
+                  el.play().catch(() => { });
                 }
               }}
             />
@@ -3539,7 +3631,7 @@ export function MeetingRoomPage() {
                           ref={(el) => {
                             if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
                               el.srcObject = (remote as any).stream;
-                              el.play().catch(() => {});
+                              el.play().catch(() => { });
                             }
                           }}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
@@ -3755,6 +3847,365 @@ export function MeetingRoomPage() {
               )}
 
             </div>
+          ) : !tileViewEnabled ? (
+            /* Speaker View (Jitsi tile-view OFF): one large pinned participant + filmstrip sidebar */
+            <div
+              style={{
+                width: '100%',
+                maxWidth: activePanel ? 'calc(100% - 380px)' : '100%',
+                height: '100%',
+                maxHeight: 'calc(100vh - 170px)',
+                display: 'flex',
+                gap: '16px',
+                transition: 'max-width 0.25s ease',
+              }}
+            >
+              {(() => {
+                const isLocalPinned = pinnedParticipantId === 'local';
+                const pinnedRemote = remoteParticipants.find((p) => p.id === pinnedParticipantId);
+                const pinned = isLocalPinned
+                  ? null
+                  : (pinnedRemote || remoteParticipants[0]);
+                const others = isLocalPinned
+                  ? remoteParticipants
+                  : remoteParticipants.filter((p) => p.id !== pinned?.id);
+                const pinnedTheme = pinned ? getParticipantColorTheme(pinned.name, 1) : localTheme;
+                const pinnedInitial = pinned ? (pinned.name.trim() || 'P').charAt(0).toUpperCase() : participantInitial;
+
+                return (
+                  <>
+                    {/* Main pinned stage */}
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        height: '100%',
+                        borderRadius: '24px',
+                        overflow: 'hidden',
+                        position: 'relative',
+                        backgroundColor: pinnedTheme.tileBg,
+                        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {/* Unpin button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPinnedParticipantId(null);
+                          setTileViewEnabled(true);
+                        }}
+                        title="Unpin (return to tile view)"
+                        style={{
+                          position: 'absolute',
+                          top: '16px',
+                          left: '16px',
+                          padding: '6px 12px',
+                          borderRadius: '20px',
+                          backgroundColor: 'rgba(32, 33, 36, 0.8)',
+                          backdropFilter: 'blur(6px)',
+                          border: '1px solid rgba(255, 255, 255, 0.15)',
+                          color: '#FFFFFF',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          zIndex: 10,
+                        }}
+                      >
+                        <Pin size={13} color="#8AB4F8" style={{ transform: 'rotate(45deg)' }} />
+                        <span>Unpin</span>
+                      </button>
+
+                      {isLocalPinned ? (
+                        inCallVideo ? (
+                          <video
+                            autoPlay
+                            muted
+                            playsInline
+                            ref={setInCallVideoNode}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: '120px',
+                              height: '120px',
+                              borderRadius: '50%',
+                              backgroundColor: localTheme.avatarBg,
+                              color: '#FFFFFF',
+                              fontSize: '52px',
+                              fontWeight: 500,
+                              fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                            }}
+                          >
+                            {participantInitial}
+                          </div>
+                        )
+                      ) : (pinned as any)?.video && (pinned as any)?.stream ? (
+                        <video
+                          autoPlay
+                          playsInline
+                          ref={(el) => {
+                            if (el && (pinned as any).stream && el.srcObject !== (pinned as any).stream) {
+                              el.srcObject = (pinned as any).stream;
+                              el.play().catch(() => { });
+                            }
+                          }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: '120px',
+                            height: '120px',
+                            borderRadius: '50%',
+                            backgroundColor: pinnedTheme.avatarBg,
+                            color: '#FFFFFF',
+                            fontSize: '52px',
+                            fontWeight: 500,
+                            fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                          }}
+                        >
+                          {pinnedInitial}
+                        </div>
+                      )}
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: '16px',
+                          left: '16px',
+                          color: '#FFFFFF',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+                          textShadow: '0 1px 3px rgba(0, 0, 0, 0.8)',
+                          background: 'rgba(32, 33, 36, 0.75)',
+                          backdropFilter: 'blur(6px)',
+                          padding: '4px 10px',
+                          borderRadius: '8px',
+                        }}
+                      >
+                        {isLocalPinned ? `${displayName || 'You'} (You)` : pinned?.name}
+                      </div>
+                      {(isLocalPinned ? inCallMuted : pinned?.muted) && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: '16px',
+                            right: '16px',
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '50%',
+                            backgroundColor: pinnedTheme.badgeBg,
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <MicOff size={16} color="#F87171" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Filmstrip sidebar: local tile + everyone else, click to pin */}
+                    <div
+                      style={{
+                        width: '220px',
+                        minWidth: '220px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        overflowY: 'auto',
+                        maxHeight: '100%',
+                        paddingRight: '2px',
+                      }}
+                    >
+                      <div
+                        onClick={() => setPinnedParticipantId('local')}
+                        title="Pin yourself"
+                        style={{
+                          width: '100%',
+                          aspectRatio: '16 / 9',
+                          borderRadius: '16px',
+                          overflow: 'hidden',
+                          position: 'relative',
+                          backgroundColor: localTheme.tileBg,
+                          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          border: isLocalPinned ? '2px solid #8AB4F8' : 'none',
+                        }}
+                      >
+                        {inCallVideo ? (
+                          <video
+                            autoPlay
+                            muted
+                            playsInline
+                            ref={setInCallVideoNode}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: '44px',
+                              height: '44px',
+                              borderRadius: '50%',
+                              backgroundColor: localTheme.avatarBg,
+                              color: '#FFFFFF',
+                              fontSize: '20px',
+                              fontWeight: 500,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            {participantInitial}
+                          </div>
+                        )}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: '8px',
+                            left: '8px',
+                            fontSize: '11px',
+                            color: '#FFFFFF',
+                            fontWeight: 500,
+                            backgroundColor: 'rgba(0,0,0,0.5)',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          {displayName || 'You'} (You)
+                        </div>
+                        {inCallMuted && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '8px',
+                              right: '8px',
+                              width: '22px',
+                              height: '22px',
+                              borderRadius: '50%',
+                              backgroundColor: 'rgba(0,0,0,0.6)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <MicOff size={13} color="#F87171" />
+                          </div>
+                        )}
+                      </div>
+
+                      {others.map((p, idx) => {
+                        const t = getParticipantColorTheme(p.name, idx + 2);
+                        const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
+
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => setPinnedParticipantId(p.id)}
+                            style={{
+                              width: '100%',
+                              aspectRatio: '16 / 9',
+                              borderRadius: '16px',
+                              overflow: 'hidden',
+                              position: 'relative',
+                              backgroundColor: t.tileBg,
+                              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {(p as any).video && (p as any).stream ? (
+                              <video
+                                autoPlay
+                                playsInline
+                                ref={(el) => {
+                                  if (el && (p as any).stream && el.srcObject !== (p as any).stream) {
+                                    el.srcObject = (p as any).stream;
+                                    el.play().catch(() => { });
+                                  }
+                                }}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  width: '44px',
+                                  height: '44px',
+                                  borderRadius: '50%',
+                                  backgroundColor: t.avatarBg,
+                                  color: '#FFFFFF',
+                                  fontSize: '20px',
+                                  fontWeight: 500,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                {initial}
+                              </div>
+                            )}
+                            <div
+                              style={{
+                                position: 'absolute',
+                                bottom: '8px',
+                                left: '8px',
+                                fontSize: '11px',
+                                color: '#FFFFFF',
+                                fontWeight: 500,
+                                backgroundColor: 'rgba(0,0,0,0.5)',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                              }}
+                            >
+                              {p.name}
+                            </div>
+                            {p.muted && (
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '8px',
+                                  right: '8px',
+                                  width: '22px',
+                                  height: '22px',
+                                  borderRadius: '50%',
+                                  backgroundColor: 'rgba(0,0,0,0.6)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <MicOff size={13} color="#F87171" />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
           ) : (
             /* Multi-Participant Responsive Grid: Every participant has card background matching their avatar icon color */
             <div
@@ -3769,14 +4220,14 @@ export function MeetingRoomPage() {
                   remoteParticipants.length === 1
                     ? 'repeat(2, 1fr)'
                     : remoteParticipants.length <= 3
-                    ? 'repeat(2, 1fr)'
-                    : 'repeat(3, 1fr)',
+                      ? 'repeat(2, 1fr)'
+                      : 'repeat(3, 1fr)',
                 gridTemplateRows:
                   remoteParticipants.length === 1
                     ? '1fr'
                     : remoteParticipants.length <= 3
-                    ? 'repeat(2, 1fr)'
-                    : 'repeat(2, 1fr)',
+                      ? 'repeat(2, 1fr)'
+                      : 'repeat(2, 1fr)',
                 gap: '16px',
                 alignItems: 'stretch',
                 justifyItems: 'stretch',
@@ -3927,7 +4378,7 @@ export function MeetingRoomPage() {
                         ref={(el) => {
                           if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
                             el.srcObject = (remote as any).stream;
-                            el.play().catch(() => {});
+                            el.play().catch(() => { });
                           }
                         }}
                         style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
@@ -4615,7 +5066,6 @@ export function MeetingRoomPage() {
                   </div>
                 )}
 
-                {/* 5. Activities Panel */}
                 {activePanel === 'activities' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div
@@ -4711,7 +5161,7 @@ export function MeetingRoomPage() {
             </button>
             <button
               onClick={handleToggleInCallMic}
-              title={inCallMuted ? 'Turn on microphone' : 'Turn off microphone'}
+              title={inCallMuted ? 'Turn on microphone (M)' : 'Turn off microphone (M)'}
               style={{
                 width: '48px',
                 height: '48px',
@@ -4818,7 +5268,7 @@ export function MeetingRoomPage() {
             </button>
             <button
               onClick={handleToggleInCallVideo}
-              title={inCallVideo ? 'Turn off camera' : 'Turn on camera'}
+              title={inCallVideo ? 'Turn off camera (V)' : 'Turn on camera (V)'}
               style={{
                 width: '48px',
                 height: '48px',
@@ -5155,32 +5605,53 @@ export function MeetingRoomPage() {
                     {isPiPActive ? 'Exit Picture-in-Picture' : 'Picture-in-Picture'}
                   </button>
                 )}
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    handleToggleFullscreen();
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 12px',
+                    background: isFullscreen ? 'rgba(138, 180, 248, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: isFullscreen ? '#8AB4F8' : '#E8EAED',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                  }}
+                >
+                  {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                  {isFullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
+                </button>
               </div>
             )}
           </div>
 
-          {/* Button: Picture-in-Picture Quick Toggle */}
-          {('documentPictureInPicture' in window || (document as any).pictureInPictureEnabled) && (
-            <button
-              onClick={handleTogglePiP}
-              title={isPiPActive ? 'Exit Picture-in-Picture' : 'Open Picture-in-Picture'}
-              style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                backgroundColor: isPiPActive ? '#8AB4F8' : '#3C4043',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transition: 'background-color 0.15s ease',
-              }}
-            >
-              <LayoutGrid size={20} color={isPiPActive ? '#202124' : '#E8EAED'} />
-              <span style={{ display: 'none' }}>Picture in picture</span>
-            </button>
-          )}
+          {/* Button: Toggle Tile View (Jitsi Meet style, shortcut 'W') */}
+          <button
+            onClick={() => setTileViewEnabled((v) => !v)}
+            title={tileViewEnabled ? 'Exit tile view (W)' : 'Toggle tile view (W)'}
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: '50%',
+              backgroundColor: tileViewEnabled ? '#8AB4F8' : '#3C4043',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            <LayoutGrid size={20} color={tileViewEnabled ? '#202124' : '#E8EAED'} />
+            <span style={{ display: 'none' }}>Toggle tile view</span>
+          </button>
 
           {/* Button: Invite People (Directly opens Share / Invite Modal) */}
           <button

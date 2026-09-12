@@ -51,7 +51,16 @@ export function RecordingWatchPage() {
 
         const rec = data.recording;
         setRecording(rec);
-        setVideoSrc(rec.fileUrl || DEFAULT_SAMPLE_VIDEO);
+        // fileUrl on the Recording document is a bare relative path inside the recorder's own
+        // storage mount, not a fetchable URL by itself -- the backend's /stream route resolves
+        // and serves the actual bytes (with Range support for seeking). Using fileUrl directly
+        // here was the bug: the browser had nothing real to fetch, even for recordings whose
+        // underlying media was perfectly fine.
+        setVideoSrc(
+          rec.fileUrl && rec.status === 'Ready'
+            ? `${BACKEND_URL}/api/recordings/${id}/stream`
+            : DEFAULT_SAMPLE_VIDEO
+        );
         setError(null);
       } catch (err: any) {
         setError(err.message || 'Could not load recording');
@@ -77,7 +86,7 @@ export function RecordingWatchPage() {
 
   const handleDownload = () => {
     if (!recording) return;
-    const src = videoSrc || recording.fileUrl || DEFAULT_SAMPLE_VIDEO;
+    const src = videoSrc || DEFAULT_SAMPLE_VIDEO;
     const a = document.createElement('a');
     a.href = src;
     a.download = `${recording.name || 'meeting-recording'}.mp4`;
