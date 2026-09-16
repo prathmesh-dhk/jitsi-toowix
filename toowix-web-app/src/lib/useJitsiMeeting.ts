@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { createVirtualBackgroundEffect } from './virtualBackground/createVirtualBackgroundEffect';
+import { IVirtualBackground } from './virtualBackground/JitsiStreamBackgroundEffect';
+import { NoiseSuppressionEffect } from './noiseSuppression/NoiseSuppressionEffect';
+import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/constants';
+import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
+
+export interface ISharedVideoState {
+  muted?: boolean;
+  ownerId: string;
+  status: string;
+  time: number;
+  videoUrl: string;
+  volume?: number;
+}
+
 // Direct lib-jitsi-meet integration for MeetingRoomPage's own Google-Meet-style UI -- no Jitsi
 // IFrame. Unlike the IFrame API, we now own the real local/remote MediaStreamTracks directly
 // (no cross-origin restriction), so this hook exposes plain MediaStreams matching the shape
@@ -281,6 +296,13 @@ export function useJitsiMeeting({
   // unplayable/corrupt recordings (Jibri needs a real stop to finalize the file).
   const [ recording, setRecording ] = useState(false);
   const recordingSessionIdRef = useRef<string | null>(null);
+  // Shared-video (YouTube) state -- ported from jitsi-meet's react/features/shared-video
+  // (SHARED_VIDEO XMPP command protocol, same command name/attribute shape, so this is wire
+  // compatible with stock Jitsi). null when nobody is sharing. Mirrored into a ref because the
+  // room-level command listener (registered once, at room setup) closes over stale state
+  // otherwise -- same reasoning as the other refs in this hook.
+  const [ sharedVideo, setSharedVideo ] = useState<ISharedVideoState | null>(null);
+  const sharedVideoRef = useRef<ISharedVideoState | null>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
   // one exists. Read by toggleAudio/toggleVideo/switchDevice/toggleScreenShare, which are
@@ -297,6 +319,43 @@ export function useJitsiMeeting({
   const existingStreamRef = useRef(existingStream);
   const cameraRetryInFlightRef = useRef(false);
   const deviceIdsRef = useRef({ audioDeviceId, videoDeviceId });
+  // Currently-active virtual background (blur/image), if any -- re-applied to a freshly acquired
+  // video track (device switch, or re-acquiring after the track was fully disposed) since a new
+  // JitsiLocalTrack instance doesn't inherit the previous instance's effect. Mute/unmute of the
+  // SAME track instance re-applies the effect automatically inside lib-jitsi-meet itself, so that
+  // path needs no extra handling here.
+  const virtualBackgroundRef = useRef<{ config: IVirtualBackground; effect: any } | null>(null);
+
+  const applyVirtualBackgroundToTrack = useCallback(async (track: any) => {
+    if (!virtualBackgroundRef.current || !track) {
+      return;
+    }
+    try {
+      await track.setEffect(virtualBackgroundRef.current.effect);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[useJitsiMeeting] failed to re-apply virtual background to new track:', err);
+    }
+  }, []);
+
+  // Same idea as virtualBackgroundRef, for the mic noise-suppression effect -- re-applied to a
+  // freshly acquired audio track (mic device switch) since a new JitsiLocalTrack instance
+  // doesn't inherit the previous instance's effect. Mute/unmute of the SAME track re-applies
+  // automatically inside lib-jitsi-meet itself.
+  const noiseSuppressionRef = useRef<{ effect: NoiseSuppressionEffect } | null>(null);
+  const [ noiseSuppressionEnabled, setNoiseSuppressionEnabled ] = useState(false);
+
+  const applyNoiseSuppressionToTrack = useCallback(async (track: any) => {
+    if (!noiseSuppressionRef.current || !track) {
+      return;
+    }
+    try {
+      await track.setEffect(noiseSuppressionRef.current.effect);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[useJitsiMeeting] failed to re-apply noise suppression to new track:', err);
+    }
+  }, []);
 
   // Plain synchronous assignments during render (NOT inside useEffect) -- these values are read
   // later from inside an async continuation (acquireLocalTracks, the KICKED handler, switchDevice)
@@ -537,6 +596,49 @@ export function useJitsiMeeting({
               // otherwise" than flickering the UI on every intermediate state.
             });
 
+            // Real SHARED_VIDEO XMPP command, ported from jitsi-meet's shared-video middleware --
+            // fires for every participant INCLUDING the sender (MUC presence commands echo back
+            // to their own sender), so both "someone shared a video" and "I just shared one"
+            // flow through this single listener, same as upstream.
+            room.addCommandListener(SHARED_VIDEO, (data: { attributes: any; value: string }, from: string) => {
+              if (isStale()) {
+                return;
+              }
+              const { value, attributes } = data;
+              const state = attributes?.state;
+              const current = sharedVideoRef.current;
+
+              // Someone else already owns an active share -- ignore a conflicting command from a
+              // third party, matching upstream's ownerId guard.
+              if (current?.ownerId && current.ownerId !== from) {
+                return;
+              }
+
+              if (isSharingStatus(state)) {
+                if (current?.videoUrl && current.videoUrl !== value) {
+                  return;
+                }
+                const next: ISharedVideoState = {
+                  videoUrl: value,
+                  status: state,
+                  time: Number(attributes.time) || 0,
+                  ownerId: from,
+                  muted: attributes.muted === 'true' || attributes.muted === true,
+                  volume: attributes.volume !== undefined ? Number(attributes.volume) : undefined
+                };
+
+                sharedVideoRef.current = next;
+                setSharedVideo(next);
+
+                return;
+              }
+
+              if (state === PLAYBACK_STATUSES.STOPPED) {
+                sharedVideoRef.current = null;
+                setSharedVideo(null);
+              }
+            });
+
             room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, (errorType: string) => {
               if (isStale()) {
                 return;
@@ -720,6 +822,11 @@ export function useJitsiMeeting({
       setLocalParticipantId(null);
       setRecording(false);
       recordingSessionIdRef.current = null;
+      virtualBackgroundRef.current = null;
+      noiseSuppressionRef.current = null;
+      setNoiseSuppressionEnabled(false);
+      sharedVideoRef.current = null;
+      setSharedVideo(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ enabled, jwt, roomName, jitsiDomain ]);
@@ -782,6 +889,7 @@ export function useJitsiMeeting({
       setLocalCameraStream(trackToStream(newTrack));
       setLocalVideoMuted(false);
       setCameraError(null);
+      void applyVirtualBackgroundToTrack(newTrack);
 
       const room = roomRef.current;
 
@@ -946,16 +1054,125 @@ export function useJitsiMeeting({
 
       if (isAudio) {
         localAudioTrackRef.current = newTrack;
+        void applyNoiseSuppressionToTrack(newTrack);
       } else {
         localVideoTrackRef.current = newTrack;
         setHasVideoTrack(true);
         setLocalCameraStream(trackToStream(newTrack));
+        void applyVirtualBackgroundToTrack(newTrack);
       }
     } catch (err: any) {
       throw new Error(describeMediaError(isAudio ? 'microphone' : 'camera', err));
     } finally {
       switchDeviceInFlightRef.current[kind] = false;
     }
+  }, []);
+
+  // Applies (blur/image) or clears (null) a virtual background on the local camera track.
+  // Re-thrown to the caller on failure (model download failed, WebAssembly unsupported, etc.) so
+  // the UI can show an error instead of silently doing nothing.
+  const setVirtualBackground = useCallback(async (config: IVirtualBackground | null) => {
+    const track = localVideoTrackRef.current;
+
+    if (!config || config.backgroundType === 'none') {
+      virtualBackgroundRef.current = null;
+      if (track) {
+        await track.setEffect(undefined);
+      }
+
+      return;
+    }
+
+    const effect = await createVirtualBackgroundEffect(config);
+
+    if (track) {
+      await track.setEffect(effect);
+    }
+    virtualBackgroundRef.current = { config, effect };
+  }, []);
+
+  // Toggles mic noise suppression (RNNoise) on/off. Re-thrown to the caller on failure (e.g.
+  // AudioWorklet unsupported) so the UI can show an error instead of silently doing nothing.
+  const toggleNoiseSuppression = useCallback(async () => {
+    const track = localAudioTrackRef.current;
+
+    if (noiseSuppressionRef.current) {
+      noiseSuppressionRef.current = null;
+      setNoiseSuppressionEnabled(false);
+      if (track) {
+        await track.setEffect(undefined);
+      }
+
+      return;
+    }
+
+    const effect = new NoiseSuppressionEffect();
+
+    if (track) {
+      await track.setEffect(effect);
+    }
+    noiseSuppressionRef.current = { effect };
+    setNoiseSuppressionEnabled(true);
+  }, []);
+
+  // Ported from jitsi-meet's playSharedVideo action: sends the "start" command and nothing else
+  // -- local state (for the sender too) is set once the command echoes back through the
+  // addCommandListener above, exactly like upstream ("we will create local video fake participant
+  // and start playing once we receive ourselves the command").
+  const shareVideo = useCallback((urlOrId: string) => {
+    const room = roomRef.current;
+    const id = extractYoutubeId(urlOrId);
+
+    if (!room || !id) {
+      return false;
+    }
+    sendShareVideoCommand({
+      room,
+      id,
+      localParticipantId: room.myUserId(),
+      status: PLAYBACK_START,
+      time: 0
+    });
+
+    return true;
+  }, []);
+
+  // Ported from AbstractVideoManager's fireUpdateSharedVideoEvent + the SET_SHARED_VIDEO_STATUS
+  // middleware case combined: only the owner's real player calls this (on its own play/pause/seek/
+  // mute events), it updates local state immediately (no round trip needed for your own player),
+  // then broadcasts the real command so every other participant's player converges to match.
+  const updateSharedVideoStatus = useCallback((status: string, time: number, muted?: boolean) => {
+    const room = roomRef.current;
+    const current = sharedVideoRef.current;
+    const localId = room?.myUserId();
+
+    if (!room || !current || current.ownerId !== localId) {
+      return;
+    }
+    const next: ISharedVideoState = { ...current, status, time, muted };
+
+    sharedVideoRef.current = next;
+    setSharedVideo(next);
+    sendShareVideoCommand({ room, id: current.videoUrl, localParticipantId: localId, status, time, muted });
+  }, []);
+
+  // Ported from jitsi-meet's stopSharedVideo action -- only the owner can stop (matches upstream:
+  // "if (ownerId === localParticipant?.id)"), broadcasting the real "stop" command so everyone's
+  // player tears down together.
+  const stopSharedVideo = useCallback(() => {
+    const room = roomRef.current;
+    const current = sharedVideoRef.current;
+    const localId = room?.myUserId();
+
+    if (!room || !current || current.ownerId !== localId) {
+      return;
+    }
+    sharedVideoRef.current = null;
+    setSharedVideo(null);
+    sendShareVideoCommand({
+      room, id: current.videoUrl, localParticipantId: localId,
+      status: PLAYBACK_STATUSES.STOPPED, time: 0, muted: true, volume: 0
+    });
   }, []);
 
   return {
@@ -980,6 +1197,13 @@ export function useJitsiMeeting({
     startRecording,
     stopRecording,
     switchDevice,
+    setVirtualBackground,
+    noiseSuppressionEnabled,
+    toggleNoiseSuppression,
+    sharedVideo,
+    shareVideo,
+    updateSharedVideoStatus,
+    stopSharedVideo,
     room: roomRef
   };
 }

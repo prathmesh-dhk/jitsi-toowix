@@ -56,6 +56,18 @@ export const createMeetingHandler = async (req: AuthenticatedRequest, res: Respo
     }
     const resolvedType = ['Personal', 'Internal', 'Guest', 'Private'].includes(type) ? type : 'Internal';
 
+    if (scheduledAt) {
+      const parsedScheduledAt = new Date(scheduledAt);
+      if (Number.isNaN(parsedScheduledAt.getTime()) || parsedScheduledAt.getTime() < Date.now()) {
+        res.status(400).json({ error: "This meeting can't be scheduled in the past -- pick a future date/time." });
+        return;
+      }
+    }
+    if (resolvedType === 'Private' && (typeof passcode !== 'string' || !passcode.trim())) {
+      res.status(400).json({ error: 'A password is required for private meetings.' });
+      return;
+    }
+
     // Company Meeting Policy enforcement: who is allowed to create meetings at all,
     // whether guest (non-invitee) access is allowed, and a hard cap on duration.
     let company: any = null;
@@ -478,6 +490,13 @@ export const updateMeetingHandler = async (req: AuthenticatedRequest, res: Respo
     }
 
     const { name, scheduledAt, durationMinutes, type, description, invitees, notes, sharedFiles, resources } = req.body;
+    if (scheduledAt) {
+      const parsedScheduledAt = new Date(scheduledAt);
+      if (Number.isNaN(parsedScheduledAt.getTime()) || parsedScheduledAt.getTime() < Date.now()) {
+        res.status(400).json({ error: "This meeting can't be rescheduled to the past -- pick a future date/time." });
+        return;
+      }
+    }
     const scheduleChanged = scheduledAt !== undefined && new Date(scheduledAt).getTime() !== (meeting.scheduledAt ? new Date(meeting.scheduledAt).getTime() : null);
     if (name !== undefined) meeting.name = String(name).trim();
     if (scheduledAt !== undefined) meeting.scheduledAt = scheduledAt ? new Date(scheduledAt) : null;

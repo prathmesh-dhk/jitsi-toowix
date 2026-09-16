@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -202,10 +202,18 @@ export function ScheduleCalendar({
   const handleSchedule = async () => {
     if (!selectedDate || !name.trim() || submitting) return;
     setScheduleError(null);
+    if (scheduledDateTime.getTime() < Date.now()) {
+      setScheduleError("This meeting can't be scheduled in the past -- pick a future date/time.");
+
+      return;
+    }
+    if (type === 'Private' && !passcode.trim()) {
+      setScheduleError('A password is required for private meetings.');
+
+      return;
+    }
     setSubmitting(true);
-    const [hh, mm] = time.split(':').map(Number);
-    const scheduledAt = new Date(selectedDate);
-    scheduledAt.setHours(hh, mm, 0, 0);
+    const scheduledAt = scheduledDateTime;
 
     const cleanCustomId = customId.trim() ? sanitizeCustomMeetingId(customId.trim()) : undefined;
     const roomSlug = cleanCustomId || generateUniqueMeetingId();
@@ -268,6 +276,19 @@ export function ScheduleCalendar({
   };
 
   const selectedDayMeetings = meetingsOnDate(selectedDate);
+
+  // Live, recomputed on every render (not just on submit) so picking a past time shows the
+  // error instantly rather than waiting for the user to click "Schedule Meeting".
+  const scheduledDateTime = useMemo(() => {
+    const [hh, mm] = time.split(':').map(Number);
+    const d = new Date(selectedDate);
+
+    d.setHours(hh || 0, mm || 0, 0, 0);
+
+    return d;
+  }, [selectedDate, time]);
+  const isPastTime = scheduledDateTime.getTime() < Date.now();
+  const passcodeMissing = type === 'Private' && !passcode.trim();
 
   return (
     <div style={{ width: '100%' }}>
@@ -641,8 +662,16 @@ export function ScheduleCalendar({
                     type="time"
                     value={time}
                     onChange={(e) => setTime(e.target.value)}
-                    style={{ width: '100%', height: '42px', padding: '0 10px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
+                    style={{
+                      width: '100%', height: '42px', padding: '0 10px', borderRadius: '8px',
+                      border: `1px solid ${isPastTime ? '#DC2626' : '#D1D5DB'}`, fontSize: '13px', boxSizing: 'border-box', outline: 'none',
+                    }}
                   />
+                  {isPastTime && (
+                    <p style={{ fontSize: '11px', color: '#DC2626', margin: '4px 0 0' }}>
+                      This time has already passed -- meeting can't be scheduled.
+                    </p>
+                  )}
                 </div>
                 <div style={{ flex: 1 }}>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>Duration</label>
@@ -781,15 +810,23 @@ export function ScheduleCalendar({
               {/* Passcode field */}
               <div>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>
-                  <Lock size={12} /> Meeting passcode / password (optional)
+                  <Lock size={12} /> Meeting passcode / password {type === 'Private' ? '(required)' : '(optional)'}
                 </label>
                 <input
                   type="text"
                   value={passcode}
                   onChange={(e) => setPasscode(e.target.value)}
-                  placeholder="e.g. 123456 (auto-shared via WhatsApp & email)"
-                  style={{ width: '100%', height: '42px', padding: '0 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box', outline: 'none' }}
+                  placeholder={type === 'Private' ? 'Required for private meetings' : 'e.g. 123456 (auto-shared via WhatsApp & email)'}
+                  style={{
+                    width: '100%', height: '42px', padding: '0 12px', borderRadius: '8px',
+                    border: `1px solid ${passcodeMissing ? '#DC2626' : '#D1D5DB'}`, fontSize: '13px', boxSizing: 'border-box', outline: 'none',
+                  }}
                 />
+                {passcodeMissing && (
+                  <p style={{ fontSize: '11px', color: '#DC2626', margin: '4px 0 0' }}>
+                    A password is required for private meetings.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -847,17 +884,17 @@ export function ScheduleCalendar({
 
               <button
                 onClick={handleSchedule}
-                disabled={!name.trim() || submitting}
+                disabled={!name.trim() || submitting || isPastTime || passcodeMissing}
                 style={{
                   marginTop: '4px',
                   height: '46px',
                   borderRadius: '8px',
                   border: 'none',
-                  backgroundColor: submitted ? '#10B981' : !name.trim() || submitting ? '#C7D2FE' : '#4F46E5',
+                  backgroundColor: submitted ? '#10B981' : !name.trim() || submitting || isPastTime || passcodeMissing ? '#C7D2FE' : '#4F46E5',
                   color: '#FFFFFF',
                   fontSize: '14px',
                   fontWeight: 700,
-                  cursor: !name.trim() || submitting ? 'not-allowed' : 'pointer',
+                  cursor: !name.trim() || submitting || isPastTime || passcodeMissing ? 'not-allowed' : 'pointer',
                   transition: 'background-color 0.15s ease',
                 }}
               >

@@ -138,7 +138,7 @@ function SettingsShell() {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', paddingLeft: expanded ? '2px' : 0 }}>
           <img
-            src="/assets/toowix-logo.png"
+            src="/assets/toowix-logo.svg"
             alt="Toowix"
             style={{ width: '28px', height: '28px', objectFit: 'contain', flexShrink: 0 }}
             onError={(e) => { e.currentTarget.style.display = 'none'; }}

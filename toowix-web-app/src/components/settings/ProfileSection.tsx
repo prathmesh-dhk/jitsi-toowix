@@ -70,18 +70,52 @@ export function ProfileSection() {
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
       setToast({ message: 'Please choose a PNG, JPEG, or WEBP image.', type: 'error' });
       return;
     }
-    if (file.size > 4 * 1024 * 1024) {
-      setToast({ message: 'Photo must be under 4MB.', type: 'error' });
+    if (file.size > 8 * 1024 * 1024) {
+      setToast({ message: 'Photo must be under 8MB.', type: 'error' });
       return;
     }
+
     const reader = new FileReader();
-    reader.onload = () => setAvatarUrl(reader.result as string);
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX_SIZE = 256;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height = Math.round((height * MAX_SIZE) / width);
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width = Math.round((width * MAX_SIZE) / height);
+            height = MAX_SIZE;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          setAvatarUrl(optimizedDataUrl);
+          setDirty(true);
+        } else {
+          setAvatarUrl(reader.result as string);
+          setDirty(true);
+        }
+      };
+      img.src = reader.result as string;
+    };
     reader.readAsDataURL(file);
-    setDirty(true);
   };
 
   const handleSave = async () => {
@@ -89,17 +123,31 @@ export function ProfileSection() {
     if (!validate()) return;
     setSaving(true);
     try {
-      await settingsApi.patch('/profile', {
-        fullName: `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
+      const updatedFullName = `${form.firstName.trim()} ${form.lastName.trim()}`.trim();
+      const res = await settingsApi.patch<any>('/profile', {
+        fullName: updatedFullName,
         avatarUrl,
         phoneNumber: form.phoneNumber || null,
         jobTitle: form.jobTitle || null,
         timezone: form.timezone,
         language: form.language,
       });
+
+      // Update cached user session in localStorage so the whole app updates immediately
+      try {
+        const cached = localStorage.getItem('toowix_user');
+        if (cached) {
+          const userObj = JSON.parse(cached);
+          userObj.name = updatedFullName;
+          userObj.fullName = updatedFullName;
+          userObj.avatarUrl = avatarUrl;
+          localStorage.setItem('toowix_user', JSON.stringify(userObj));
+        }
+      } catch {}
+
       setOriginal(form);
       setDirty(false);
-      setToast({ message: 'Profile updated.', type: 'success' });
+      setToast({ message: 'Profile photo and details saved successfully!', type: 'success' });
     } catch (err: any) {
       setToast({ message: err.message || 'Could not save profile.', type: 'error' });
     } finally {

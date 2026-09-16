@@ -2,6 +2,7 @@
 .*.tmp
 deploy-local.sh
 libs/
+!toowix-web-app/public/libs/
 all.css
 *css.map
 .remote-sync.json

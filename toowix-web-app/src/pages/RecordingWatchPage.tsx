@@ -17,6 +17,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import { useTheme } from '../lib/theme';
 import { ShareRecordingModal } from '../components/ShareRecordingModal';
 
 const BACKEND_URL =
@@ -25,6 +26,7 @@ const BACKEND_URL =
 const DEFAULT_SAMPLE_VIDEO = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
 
 export function RecordingWatchPage() {
+  const { isDark } = useTheme();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [recording, setRecording] = useState<any>(null);
@@ -117,8 +119,8 @@ export function RecordingWatchPage() {
     <div
       style={{
         minHeight: '100vh',
-        backgroundColor: '#0A0C10',
-        color: '#F3F4F6',
+        backgroundColor: isDark ? '#0A0C10' : '#F8F9FD',
+        color: isDark ? '#F3F4F6' : '#111827',
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
         display: 'flex',
         flexDirection: 'column',
@@ -127,9 +129,9 @@ export function RecordingWatchPage() {
       {/* Top Standalone Header */}
       <header
         style={{
-          height: '60px',
-          backgroundColor: '#111319',
-          borderBottom: '1px solid #202430',
+          height: '64px',
+          backgroundColor: isDark ? '#111319' : '#FFFFFF',
+          borderBottom: isDark ? '1px solid #202430' : '1px solid #E5E7EB',
           padding: '0 24px',
           display: 'flex',
           alignItems: 'center',
@@ -144,7 +146,7 @@ export function RecordingWatchPage() {
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              color: '#9CA3AF',
+              color: isDark ? '#9CA3AF' : '#6B7280',
               textDecoration: 'none',
               fontSize: '13px',
               fontWeight: 500,
@@ -154,12 +156,12 @@ export function RecordingWatchPage() {
             <span>Dashboard</span>
           </Link>
 
-          <div style={{ height: '18px', width: '1px', backgroundColor: '#2B3040' }} />
+          <div style={{ height: '18px', width: '1px', backgroundColor: isDark ? '#2B3040' : '#E5E7EB' }} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <img src="/favicon.png" alt="Toowix" style={{ width: '22px', height: '22px', borderRadius: '4px' }} />
-            <span style={{ fontSize: '14px', fontWeight: 700, color: '#FFFFFF' }}>
-              Toowix <span style={{ color: '#6366F1' }}>Recording</span>
+            <img src="/assets/toowix-logo.svg" alt="Toowix" style={{ width: '22px', height: '22px', objectFit: 'contain' }} />
+            <span style={{ fontSize: '15px', fontWeight: 700, color: isDark ? '#FFFFFF' : '#111827' }}>
+              Toowix <span style={{ color: '#4F46E5' }}>Recording</span>
             </span>
           </div>
         </div>
@@ -173,11 +175,11 @@ export function RecordingWatchPage() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '6px 14px',
+                padding: '7px 14px',
                 borderRadius: '8px',
-                border: '1px solid #2E3445',
-                backgroundColor: copiedLink ? '#059669' : '#1C202C',
-                color: copiedLink ? '#FFFFFF' : '#D1D5DB',
+                border: isDark ? '1px solid #2E3445' : '1px solid #D1D5DB',
+                backgroundColor: copiedLink ? '#059669' : (isDark ? '#1C202C' : '#FFFFFF'),
+                color: copiedLink ? '#FFFFFF' : (isDark ? '#D1D5DB' : '#374151'),
                 fontSize: '12.5px',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -195,7 +197,7 @@ export function RecordingWatchPage() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '6px 14px',
+                padding: '7px 14px',
                 borderRadius: '8px',
                 border: 'none',
                 backgroundColor: '#4F46E5',
@@ -203,6 +205,7 @@ export function RecordingWatchPage() {
                 fontSize: '12.5px',
                 fontWeight: 600,
                 cursor: 'pointer',
+                boxShadow: '0 2px 6px rgba(79, 70, 229, 0.3)',
               }}
             >
               <Share2 size={14} />
@@ -216,11 +219,11 @@ export function RecordingWatchPage() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                padding: '6px 14px',
+                padding: '7px 14px',
                 borderRadius: '8px',
-                border: '1px solid #2E3445',
-                backgroundColor: '#1C202C',
-                color: '#D1D5DB',
+                border: isDark ? '1px solid #2E3445' : '1px solid #D1D5DB',
+                backgroundColor: isDark ? '#1C202C' : '#FFFFFF',
+                color: isDark ? '#D1D5DB' : '#374151',
                 fontSize: '12.5px',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -236,8 +239,8 @@ export function RecordingWatchPage() {
       {/* Main Content Area */}
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '24px 16px' }}>
         {loading ? (
-          <div style={{ margin: 'auto', textAlign: 'center', color: '#9CA3AF' }}>
-            <div style={{ width: '40px', height: '40px', border: '3px solid #374151', borderTopColor: '#6366F1', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
+          <div style={{ margin: 'auto', textAlign: 'center', color: isDark ? '#9CA3AF' : '#6B7280' }}>
+            <div style={{ width: '40px', height: '40px', border: '3px solid #E5E7EB', borderTopColor: '#4F46E5', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
             <p>Loading recording...</p>
           </div>
         ) : error ? (
@@ -246,20 +249,21 @@ export function RecordingWatchPage() {
               margin: 'auto',
               maxWidth: '440px',
               width: '100%',
-              backgroundColor: '#161922',
-              border: '1px solid #2A2E3D',
+              backgroundColor: isDark ? '#161922' : '#FFFFFF',
+              border: isDark ? '1px solid #2A2E3D' : '1px solid #E5E7EB',
               borderRadius: '16px',
               padding: '32px 24px',
               textAlign: 'center',
+              boxShadow: isDark ? '0 10px 30px rgba(0,0,0,0.5)' : '0 10px 30px rgba(0,0,0,0.06)',
             }}
           >
             <div style={{ width: '52px', height: '52px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#EF4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
               <AlertCircle size={28} />
             </div>
-            <h2 style={{ fontSize: '18px', fontWeight: 700, margin: '0 0 8px 0', color: '#FFFFFF' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: 700, margin: '0 0 8px 0', color: isDark ? '#FFFFFF' : '#111827' }}>
               Access Restricted or Not Found
             </h2>
-            <p style={{ fontSize: '13px', color: '#9CA3AF', margin: '0 0 24px 0', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 24px 0', lineHeight: 1.5 }}>
               {error}
             </p>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
@@ -282,8 +286,8 @@ export function RecordingWatchPage() {
                 style={{
                   padding: '8px 18px',
                   borderRadius: '8px',
-                  backgroundColor: '#232733',
-                  color: '#D1D5DB',
+                  backgroundColor: isDark ? '#232733' : '#F3F4F6',
+                  color: isDark ? '#D1D5DB' : '#374151',
                   fontSize: '13px',
                   fontWeight: 600,
                   textDecoration: 'none',
@@ -299,10 +303,12 @@ export function RecordingWatchPage() {
             <div
               style={{
                 width: '100%',
-                backgroundColor: '#000000',
+                backgroundColor: '#090A0E',
                 borderRadius: '16px',
                 overflow: 'hidden',
-                boxShadow: '0 20px 50px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08)',
+                boxShadow: isDark
+                  ? '0 20px 50px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08)'
+                  : '0 20px 50px -10px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
                 aspectRatio: '16 / 9',
                 display: 'flex',
                 alignItems: 'center',
@@ -318,28 +324,29 @@ export function RecordingWatchPage() {
                 onError={() => {
                   if (videoSrc !== DEFAULT_SAMPLE_VIDEO) setVideoSrc(DEFAULT_SAMPLE_VIDEO);
                 }}
-                style={{ width: '100%', height: '100%', objectFit: 'contain', outline: 'none' }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain', outline: 'none', backgroundColor: '#090A0E' }}
               />
             </div>
 
             {/* Video Information Bar */}
             <div
               style={{
-                backgroundColor: '#13161F',
-                border: '1px solid #232733',
+                backgroundColor: isDark ? '#13161F' : '#FFFFFF',
+                border: isDark ? '1px solid #232733' : '1px solid #E5E7EB',
                 borderRadius: '14px',
                 padding: '22px 24px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '14px',
+                boxShadow: isDark ? 'none' : '0 2px 10px rgba(0, 0, 0, 0.03)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
                 <div>
-                  <h1 style={{ margin: '0 0 6px 0', fontSize: '22px', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.3px' }}>
+                  <h1 style={{ margin: '0 0 6px 0', fontSize: '22px', fontWeight: 800, color: isDark ? '#FFFFFF' : '#111827', letterSpacing: '-0.3px' }}>
                     {recording.name}
                   </h1>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', fontSize: '13px', color: '#9CA3AF' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
                     {formattedDate && (
                       <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                         <Calendar size={14} color="#6366F1" /> {formattedDate}
@@ -351,7 +358,7 @@ export function RecordingWatchPage() {
                       </span>
                     )}
                     <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      <User size={14} color="#A855F7" /> Hosted by {hostName}
+                      <User size={14} color="#8B5CF6" /> Hosted by {hostName}
                     </span>
                   </div>
                 </div>
@@ -372,6 +379,7 @@ export function RecordingWatchPage() {
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
+                      boxShadow: '0 2px 6px rgba(79, 70, 229, 0.3)',
                     }}
                   >
                     <Share2 size={14} /> Share Video
@@ -382,11 +390,11 @@ export function RecordingWatchPage() {
                     style={{
                       padding: '8px 16px',
                       borderRadius: '8px',
-                      backgroundColor: copiedLink ? '#059669' : '#1F2432',
-                      color: copiedLink ? '#FFFFFF' : '#E5E7EB',
+                      backgroundColor: copiedLink ? '#059669' : (isDark ? '#1F2432' : '#FFFFFF'),
+                      color: copiedLink ? '#FFFFFF' : (isDark ? '#E5E7EB' : '#374151'),
                       fontSize: '13px',
                       fontWeight: 600,
-                      border: '1px solid #2B3142',
+                      border: isDark ? '1px solid #2B3142' : '1px solid #D1D5DB',
                       cursor: 'pointer',
                       display: 'flex',
                       alignItems: 'center',
@@ -394,7 +402,7 @@ export function RecordingWatchPage() {
                     }}
                   >
                     {copiedLink ? <Check size={14} /> : <Copy size={14} />}
-                    {copiedLink ? 'Copied' : 'Copy link'}
+                    <span>{copiedLink ? 'Copied' : 'Copy link'}</span>
                   </button>
                 </div>
               </div>

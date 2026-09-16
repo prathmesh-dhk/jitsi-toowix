@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase, pingDatabase } from './db/connection';
+import { getAvatarUploadRoot } from './uploads/avatarStorage';
 
 dotenv.config();
 
@@ -18,8 +19,8 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
@@ -55,6 +56,9 @@ app.use('/api/recordings', recordingRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
+// Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
+// with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
+app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {

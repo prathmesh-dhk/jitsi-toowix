@@ -44,9 +44,14 @@ import {
   UserPlus,
   Maximize,
   Minimize,
+  Wind,
+  Youtube,
 } from 'lucide-react';
 import { useTheme } from '../lib/theme';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
+import { VirtualBackgroundModal } from '../components/VirtualBackgroundModal';
+import { ShareVideoDialog } from '../components/ShareVideoDialog';
+import { SharedVideoManager } from '../components/SharedVideoManager';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -159,6 +164,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
   isHandRaised,
   remoteParticipants,
   roomTitle,
+  avatarUrl,
   onToggleMic,
   onToggleVideo,
   onToggleHand,
@@ -176,6 +182,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
   isHandRaised: boolean;
   remoteParticipants: Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean }>;
   roomTitle: string;
+  avatarUrl?: string | null;
   onToggleMic: () => void;
   onToggleVideo: () => void;
   onToggleHand: () => void;
@@ -395,9 +402,14 @@ const DocumentPipContent = memo(function DocumentPipContent({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    overflow: 'hidden',
                   }}
                 >
-                  {userInitial}
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    userInitial
+                  )}
                 </div>
               )}
               <div
@@ -463,9 +475,14 @@ const DocumentPipContent = memo(function DocumentPipContent({
                     alignItems: 'center',
                     justifyContent: 'center',
                     boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                    overflow: 'hidden',
                   }}
                 >
-                  {userInitial}
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    userInitial
+                  )}
                 </div>
               </div>
             )}
@@ -549,9 +566,14 @@ const DocumentPipContent = memo(function DocumentPipContent({
                     justifyContent: 'center',
                     fontSize: '17px',
                     fontWeight: 600,
+                    overflow: 'hidden',
                   }}
                 >
-                  {userInitial}
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    userInitial
+                  )}
                 </div>
               )}
               <span
@@ -817,6 +839,7 @@ export function MeetingRoomPage() {
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
   const [joining, setJoining] = useState(false);
+  const [passcodeInput, setPasscodeInput] = useState('');
   const attendanceTokenRef = useRef('');
   const attendanceEntryIdRef = useRef<string | null>(null);
   const leavingRef = useRef(false);
@@ -843,6 +866,23 @@ export function MeetingRoomPage() {
     if (!auth.currentUser) return localStorage.getItem('toowix_guest_displayName') || '';
     return '';
   });
+  const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('toowix_user') || '{}');
+      return user.avatarUrl || user.photoURL || auth.currentUser?.photoURL || null;
+    } catch {
+      return auth.currentUser?.photoURL || null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('toowix_user') || '{}');
+      const avatar = user.avatarUrl || user.photoURL || auth.currentUser?.photoURL || null;
+      if (avatar) setLocalAvatarUrl(avatar);
+    } catch {}
+  }, []);
+
   const [micEnabled, setMicEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [blurEnabled, setBlurEnabled] = useState(false);
@@ -981,6 +1021,8 @@ export function MeetingRoomPage() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showOtherWaysModal, setShowOtherWaysModal] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showVirtualBackgroundModal, setShowVirtualBackgroundModal] = useState(false);
+  const [showShareVideoDialog, setShowShareVideoDialog] = useState(false);
   const localParticipantIdRef = useRef<string>('local');
   const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -2178,13 +2220,30 @@ export function MeetingRoomPage() {
   }, []);
 
   useEffect(() => {
-    if (!displayName && auth.currentUser) {
-      setDisplayName(auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || '');
-    } else if (!displayName) {
-      // Restore guest name saved from previous session (for seamless rejoin)
+    if (displayName) {
+      return;
+    }
+    // Restore guest name saved from previous session (for seamless rejoin) -- checked
+    // immediately, not gated on Firebase, since a guest has no auth state to wait for.
+    if (!auth.currentUser) {
       const savedName = localStorage.getItem('toowix_guest_displayName');
+
       if (savedName) setDisplayName(savedName);
     }
+    // Subscribed rather than read once: auth.currentUser is frequently still null on this
+    // component's first render (Firebase resolves it asynchronously, even for an already
+    // logged-in user on reload), and this effect's only dependency is `displayName` -- which
+    // never changes on its own -- so a one-shot `if (auth.currentUser)` check here would
+    // permanently miss the real name whenever auth hadn't resolved yet at mount, leaving the
+    // avatar stuck on a fallback letter for the entire session. onAuthStateChanged fires again
+    // the moment Firebase actually resolves, so this can't miss that update.
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (user) {
+        setDisplayName(prev => prev || user.displayName || user.email?.split('@')[0] || '');
+      }
+    });
+
+    return unsubscribe;
   }, [displayName]);
 
   // Real-time media preview hook (cleaned up cleanly on joining)
@@ -2211,6 +2270,9 @@ export function MeetingRoomPage() {
     autoRecording: boolean;
     recordingEnabled: boolean;
     cancelled: boolean;
+    expired: boolean;
+    expiresAt: string | null;
+    passwordRequired: boolean;
     requireLobbyPolicy: boolean;
     allowScreenShare: boolean;
     micLockEnabled: boolean;
@@ -2244,6 +2306,9 @@ export function MeetingRoomPage() {
         if (active) {
           setMeetingInfo(data.meeting);
           meetingInfoRef.current = data.meeting;
+          if (data.meeting?.expired) {
+            setAdmissionError('This meeting link has expired -- its scheduled time is over.');
+          }
         }
       } catch (error) {
         if (active) setAdmissionError(error instanceof Error ? error.message : 'Meeting lookup failed');
@@ -2285,7 +2350,11 @@ export function MeetingRoomPage() {
   // Join Flow: Knocks on lobby or joins directly
   // ---------------------------------------------------------------------------
   const handleJoinMeeting = async (audioOnly: boolean = false) => {
-    if (!meetingInfo || meetingInfo.cancelled || joining || leavingRef.current) return;
+    if (!meetingInfo || meetingInfo.cancelled || meetingInfo.expired || joining || leavingRef.current) return;
+    if (meetingInfo.passwordRequired && !passcodeInput.trim()) {
+      setAdmissionError('Enter the meeting password to join.');
+      return;
+    }
     try { initPipStream(); } catch { }
     setJoining(true);
     setAdmissionError('');
@@ -2309,6 +2378,7 @@ export function MeetingRoomPage() {
         body: JSON.stringify({
           name: displayName.trim() || 'Guest',
           requestId: waitingRequestId || undefined,
+          passcode: meetingInfo.passwordRequired ? passcodeInput.trim() : undefined,
         }),
       });
       const data = await response.json();
@@ -2571,6 +2641,33 @@ export function MeetingRoomPage() {
     leaveMeeting('You ended the meeting for everyone.');
   };
 
+  // Auto-end once the meeting's scheduled window (start + chosen duration) elapses. The
+  // moderator's client broadcasts the real "ended for everyone" signal (same mechanism as
+  // clicking End Meeting) so everyone sees "the host has ended the meeting" instead of each
+  // client silently dropping out at a slightly different moment; a non-moderator still has its
+  // own fallback leave in case the moderator's client isn't present for some reason.
+  useEffect(() => {
+    if (!hasJoined || !meetingInfo?.expiresAt) return;
+    const msRemaining = new Date(meetingInfo.expiresAt).getTime() - Date.now();
+    const fire = () => {
+      if (isModerator) {
+        void handleEndMeetingForEveryone();
+      } else {
+        leaveMeeting('This meeting has ended -- its scheduled time is over.');
+      }
+    };
+
+    if (msRemaining <= 0) {
+      fire();
+
+      return;
+    }
+    const timer = setTimeout(fire, msRemaining);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasJoined, meetingInfo?.expiresAt, isModerator]);
+
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
   // Direct lib-jitsi-meet integration -- no IFrame, no external_api.js. We own the real
@@ -2652,10 +2749,19 @@ export function MeetingRoomPage() {
   }, [jitsiMeeting.dominantSpeakerId, jitsiMeeting.localParticipantId]);
 
   // Real recording state (RECORDER_STATE_CHANGED) -- this fires identically for every
-  // participant in the room, not just whoever clicked start, so the blinking "REC" indicator
-  // below is accurate for everyone.
+  // participant in the room, not just whoever clicked start, so both the blinking "REC"
+  // indicator below AND this "Recording has started/stopped" toast are accurate for everyone,
+  // not just a local "Requesting recording..." message shown only to whoever clicked the button
+  // (see handleToggleRecording below, which is that separate, initiator-only request toast).
+  const wasRecordingRef = useRef(jitsiMeeting.recording);
+
   useEffect(() => {
     setRecording(jitsiMeeting.recording);
+    if (jitsiMeeting.recording !== wasRecordingRef.current) {
+      wasRecordingRef.current = jitsiMeeting.recording;
+      setRecordingToast(jitsiMeeting.recording ? 'Recording has started' : 'Recording has stopped');
+      setTimeout(() => setRecordingToast((t) => (t === (jitsiMeeting.recording ? 'Recording has started' : 'Recording has stopped') ? null : t)), 4000);
+    }
   }, [jitsiMeeting.recording]);
 
   // Map the hook's remote-participant record into the array shape the existing UI/roster
@@ -2815,6 +2921,9 @@ export function MeetingRoomPage() {
   // below) -- this just requests the start/stop and shows a transient toast for the request
   // itself, distinct from the real confirmation.
   const handleToggleRecording = async () => {
+    // Recording control is host/moderator-only -- both entry points (Activities panel and the
+    // More-options menu) are already hidden for non-moderators, this is just the backstop.
+    if (!isModerator) return;
     if (recording) {
       setRecordingToast('Stopping recording…');
       setTimeout(() => setRecordingToast((t) => (t === 'Stopping recording…' ? null : t)), 3500);
@@ -3235,7 +3344,7 @@ export function MeetingRoomPage() {
           {/* Top-Left: Toowix Logo, Time, Divider, Meeting Code, Info Action */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <img
-              src="/assets/toowix-logo.png"
+              src="/assets/toowix-logo.svg"
               alt="Toowix"
               style={{ height: '22px', width: 'auto', display: 'block' }}
             />
@@ -3339,9 +3448,14 @@ export function MeetingRoomPage() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  overflow: 'hidden',
                 }}
               >
-                {participantInitial}
+                {localAvatarUrl ? (
+                  <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                ) : (
+                  participantInitial
+                )}
               </div>
               <span style={{ fontSize: '13px', fontWeight: 500, color: '#E8EAED' }}>
                 {1 + remoteParticipantCount}
@@ -3392,8 +3506,8 @@ export function MeetingRoomPage() {
               the original bug (avatar cards with no video ever attached to them) and must never
               be re-enabled without giving it real tracks. Safe to delete entirely in a follow-up
               cleanup once the real surface has been visually verified in production. */}
-          {(isScreenSharing || remoteScreenStream ? (
-            /* Presentation Mode: Main Stage Screen Share + Filmstrip of Attendees (Google Meet style) */
+          {(isScreenSharing || remoteScreenStream || jitsiMeeting.sharedVideo ? (
+            /* Presentation Mode: Main Stage Screen Share (or Shared Video) + Filmstrip of Attendees (Google Meet style) */
             <div
               style={{
                 width: '100%',
@@ -3431,7 +3545,7 @@ export function MeetingRoomPage() {
                     muted
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
-                ) : (
+                ) : remoteScreenStream ? (
                   <video
                     ref={remotePresentationVideoRef}
                     autoPlay
@@ -3439,7 +3553,18 @@ export function MeetingRoomPage() {
                     muted
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
-                )}
+                ) : jitsiMeeting.sharedVideo ? (
+                  <SharedVideoManager
+                    sharedVideo={jitsiMeeting.sharedVideo}
+                    localParticipantId={jitsiMeeting.localParticipantId}
+                    isLocalAudioMuted={jitsiMeeting.localAudioMuted}
+                    onMuteLocalAudio={() => {
+                      if (!jitsiMeeting.localAudioMuted) jitsiMeeting.toggleAudio();
+                    }}
+                    onStatusUpdate={jitsiMeeting.updateSharedVideoStatus}
+                    onError={() => jitsiMeeting.stopSharedVideo()}
+                  />
+                ) : null}
 
                 {/* Floating Top Banner: Presentation Status */}
                 <div
@@ -3462,11 +3587,15 @@ export function MeetingRoomPage() {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <ScreenShare size={16} color="#8AB4F8" />
+                    {jitsiMeeting.sharedVideo ? <Youtube size={16} color="#8AB4F8" /> : <ScreenShare size={16} color="#8AB4F8" />}
                     <span>
-                      {isScreenSharing
-                        ? 'You are presenting your screen'
-                        : `${remotePresenterName || 'Participant'} is presenting their screen`}
+                      {jitsiMeeting.sharedVideo
+                        ? (jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId
+                          ? 'You are sharing a video'
+                          : 'Watching a shared video')
+                        : isScreenSharing
+                          ? 'You are presenting your screen'
+                          : `${remotePresenterName || 'Participant'} is presenting their screen`}
                     </span>
                   </div>
                   {isScreenSharing && (
@@ -3487,6 +3616,26 @@ export function MeetingRoomPage() {
                       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
                     >
                       Stop presenting
+                    </button>
+                  )}
+                  {jitsiMeeting.sharedVideo && jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId && (
+                    <button
+                      onClick={() => jitsiMeeting.stopSharedVideo()}
+                      style={{
+                        backgroundColor: '#EA4335',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '4px 12px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        transition: 'background-color 0.15s ease',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#D93025')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
+                    >
+                      Stop sharing
                     </button>
                   )}
                 </div>
@@ -3541,9 +3690,14 @@ export function MeetingRoomPage() {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        overflow: 'hidden',
                       }}
                     >
-                      {participantInitial}
+                      {localAvatarUrl ? (
+                        <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                      ) : (
+                        participantInitial
+                      )}
                     </div>
                   )}
                   {/* Name tag */}
@@ -3777,9 +3931,14 @@ export function MeetingRoomPage() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                      overflow: 'hidden',
                     }}
                   >
-                    {participantInitial}
+                    {localAvatarUrl ? (
+                      <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                    ) : (
+                      participantInitial
+                    )}
                   </div>
                 </div>
               )}
@@ -3945,9 +4104,14 @@ export function MeetingRoomPage() {
                               alignItems: 'center',
                               justifyContent: 'center',
                               boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                              overflow: 'hidden',
                             }}
                           >
-                            {participantInitial}
+                            {localAvatarUrl ? (
+                              <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                            ) : (
+                              participantInitial
+                            )}
                           </div>
                         )
                       ) : (pinned as any)?.video && (pinned as any)?.stream ? (
@@ -4073,9 +4237,14 @@ export function MeetingRoomPage() {
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
+                              overflow: 'hidden',
                             }}
                           >
-                            {participantInitial}
+                            {localAvatarUrl ? (
+                              <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                            ) : (
+                              participantInitial
+                            )}
                           </div>
                         )}
                         <div
@@ -4286,9 +4455,14 @@ export function MeetingRoomPage() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                        overflow: 'hidden',
                       }}
                     >
-                      {participantInitial}
+                      {localAvatarUrl ? (
+                        <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                      ) : (
+                        participantInitial
+                      )}
                     </div>
                   </div>
                 )}
@@ -5068,29 +5242,34 @@ export function MeetingRoomPage() {
 
                 {activePanel === 'activities' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    <div
-                      onClick={handleToggleRecording}
-                      style={{
-                        padding: '14px',
-                        backgroundColor: 'rgba(255,255,255,0.04)',
-                        borderRadius: '14px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '12px',
-                        border: recording ? '1px solid #EA4335' : '1px solid rgba(255,255,255,0.08)',
-                      }}
-                    >
-                      <Radio size={20} color={recording ? '#EA4335' : '#E8EAED'} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#E8EAED' }}>
-                          {recording ? 'Recording in progress' : 'Record meeting'}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#9AA0A6' }}>
-                          {recording ? `Recording: ${formatDuration(recordingSeconds)}` : 'Save session to your workspace cloud'}
+                    {/* Recording control is host/moderator-only. Non-moderators still see the
+                        red "recording in progress" pill badge and dot elsewhere in the UI --
+                        this is just the start/stop control itself. */}
+                    {isModerator && (
+                      <div
+                        onClick={handleToggleRecording}
+                        style={{
+                          padding: '14px',
+                          backgroundColor: 'rgba(255,255,255,0.04)',
+                          borderRadius: '14px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '12px',
+                          border: recording ? '1px solid #EA4335' : '1px solid rgba(255,255,255,0.08)',
+                        }}
+                      >
+                        <Radio size={20} color={recording ? '#EA4335' : '#E8EAED'} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '14px', fontWeight: 600, color: '#E8EAED' }}>
+                            {recording ? 'Recording in progress' : 'Record meeting'}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#9AA0A6' }}>
+                            {recording ? `Recording: ${formatDuration(recordingSeconds)}` : 'Save session to your workspace cloud'}
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
 
                     <div
                       onClick={() => setShowSettingsModal(true)}
@@ -5512,28 +5691,30 @@ export function MeetingRoomPage() {
                   gap: '4px',
                 }}
               >
-                <button
-                  onClick={() => {
-                    handleToggleRecording();
-                    setShowMoreMenu(false);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '8px 12px',
-                    background: 'transparent',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: recording ? '#EA4335' : '#E8EAED',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
-                >
-                  <Radio size={16} />
-                  {recording ? 'Stop recording' : 'Record meeting'}
-                </button>
+                {isModerator && (
+                  <button
+                    onClick={() => {
+                      handleToggleRecording();
+                      setShowMoreMenu(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '8px',
+                      color: recording ? '#EA4335' : '#E8EAED',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <Radio size={16} />
+                    {recording ? 'Stop recording' : 'Record meeting'}
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setShowSettingsModal(true);
@@ -5627,6 +5808,82 @@ export function MeetingRoomPage() {
                 >
                   {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
                   {isFullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    setShowVirtualBackgroundModal(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: '#E8EAED',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                  }}
+                >
+                  <Sparkles size={16} />
+                  Select background
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    jitsiMeeting.toggleNoiseSuppression().catch((err) => {
+                      // eslint-disable-next-line no-console
+                      console.error('[MeetingRoomPage] failed to toggle noise suppression:', err);
+                    });
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 12px',
+                    background: jitsiMeeting.noiseSuppressionEnabled ? 'rgba(138, 180, 248, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: jitsiMeeting.noiseSuppressionEnabled ? '#8AB4F8' : '#E8EAED',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                  }}
+                >
+                  <Wind size={16} />
+                  {jitsiMeeting.noiseSuppressionEnabled ? 'Extra noise suppression (on)' : 'Extra noise suppression'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    if (jitsiMeeting.sharedVideo) {
+                      jitsiMeeting.stopSharedVideo();
+                    } else {
+                      setShowShareVideoDialog(true);
+                    }
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 12px',
+                    background: jitsiMeeting.sharedVideo ? 'rgba(138, 180, 248, 0.15)' : 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: jitsiMeeting.sharedVideo ? '#8AB4F8' : '#E8EAED',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                  }}
+                >
+                  <Youtube size={16} />
+                  {jitsiMeeting.sharedVideo ? 'Stop sharing video' : 'Share video'}
                 </button>
               </div>
             )}
@@ -5829,6 +6086,21 @@ export function MeetingRoomPage() {
             roomSlug: roomId,
             hostName: meetingInfo?.organizerName || displayName || 'Organizer',
             description: meetingInfo?.description || undefined,
+          }}
+        />
+
+        <VirtualBackgroundModal
+          isOpen={showVirtualBackgroundModal}
+          onClose={() => setShowVirtualBackgroundModal(false)}
+          onSelect={jitsiMeeting.setVirtualBackground}
+        />
+
+        <ShareVideoDialog
+          isOpen={showShareVideoDialog}
+          onClose={() => setShowShareVideoDialog(false)}
+          onSubmit={(id) => {
+            jitsiMeeting.shareVideo(id);
+            setShowShareVideoDialog(false);
           }}
         />
 
@@ -6138,6 +6410,7 @@ export function MeetingRoomPage() {
             isHandRaised={isHandRaised}
             remoteParticipants={remoteParticipants}
             roomTitle={meetingInfo?.description || roomId}
+            avatarUrl={localAvatarUrl}
             onToggleMic={handleToggleInCallMic}
             onToggleVideo={handleToggleInCallVideo}
             onToggleHand={handleToggleRaiseHand}
@@ -6185,7 +6458,7 @@ export function MeetingRoomPage() {
             gap: '12px',
           }}
         >
-          <img src="/assets/toowix-logo.png" alt="Toowix" style={{ width: '32px', height: '32px' }} />
+          <img src="/assets/toowix-logo.svg" alt="Toowix" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
           <span style={{ fontSize: '18px', fontWeight: 600, color: '#fff' }}>
             Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
           </span>
@@ -6256,9 +6529,14 @@ export function MeetingRoomPage() {
                     justifyContent: 'center',
                     fontSize: '22px',
                     fontWeight: 600,
+                    overflow: 'hidden',
                   }}
                 >
-                  {(displayName || 'G').charAt(0).toUpperCase()}
+                  {localAvatarUrl ? (
+                    <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    (displayName || 'U').charAt(0).toUpperCase()
+                  )}
                 </div>
               </div>
             )}
@@ -6437,7 +6715,7 @@ export function MeetingRoomPage() {
         }}
       >
         <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}>
-          <img src="/assets/toowix-logo.png" alt="Toowix Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+          <img src="/assets/toowix-logo.svg" alt="Toowix Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
           <span style={{ fontSize: '20px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#202124', letterSpacing: '-0.3px' }}>
             Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
           </span>
@@ -6552,9 +6830,14 @@ export function MeetingRoomPage() {
                     fontSize: '36px',
                     fontWeight: 600,
                     boxShadow: '0 4px 16px rgba(79, 70, 229, 0.4)',
+                    overflow: 'hidden',
                   }}
                 >
-                  {(displayName || 'U').charAt(0).toUpperCase()}
+                  {localAvatarUrl ? (
+                    <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    (displayName || 'U').charAt(0).toUpperCase()
+                  )}
                 </div>
                 <span style={{ fontSize: '13px', color: '#9AA0A6', marginTop: '14px', textAlign: 'center', padding: '0 16px' }}>
                   {cameraPermissionError ? (media.cameraError || 'Camera permission denied. You can join with audio only.') : 'Camera is off'}
@@ -6773,9 +7056,14 @@ export function MeetingRoomPage() {
                   justifyContent: 'center',
                   fontWeight: 600,
                   fontSize: '15px',
+                  overflow: 'hidden',
                 }}
               >
-                {(auth.currentUser.displayName || auth.currentUser.email || 'U').charAt(0).toUpperCase()}
+                {localAvatarUrl ? (
+                  <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                ) : (
+                  (auth.currentUser.displayName || auth.currentUser.email || 'U').charAt(0).toUpperCase()
+                )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <span style={{ fontSize: '14px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#202124' }}>
@@ -6811,6 +7099,30 @@ export function MeetingRoomPage() {
             </div>
           )}
 
+          {/* Password field -- shown when the meeting was scheduled as Private with a password */}
+          {meetingInfo?.passwordRequired && (
+            <div style={{ marginBottom: '4px' }}>
+              <input
+                type="password"
+                value={passcodeInput}
+                onChange={(e) => setPasscodeInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleJoinMeeting(false)}
+                placeholder="Enter meeting password"
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  backgroundColor: isDark ? '#2D2E30' : '#FFFFFF',
+                  border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.15)' : '#DADCE0'}`,
+                  color: isDark ? '#FFFFFF' : '#202124',
+                  fontSize: '14px',
+                  outline: 'none',
+                }}
+              />
+            </div>
+          )}
+
           {/* Error Notice */}
           {admissionError && (
             <div
@@ -6831,12 +7143,12 @@ export function MeetingRoomPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <button
               onClick={() => handleJoinMeeting(false)}
-              disabled={joining}
+              disabled={joining || meetingInfo?.expired}
               style={{
                 width: '100%',
                 padding: '14px',
                 borderRadius: '24px',
-                backgroundColor: joining ? '#80868B' : '#4F46E5',
+                backgroundColor: joining || meetingInfo?.expired ? '#80868B' : '#4F46E5',
                 color: '#FFFFFF',
                 border: 'none',
                 fontSize: '16px',

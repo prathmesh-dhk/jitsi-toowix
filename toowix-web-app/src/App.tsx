@@ -36,22 +36,11 @@ function HomePage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '9px',
-              background: 'linear-gradient(135deg, #2E72B2 0%, #4799E3 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '20px',
-            }}
-          >
-            T
-          </div>
+          <img
+            src="/assets/toowix-logo.svg"
+            alt="Toowix Logo"
+            style={{ width: '38px', height: '38px', objectFit: 'contain' }}
+          />
           <span style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '-0.5px' }}>
             Toowix <span style={{ color: 'var(--color-primary)' }}>Meet</span>
           </span>

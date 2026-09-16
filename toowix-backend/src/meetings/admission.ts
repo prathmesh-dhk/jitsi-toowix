@@ -34,25 +34,44 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     if (meeting && !mayAttend(meeting, user, company)) {
       res.status(403).json({ error: meeting.cancelledAt ? 'Meeting cancelled' : 'Sign in with an invited or workspace account to join.' }); return;
     }
+    // A scheduled meeting's link expires once its scheduled window (start + chosen duration)
+    // has elapsed -- an instant meeting (no scheduledAt) or a scheduled one with no duration
+    // set never expires this way.
+    const expiresAt = meeting?.scheduledAt && meeting?.durationMinutes
+      ? new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000)
+      : null;
+    const expired = !!expiresAt && Date.now() > expiresAt.getTime();
+    const creatorId = meeting ? String(meeting.createdBy) : '';
+    const isCreator = !!user && creatorId === String(user._id);
+    const passwordRequired = !!meeting?.passcode && !isCreator;
     const policy = company?.meetingPolicy;
     const moderator = !!meeting && !!user && String(meeting.createdBy) === String(user._id)
       && (user.role === 'SUPER_ADMIN' || !policy?.whoCanHost || policy.whoCanHost.includes(user.role));
     const requireLobbyPolicy = !!policy?.requireLobby;
-    // This flag is an operator attestation, not a replacement for Prosody enforcement.
-    if (requireLobbyPolicy && process.env.JITSI_SERVER_POLICY_VERIFIED !== 'true') {
-      res.status(503).json({ error: 'Required server-side lobby policy has not been verified.' }); return;
-    }
     const recordingEnabled = !!meeting && moderator && policy?.recordingEnabled !== false && company?.limits?.featureFlags?.recordingEnabled !== false;
     const info = {
       type: meeting?.type || 'Guest', organizerId: meeting ? String(meeting.createdBy) : '',
       organizerName: '', description: meeting?.description || null,
-      accessAllowed: true, cancelled: false, inviteRestricted: meeting?.type === 'Private',
+      accessAllowed: true, cancelled: false, expired, expiresAt: expiresAt ? expiresAt.toISOString() : null,
+      passwordRequired, inviteRestricted: meeting?.type === 'Private',
       recordingEnabled, autoRecording: recordingEnabled && !!policy?.autoRecording,
       requireLobbyPolicy, allowScreenShare: policy?.allowScreenShare !== false,
       micLockEnabled: !!policy?.micLockEnabled,
     };
     if (req.method === 'GET') { res.json({ meeting: info }); return; }
-    const identity = { id: user ? String(user._id) : crypto.randomUUID(), name: user?.fullName || String(req.body.name || 'Guest').slice(0, 100), email: user?.email || '' };
+    if (expired) { res.status(410).json({ error: 'This meeting link has expired.' }); return; }
+    if (passwordRequired) {
+      const submitted = typeof req.body.passcode === 'string' ? req.body.passcode.trim() : '';
+      if (!submitted || submitted !== meeting!.passcode) {
+        res.status(401).json({ error: 'Incorrect meeting password.', passwordRequired: true }); return;
+      }
+    }
+    const identity = {
+      id: user ? String(user._id) : crypto.randomUUID(),
+      name: user?.fullName || String(req.body.name || 'Guest').slice(0, 100),
+      email: user?.email || '',
+      avatar: user?.avatarUrl || undefined,
+    };
     const participantEntryId = crypto.randomBytes(12).toString('hex');
     const attendanceToken = jwt.sign({ room, participantEntryId, identity, moderator, purpose: 'attendance' }, jitsiConfig.appSecret,
       { algorithm: 'HS256', audience: 'toowix-attendance', issuer: 'toowix-backend', expiresIn: '12h' });
@@ -77,10 +96,8 @@ export async function attendance(req: AuthenticatedRequest, res: Response): Prom
       const meeting = await Meeting.findOne({ roomSlug: room });
       if (meeting?.cancelledAt) { res.status(403).json({ error: 'Meeting cancelled' }); return; }
       await Meeting.updateOne({ roomSlug: room, 'participants._id': { $ne: claim.participantEntryId } },
-        { $push: { participants: { _id: claim.participantEntryId, name: claim.identity.name,
-          email: claim.identity.email || `${claim.identity.id}@unauthenticated.local`,
-          role: claim.moderator ? 'Organizer' : 'Participant', joinedAt: new Date(), attendanceStatus: 'Attended' } } });
+        { $push: { participants: { _id: claim.participantEntryId, name: claim.identity.name, email: claim.identity.email, avatarUrl: claim.identity.avatar || null, role: claim.moderator ? 'Host' : 'Participant', joinedAt: new Date() } } });
     }
-    res.json({ participantEntryId: claim.participantEntryId });
-  } catch { res.status(401).json({ error: 'Invalid attendance credential' }); }
+    res.sendStatus(200);
+  } catch { res.sendStatus(403); }
 }

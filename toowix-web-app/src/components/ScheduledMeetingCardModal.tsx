@@ -18,6 +18,7 @@ import {
   Share2,
 } from 'lucide-react';
 import { ShareMeetingModal } from './ShareMeetingModal';
+import { useTheme } from '../lib/theme';
 
 export interface IScheduledMeetingDetails {
   id?: string;
@@ -79,6 +80,7 @@ export function ScheduledMeetingCardModal({
   onMoreDetails,
   onDelete,
 }: IScheduledMeetingCardModalProps) {
+  const { isDark } = useTheme();
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedPasscode, setCopiedPasscode] = useState(false);
   const [copiedAttendees, setCopiedAttendees] = useState(false);
@@ -220,12 +222,14 @@ export function ScheduledMeetingCardModal({
         style={{
           width: '100%',
           maxWidth: '430px',
-          backgroundColor: '#17181C',
+          backgroundColor: isDark ? '#17181C' : '#FFFFFF',
           borderRadius: '16px',
-          border: '1px solid #2B2D33',
-          boxShadow: '0 24px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06)',
+          border: isDark ? '1px solid #2B2D33' : '1px solid #E5E7EB',
+          boxShadow: isDark
+            ? '0 24px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06)'
+            : '0 20px 40px -12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
           padding: '22px 24px',
-          color: '#E5E7EB',
+          color: isDark ? '#E5E7EB' : '#141B2B',
           fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
           boxSizing: 'border-box',
           position: 'relative',
@@ -245,7 +249,7 @@ export function ScheduledMeetingCardModal({
                 flexShrink: 0,
               }}
             />
-            <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#FFFFFF' }}>
+            <span style={{ fontSize: '13.5px', fontWeight: 700, color: isDark ? '#FFFFFF' : '#141B2B' }}>
               {meeting.type || 'Personal'}
             </span>
           </div>
@@ -261,14 +265,14 @@ export function ScheduledMeetingCardModal({
                 borderRadius: '6px',
                 background: 'transparent',
                 border: 'none',
-                color: '#9CA3AF',
+                color: isDark ? '#9CA3AF' : '#6B7280',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#FFFFFF')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#9CA3AF')}
+              onMouseEnter={(e) => (e.currentTarget.style.color = isDark ? '#FFFFFF' : '#141B2B')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#9CA3AF' : '#6B7280')}
             >
               <MoreHorizontal size={17} />
             </button>
@@ -279,10 +283,10 @@ export function ScheduledMeetingCardModal({
                   position: 'absolute',
                   top: '32px',
                   right: 0,
-                  backgroundColor: '#202227',
-                  border: '1px solid #353840',
+                  backgroundColor: isDark ? '#202227' : '#FFFFFF',
+                  border: isDark ? '1px solid #353840' : '1px solid #E5E7EB',
                   borderRadius: '8px',
-                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.5)',
+                  boxShadow: isDark ? '0 10px 25px rgba(0, 0, 0, 0.5)' : '0 10px 25px rgba(0, 0, 0, 0.12)',
                   minWidth: '170px',
                   zIndex: 20,
                   padding: '4px 0',
@@ -302,12 +306,12 @@ export function ScheduledMeetingCardModal({
                     gap: '8px',
                     background: 'transparent',
                     border: 'none',
-                    color: '#E5E7EB',
+                    color: isDark ? '#E5E7EB' : '#374151',
                     fontSize: '12px',
                     textAlign: 'left',
                     cursor: 'pointer',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2B2E35')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2B2E35' : '#F3F4F6')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   <Copy size={13} /> Copy Link
@@ -326,12 +330,12 @@ export function ScheduledMeetingCardModal({
                     gap: '8px',
                     background: 'transparent',
                     border: 'none',
-                    color: '#818CF8',
+                    color: '#6366F1',
                     fontSize: '12px',
                     textAlign: 'left',
                     cursor: 'pointer',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2B2E35')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2B2E35' : '#F3F4F6')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   <Share2 size={13} /> Share Joining Info
@@ -350,12 +354,12 @@ export function ScheduledMeetingCardModal({
                     gap: '8px',
                     background: 'transparent',
                     border: 'none',
-                    color: '#E5E7EB',
+                    color: isDark ? '#E5E7EB' : '#374151',
                     fontSize: '12px',
                     textAlign: 'left',
                     cursor: 'pointer',
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2B2E35')}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2B2E35' : '#F3F4F6')}
                   onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                 >
                   <ExternalLink size={13} /> Open Meeting
@@ -375,12 +379,12 @@ export function ScheduledMeetingCardModal({
                       gap: '8px',
                       background: 'transparent',
                       border: 'none',
-                      color: '#F87171',
+                      color: '#EF4444',
                       fontSize: '12px',
                       textAlign: 'left',
                       cursor: 'pointer',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2B2E35')}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2B2E35' : '#F3F4F6')}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                   >
                     <Trash2 size={13} /> Delete Meeting
@@ -399,14 +403,14 @@ export function ScheduledMeetingCardModal({
                 borderRadius: '6px',
                 background: 'transparent',
                 border: 'none',
-                color: '#9CA3AF',
+                color: isDark ? '#9CA3AF' : '#6B7280',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: 'pointer',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = '#FFFFFF')}
-              onMouseLeave={(e) => (e.currentTarget.style.color = '#9CA3AF')}
+              onMouseEnter={(e) => (e.currentTarget.style.color = isDark ? '#FFFFFF' : '#141B2B')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = isDark ? '#9CA3AF' : '#6B7280')}
             >
               <X size={17} />
             </button>
@@ -419,7 +423,7 @@ export function ScheduledMeetingCardModal({
             margin: '6px 0 16px',
             fontSize: '22px',
             fontWeight: 800,
-            color: '#FFFFFF',
+            color: isDark ? '#FFFFFF' : '#141B2B',
             letterSpacing: '-0.3px',
             wordBreak: 'break-word',
           }}
@@ -429,15 +433,15 @@ export function ScheduledMeetingCardModal({
 
         {/* Row 1: Calendar Date */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-          <CalendarIcon size={16} color="#9CA3AF" style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: '13.5px', color: '#D1D5DB', fontWeight: 500 }}>
+          <CalendarIcon size={16} color={isDark ? '#9CA3AF' : '#6B7280'} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: '13.5px', color: isDark ? '#D1D5DB' : '#374151', fontWeight: 500 }}>
             {formattedDate}
           </span>
         </div>
 
         {/* Row 2: Location / Meeting Link */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: meeting.passcode ? '12px' : '18px' }}>
-          <MapPin size={16} color="#9CA3AF" style={{ flexShrink: 0 }} />
+          <MapPin size={16} color={isDark ? '#9CA3AF' : '#6B7280'} style={{ flexShrink: 0 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
             <a
               href={meeting.meetingUrl}
@@ -446,7 +450,7 @@ export function ScheduledMeetingCardModal({
               title="Click to open meeting room"
               style={{
                 fontSize: '13.5px',
-                color: '#93C5FD',
+                color: isDark ? '#93C5FD' : '#4F46E5',
                 textDecoration: 'underline',
                 fontWeight: 500,
                 overflow: 'hidden',
@@ -465,7 +469,7 @@ export function ScheduledMeetingCardModal({
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: copiedLink ? '#34D399' : '#9CA3AF',
+                color: copiedLink ? '#34D399' : (isDark ? '#9CA3AF' : '#6B7280'),
                 cursor: 'pointer',
                 padding: '2px',
                 display: 'flex',
@@ -483,8 +487,8 @@ export function ScheduledMeetingCardModal({
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
             <Lock size={16} color="#FBBF24" style={{ flexShrink: 0 }} />
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
-              <span style={{ fontSize: '13px', color: '#D1D5DB' }}>
-                Passcode: <strong style={{ color: '#FDE047', letterSpacing: '0.5px' }}>{meeting.passcode}</strong>
+              <span style={{ fontSize: '13px', color: isDark ? '#D1D5DB' : '#374151' }}>
+                Passcode: <strong style={{ color: isDark ? '#FDE047' : '#B45309', letterSpacing: '0.5px' }}>{meeting.passcode}</strong>
               </span>
               <button
                 type="button"
@@ -494,7 +498,7 @@ export function ScheduledMeetingCardModal({
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  color: copiedPasscode ? '#34D399' : '#9CA3AF',
+                  color: copiedPasscode ? '#34D399' : (isDark ? '#9CA3AF' : '#6B7280'),
                   cursor: 'pointer',
                   padding: '2px',
                   display: 'flex',
@@ -511,12 +515,12 @@ export function ScheduledMeetingCardModal({
         {/* Attendees Section */}
         <div style={{ marginTop: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Users size={16} color="#9CA3AF" style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#FFFFFF' }}>Attendees</span>
+            <Users size={16} color={isDark ? '#9CA3AF' : '#6B7280'} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: '14.5px', fontWeight: 700, color: isDark ? '#FFFFFF' : '#141B2B' }}>Attendees</span>
             <span
               style={{
-                backgroundColor: '#1E2433',
-                color: '#93C5FD',
+                backgroundColor: isDark ? '#1E2433' : '#EEF2FF',
+                color: isDark ? '#93C5FD' : '#4F46E5',
                 fontSize: '11px',
                 fontWeight: 700,
                 padding: '1px 7px',
@@ -534,7 +538,7 @@ export function ScheduledMeetingCardModal({
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: copiedAttendees ? '#34D399' : '#9CA3AF',
+                color: copiedAttendees ? '#34D399' : (isDark ? '#9CA3AF' : '#6B7280'),
                 cursor: 'pointer',
                 padding: '2px',
                 display: 'flex',
@@ -545,7 +549,7 @@ export function ScheduledMeetingCardModal({
             </button>
           </div>
 
-          <div style={{ fontSize: '12px', color: '#9CA3AF', margin: '5px 0 14px 26px' }}>
+          <div style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '5px 0 14px 26px' }}>
             {confirmedCount} confirmed
             {awaitingCount > 0 ? `, ${awaitingCount} awaiting response` : ''}
             {declinedCount > 0 ? `, ${declinedCount} declined` : ''}
@@ -560,8 +564,8 @@ export function ScheduledMeetingCardModal({
                   width: '32px',
                   height: '32px',
                   borderRadius: '50%',
-                  backgroundColor: '#432349',
-                  color: '#D8B4FE',
+                  backgroundColor: isDark ? '#432349' : '#F3E8FF',
+                  color: isDark ? '#D8B4FE' : '#9333EA',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -575,14 +579,14 @@ export function ScheduledMeetingCardModal({
 
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#141B2B' }}>
                     {organizerName}
                   </span>
                   {organizerEmail && (
                     <span
                       style={{
                         fontSize: '12px',
-                        color: '#9CA3AF',
+                        color: isDark ? '#9CA3AF' : '#6B7280',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -601,7 +605,7 @@ export function ScheduledMeetingCardModal({
                       style={{
                         background: 'transparent',
                         border: 'none',
-                        color: copiedEmail === organizerEmail ? '#34D399' : '#9CA3AF',
+                        color: copiedEmail === organizerEmail ? '#34D399' : (isDark ? '#9CA3AF' : '#6B7280'),
                         cursor: 'pointer',
                         padding: '1px',
                         display: 'inline-flex',
@@ -616,17 +620,17 @@ export function ScheduledMeetingCardModal({
                       href={`mailto:${organizerEmail}`}
                       aria-label="Send email"
                       title="Send email"
-                      style={{ color: '#9CA3AF', display: 'inline-flex', alignItems: 'center' }}
+                      style={{ color: isDark ? '#9CA3AF' : '#6B7280', display: 'inline-flex', alignItems: 'center' }}
                     >
                       <Mail size={12} />
                     </a>
                   )}
-                  <span style={{ fontSize: '11.5px', color: '#9CA3AF' }}>(organizer)</span>
+                  <span style={{ fontSize: '11.5px', color: isDark ? '#9CA3AF' : '#6B7280' }}>(organizer)</span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px' }}>
                   <CheckCircle2 size={13} color="#34D399" />
-                  <span style={{ fontSize: '11.5px', color: '#34D399' }}>Invitation accepted</span>
+                  <span style={{ fontSize: '11.5px', color: '#10B981' }}>Invitation accepted</span>
                 </div>
               </div>
             </div>
@@ -645,8 +649,8 @@ export function ScheduledMeetingCardModal({
                       width: '32px',
                       height: '32px',
                       borderRadius: '50%',
-                      backgroundColor: isAccepted ? '#133529' : isDeclined ? '#3B1818' : '#38321D',
-                      color: isAccepted ? '#34D399' : isDeclined ? '#F87171' : '#FDE047',
+                      backgroundColor: isAccepted ? (isDark ? '#133529' : '#ECFDF5') : isDeclined ? (isDark ? '#3B1818' : '#FEF2F2') : (isDark ? '#38321D' : '#FEF3C7'),
+                      color: isAccepted ? '#10B981' : isDeclined ? '#EF4444' : '#D97706',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -660,13 +664,13 @@ export function ScheduledMeetingCardModal({
 
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#141B2B' }}>
                         {displayName}
                       </span>
                       <span
                         style={{
                           fontSize: '12px',
-                          color: '#9CA3AF',
+                          color: isDark ? '#9CA3AF' : '#6B7280',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
@@ -683,7 +687,7 @@ export function ScheduledMeetingCardModal({
                         style={{
                           background: 'transparent',
                           border: 'none',
-                          color: copiedEmail === inv.email ? '#34D399' : '#9CA3AF',
+                          color: copiedEmail === inv.email ? '#34D399' : (isDark ? '#9CA3AF' : '#6B7280'),
                           cursor: 'pointer',
                           padding: '1px',
                           display: 'inline-flex',
@@ -696,7 +700,7 @@ export function ScheduledMeetingCardModal({
                         href={`mailto:${inv.email}`}
                         aria-label="Send email"
                         title="Send email"
-                        style={{ color: '#9CA3AF', display: 'inline-flex', alignItems: 'center' }}
+                        style={{ color: isDark ? '#9CA3AF' : '#6B7280', display: 'inline-flex', alignItems: 'center' }}
                       >
                         <Mail size={12} />
                       </a>
@@ -705,18 +709,18 @@ export function ScheduledMeetingCardModal({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px' }}>
                       {isAccepted ? (
                         <>
-                          <CheckCircle2 size={13} color="#34D399" />
-                          <span style={{ fontSize: '11.5px', color: '#34D399' }}>Invitation accepted</span>
+                          <CheckCircle2 size={13} color="#10B981" />
+                          <span style={{ fontSize: '11.5px', color: '#10B981' }}>Invitation accepted</span>
                         </>
                       ) : isDeclined ? (
                         <>
-                          <XCircle size={13} color="#F87171" />
-                          <span style={{ fontSize: '11.5px', color: '#F87171' }}>Invitation declined</span>
+                          <XCircle size={13} color="#EF4444" />
+                          <span style={{ fontSize: '11.5px', color: '#EF4444' }}>Invitation declined</span>
                         </>
                       ) : (
                         <>
-                          <MinusCircle size={13} color="#9CA3AF" />
-                          <span style={{ fontSize: '11.5px', color: '#9CA3AF' }}>Awaiting response</span>
+                          <MinusCircle size={13} color={isDark ? '#9CA3AF' : '#6B7280'} />
+                          <span style={{ fontSize: '11.5px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Awaiting response</span>
                         </>
                       )}
                     </div>
@@ -736,7 +740,7 @@ export function ScheduledMeetingCardModal({
             gap: '8px',
             marginTop: '24px',
             paddingTop: '16px',
-            borderTop: '1px solid #272A32',
+            borderTop: isDark ? '1px solid #272A32' : '1px solid #E5E7EB',
             flexWrap: 'wrap',
           }}
         >
@@ -748,9 +752,9 @@ export function ScheduledMeetingCardModal({
             style={{
               padding: '8px 16px',
               borderRadius: '8px',
-              backgroundColor: '#1E1B4B',
+              backgroundColor: isDark ? '#1E1B4B' : '#EEF2FF',
               border: '1px solid #4F46E5',
-              color: '#A5B4FC',
+              color: isDark ? '#A5B4FC' : '#4F46E5',
               fontSize: '13px',
               fontWeight: 600,
               cursor: 'pointer',
@@ -764,8 +768,8 @@ export function ScheduledMeetingCardModal({
               e.currentTarget.style.color = '#FFFFFF';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = '#1E1B4B';
-              e.currentTarget.style.color = '#A5B4FC';
+              e.currentTarget.style.backgroundColor = isDark ? '#1E1B4B' : '#EEF2FF';
+              e.currentTarget.style.color = isDark ? '#A5B4FC' : '#4F46E5';
             }}
           >
             <Share2 size={14} />
@@ -782,16 +786,16 @@ export function ScheduledMeetingCardModal({
               style={{
                 padding: '8px 14px',
                 borderRadius: '8px',
-                backgroundColor: '#23262D',
-                border: '1px solid #363A44',
-                color: '#E5E7EB',
+                backgroundColor: isDark ? '#23262D' : '#F9FAFB',
+                border: isDark ? '1px solid #363A44' : '1px solid #D1D5DB',
+                color: isDark ? '#E5E7EB' : '#374151',
                 fontSize: '13px',
                 fontWeight: 600,
                 cursor: 'pointer',
                 transition: 'background-color 0.15s ease',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2D313A')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#23262D')}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2D313A' : '#F3F4F6')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#23262D' : '#F9FAFB')}
             >
               More details
             </button>
@@ -805,9 +809,9 @@ export function ScheduledMeetingCardModal({
               style={{
                 padding: '8px 14px',
                 borderRadius: '8px',
-                backgroundColor: '#23262D',
-                border: '1px solid #363A44',
-                color: '#E5E7EB',
+                backgroundColor: isDark ? '#23262D' : '#F9FAFB',
+                border: isDark ? '1px solid #363A44' : '1px solid #D1D5DB',
+                color: isDark ? '#E5E7EB' : '#374151',
                 fontSize: '13px',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -816,8 +820,8 @@ export function ScheduledMeetingCardModal({
                 gap: '6px',
                 transition: 'background-color 0.15s ease',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#2D313A')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#23262D')}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#2D313A' : '#F3F4F6')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDark ? '#23262D' : '#F9FAFB')}
             >
               <Pencil size={13} />
               Edit
