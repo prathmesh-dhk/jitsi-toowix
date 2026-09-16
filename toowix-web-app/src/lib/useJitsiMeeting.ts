@@ -423,6 +423,14 @@ export function useJitsiMeeting({
                 return;
               }
               const participantId = track.getParticipantId();
+              const trackParticipant = room.getParticipantById(participantId);
+
+              // Same hidden-Jibri guard as USER_JOINED -- a recorder track slipping through here
+              // would still create a fake participant tile via patchParticipant's upsert.
+              if (trackParticipant?.isHidden?.() || trackParticipant?.getBotType?.()) {
+                return;
+              }
+
               const type = track.getType();
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
@@ -463,6 +471,14 @@ export function useJitsiMeeting({
             });
 
             room.on(JitsiMeetJS.events.conference.USER_JOINED, (id: string, participant: any) => {
+              // Jibri (the recording bot) joins the room as a real XMPP participant on the
+              // server's hidden domain -- lib-jitsi-meet already flags it via isHidden()/
+              // getBotType(), so skip it here or it shows up as a fake extra participant
+              // the moment recording starts.
+              if (participant?.isHidden?.() || participant?.getBotType?.()) {
+                return;
+              }
+
               const name = participant.getDisplayName() || 'Participant';
 
               remoteNamesRef.current[id] = name;
