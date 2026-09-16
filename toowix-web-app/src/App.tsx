@@ -36,22 +36,11 @@ function HomePage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '9px',
-              background: 'linear-gradient(135deg, #2E72B2 0%, #4799E3 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '20px',
-            }}
-          >
-            T
-          </div>
+          <img
+            src="/assets/toowix-logo.svg"
+            alt="Toowix Logo"
+            style={{ width: '38px', height: '38px', objectFit: 'contain' }}
+          />
           <span style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '-0.5px' }}>
             Toowix <span style={{ color: 'var(--color-primary)' }}>Meet</span>
           </span>
@@ -264,6 +253,7 @@ function HomePage() {
 }
 
 import { MeetingRoomPage } from './pages/MeetingRoomPage';
+import { DirectMeetingRoomPage } from './pages/DirectMeetingRoomPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
@@ -294,6 +284,9 @@ export default function App() {
           <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
+          {/* New direct lib-jitsi-meet path -- no iframe, real tracks in real <video>
+              elements. Separate route, zero risk to the working /meet/:roomId iframe flow. */}
+          <Route path="/meet-direct/:roomId" element={<DirectMeetingRoomPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signin" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />

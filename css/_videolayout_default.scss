@@ -1,3 +1,42 @@
+// Lock the whole meeting page to the viewport, no scrollbars in either direction, regardless
+// of what any inner container (sidebar, stage, filmstrip) does -- !important since some inner
+// elements set their own overflow: auto/scroll via inline styles.
+html, body, #videoconference_page {
+    overflow: hidden !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+}
+
+// Toowix/Google-Meet style single-participant card: height-driven (not width-driven -- the
+// card's height is fixed by the available vertical space between the header and the toolbar,
+// and its width is derived from that via aspect-ratio, matching a real Meet-style stage where
+// the constraint is "fit between header and controls", not "fill X% of the screen width").
+// Used for both #dominantSpeaker (no-video avatar state) and #largeVideoContainer (real-video
+// state) so they're the exact same box. This can only ever paint when there is truly one
+// participant: .tile-view/.stage-filmstrip (2+ participants) already force #dominantSpeaker
+// and #largeVideoElementsContainer to display:none (see filmstrip/_tile_view_overrides.scss),
+// so this can never affect the grid or stage-filmstrip layouts.
+//
+// 66px top / 90px bottom reproduce the measured target exactly at a 1916x926 viewport:
+// height = 926 - 66 - 90 = 770px, width = 770 * 16/9 = 1369px (matches the measured tile).
+@mixin toowixSingleParticipantCard {
+    position: absolute;
+    top: 66px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: calc(100% - 156px);
+    aspect-ratio: 16 / 9;
+    max-width: calc(100% - 32px);
+    max-height: calc(100% - 156px);
+    // !important: an older rule (#largeVideo, #largeVideoWrapper, #largeVideoContainer {
+    // border-radius: $borderRadius !important }, further down this file) would otherwise win
+    // over this and force 24px instead of the measured 22px target for this specific card.
+    border-radius: 22px !important;
+    overflow: hidden;
+    box-shadow: none;
+}
+
+
 #videoconference_page {
     min-height: 100%;
     position: relative;
@@ -106,17 +145,56 @@
     }
 }
 
+// Real camera video (single-participant case) uses the exact same capped, centered card as
+// the no-video avatar state above (#dominantSpeaker) -- the inner <video> already has
+// object-fit: cover (see the #largeVideo, #largeVideoWrapper rule below), so it fills this
+// box correctly without distorting the aspect ratio.
 #largeVideoContainer {
-    height: 100%;
-    width: 100%;
+    @include toowixSingleParticipantCard;
+}
+
+// Screen sharing must NOT use the capped single-participant-camera card sizing -- it should
+// keep occupying the full stage area exactly as before, since a shared screen's own aspect
+// ratio/content needs the space, not a fixed 16:9 camera-sized box. #largeVideoContainer.
+// desktop-video-stage is only added (LargeVideo.web.tsx) when the large-video track is a
+// screen share, local or remote, so untouched camera-only single-participant view still gets
+// the capped card above.
+#largeVideoContainer.desktop-video-stage {
     position: absolute;
+    inset: 0;
     top: 0;
     left: 0;
-    margin: 0 !important;
+    transform: none;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    aspect-ratio: unset;
+    border-radius: $borderRadius !important;
+}
+
+// Small-viewport fallback: below ~700px tall or ~700px wide (tablet/mobile), the fixed
+// 66px/90px header/toolbar offsets can leave too little room -- switch to width-driven sizing
+// with a 16px page margin instead, still capped to 16:9 and never overflowing the viewport.
+@media (max-height: 700px), (max-width: 700px) {
+    #dominantSpeaker,
+    #largeVideoContainer {
+        top: 56px;
+        left: 16px;
+        right: 16px;
+        bottom: 40px;
+        width: auto;
+        height: auto;
+        max-width: calc(100% - 32px);
+        max-height: calc(100% - 96px);
+        transform: none;
+    }
 }
 
 #largeVideoWrapper {
-    box-shadow: 0 0 20px -2px #444;
+    // No outer shadow/halo/frame around the tile -- the tile's own background fill (colored
+    // per-participant, or the real video) already reaches all the way to its rounded edges.
+    box-shadow: none;
 }
 
 #largeVideo,
@@ -210,14 +288,27 @@
     }
 }
 
+// when there's no video, the whole large-video tile is filled with the participant's own
+// avatar color (set from LargeVideoManager.updateAvatar(), which computes the same color the
+// small avatar circle uses via getAvatarColor()) instead of a bare avatar floating on the
+// plain page background. The circle avatar itself still renders centered inside.
+//
+// #dominantSpeaker is a CHILD of #largeVideoContainer (see LargeVideo.web.tsx), not a sibling
+// -- it must simply fill its already-correctly-sized parent at 100%, not re-apply the same
+// 66/90px viewport-relative sizing a second time (that double-shrinks it, nested inside the
+// outer box, which is exactly the "smaller tile inset inside a bigger frame" bug: the outer
+// #largeVideoContainer's own inline background -- Jitsi's interfaceConfig.DEFAULT_BACKGROUND
+// -- was showing through the gap around the double-shrunk inner box).
 #dominantSpeaker {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
     visibility: hidden;
-    width: 300px;
-    height: 300px;
-    margin: auto;
-    position: relative;
-    top: 50%;
-    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s ease;
 }
 
 #dominantSpeakerAvatarContainer,
@@ -227,8 +318,6 @@
 }
 
 #dominantSpeakerAvatarContainer {
-    top: 102px;
-    margin: auto;
     position: relative;
     overflow: hidden;
     visibility: inherit;
@@ -354,4 +443,13 @@
     top: calc(50% + 30px);
     white-space: nowrap;
     width: 100%;
+}
+
+// The local participant is already shown in the main single-participant card (#dominantSpeaker
+// / #largeVideoContainer above) -- showing them a second time as a small floating filmstrip
+// thumbnail is a duplicate. Hide the filmstrip specifically when it contains only the local
+// tile and nothing else; the moment a second (remote) tile appears, this selector stops
+// matching and the filmstrip shows normally, so multi-participant self-view is untouched.
+.filmstrip:not(:has(.videocontainer:not(#localVideoContainer))) {
+    display: none;
 }

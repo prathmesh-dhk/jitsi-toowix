@@ -11,6 +11,7 @@ import { VIDEO_QUALITY_LEVELS } from '../video-quality/constants';
 import { getReceiverVideoQualityLevel } from '../video-quality/functions';
 import { getMinHeightForQualityLvlMap } from '../video-quality/selector';
 
+import { setTileView } from './actions';
 import { LAYOUTS } from './constants';
 import logger from './logger';
 
@@ -98,8 +99,13 @@ export function shouldDisplayTileView(state: IReduxState) {
         // We pinned a participant
         || getPinnedParticipant(state)
 
-        // It's a 1-on-1 meeting
-        || participantCount < 3
+        // Toowix: a true solo call (just the local participant, nobody else) stays in
+        // large-video mode -- but 2+ participants (including the local user) should use the
+        // responsive grid like every other participant count, not Jitsi's default "1-on-1
+        // calls get a big tile + small filmstrip" behavior. Threshold changed from < 3 to < 2
+        // per the required Google-Meet-style grid spec (2 participants = two equal side-by-side
+        // tiles, not one large tile + a corner thumbnail).
+        || participantCount < 2
 
         // There is a shared YouTube video in the meeting
         || isVideoPlaying(state)
@@ -154,6 +160,17 @@ export function updateAutoPinnedParticipant(
 
         logger.debug('No more screenshares, unpinning or restoring previous pin', participantId);
         dispatch(pinParticipant(participantId));
+
+        // Toowix: unpinning above clears getPinnedParticipant(), but that's only one of two
+        // things shouldDisplayTileView() checks. The OTHER is the tileViewEnabled redux flag,
+        // which filmstrip/middleware.web.ts explicitly sets to false when screen sharing (or
+        // any stage participant) starts, and nothing was resetting it back afterwards -- so
+        // tile view stayed stuck off even once nothing else was blocking it. Reset it here
+        // (only when we're not restoring an explicit previous pin) so the participant-count
+        // based auto-detection takes back over.
+        if (!participantId) {
+            dispatch(setTileView());
+        }
 
         return;
     }

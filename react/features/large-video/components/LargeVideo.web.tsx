@@ -70,6 +70,13 @@ interface IProps {
     _isScreenSharing: boolean;
 
     /**
+     * Whether the track currently shown on the large video is a screen share (local or
+     * remote) rather than a camera -- used to exclude the capped single-participant-camera
+     * card sizing from screen-share presentation, which should keep using the full stage area.
+     */
+    _isDesktopVideoOnStage: boolean;
+
+    /**
      * The large video participant id.
      */
     _largeVideoParticipantId: string;
@@ -203,13 +210,14 @@ class LargeVideo extends Component<IProps> {
             _displayScreenSharingPlaceholder,
             _isChatOpen,
             _isDisplayNameVisible,
+            _isDesktopVideoOnStage,
             _noAutoPlayVideo,
             _showDominantSpeakerBadge,
             _whiteboardEnabled,
             _showSubtitles
         } = this.props;
         const style = this._getCustomStyles();
-        const className = 'videocontainer';
+        const className = `videocontainer${_isDesktopVideoOnStage ? ' desktop-video-stage' : ''}`;
 
         return (
             <div
@@ -386,6 +394,7 @@ function _mapStateToProps(state: IReduxState) {
             Boolean(isLocalScreenshareOnLargeVideo && !seeWhatIsBeingShared && !isSpotTV(state)),
         _hideSelfView: getHideSelfView(state),
         _isChatOpen: isChatOpen,
+        _isDesktopVideoOnStage: videoTrack?.videoType === VIDEO_TYPE.DESKTOP,
         _isDisplayNameVisible: isDisplayNameVisible(state),
         _isScreenSharing: Boolean(isLocalScreenshareOnLargeVideo),
         _largeVideoParticipantId: largeVideoParticipant?.id ?? '',

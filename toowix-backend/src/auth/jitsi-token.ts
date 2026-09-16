@@ -49,7 +49,16 @@ export const generateJitsiToken = (options: IGenerateJitsiTokenOptions): string 
         moderator: features.moderator ?? false,
         name: user.name,
         email: user.email,
-        avatar: user.avatar || undefined,
+        // Only a real, reasonably short http(s) URL is embedded -- a profile picture can be
+        // stored as a base64 data: URI (ProfileSection.tsx's upload flow does exactly this,
+        // with no real image hosting behind it), and embedding that directly in the JWT bloats
+        // the token to the point where lib-jitsi-meet's WebSocket URL (token passed as a query
+        // param) exceeds nginx's request-line limit -- the handshake fails with 414, and that
+        // participant's presence silently never reaches anyone else in the room. The JWT's
+        // avatar field isn't actually used anywhere in our own UI (avatars are rendered from
+        // local component state, not read back out of the JVB participant identity), so the
+        // safe fix is to just never put anything large/non-URL in here.
+        avatar: user.avatar && /^https?:\/\//.test(user.avatar) && user.avatar.length <= 300 ? user.avatar : undefined,
       },
       group: companyId || 'default',
       room: { lobby: options.requireLobby === true },

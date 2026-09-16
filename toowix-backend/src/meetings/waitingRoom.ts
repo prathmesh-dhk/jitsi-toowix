@@ -35,7 +35,7 @@ function generateCredentials(room: string, identity: { id: string; name: string;
 export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
-    const { name, email, requestId } = req.body;
+    const { name, email, requestId, passcode } = req.body;
     const meeting = await Meeting.findOne({ roomSlug: room });
     if (meeting?.cancelledAt) {
       res.status(403).json({ error: 'Meeting has been cancelled' });
@@ -45,10 +45,28 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
       res.status(403).json({ error: 'Meeting has already ended' });
       return;
     }
+    // Same expiry rule as the direct-admission path: a scheduled meeting's link stops working
+    // once start + chosen duration has elapsed.
+    if (meeting?.scheduledAt && meeting?.durationMinutes) {
+      const expiresAt = new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000);
+      if (Date.now() > expiresAt.getTime()) {
+        res.status(410).json({ error: 'This meeting link has expired.' });
+        return;
+      }
+    }
 
     const user = req.firebaseUid ? await User.findOne({ firebaseUid: req.firebaseUid }) : null;
     const company = meeting?.companyId ? await Company.findById(meeting.companyId) : null;
     const isHost = !!meeting && !!user && String(meeting.createdBy) === String(user._id);
+
+    // Password gate -- the host bypasses their own meeting's password.
+    if (meeting?.passcode && !isHost) {
+      const submitted = typeof passcode === 'string' ? passcode.trim() : '';
+      if (!submitted || submitted !== meeting.passcode) {
+        res.status(401).json({ error: 'Incorrect meeting password.', passwordRequired: true });
+        return;
+      }
+    }
 
     const displayName = user?.fullName || String(name || 'Guest').trim().slice(0, 100);
     const userEmail = user?.email || email || '';

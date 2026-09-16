@@ -12,7 +12,7 @@ import { useTheme } from '../lib/theme';
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-const TOOWIX_LOGO_URL = '/assets/toowix-logo.png';
+const TOOWIX_LOGO_URL = '/assets/toowix-logo.svg';
 const ARTWORK_URL = '/assets/signup-hero.png';
 
 export function SignupPage() {

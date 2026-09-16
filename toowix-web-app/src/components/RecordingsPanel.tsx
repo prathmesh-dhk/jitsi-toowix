@@ -98,7 +98,12 @@ const mapApiRecording = (r: IApiRecording): IRecording => {
     size: formatSize(r.sizeBytes),
     sizeBytes: r.sizeBytes,
     ownerId: typeof r.createdBy === 'object' ? r.createdBy?._id || r.createdBy?.id : r.createdBy,
-    fileUrl: r.status === 'Ready' ? r.fileUrl : undefined,
+    // r.fileUrl (from the API) is a bare relative path inside the recorder's own storage mount,
+    // not a fetchable URL on its own -- the backend's /stream route (Range-request aware, so
+    // playback seeking works) is what actually serves the bytes. Resolving it to a real URL
+    // right here means every consumer (the inline player modal, download buttons, the details
+    // panel) gets a working link for free instead of needing this fix repeated at each site.
+    fileUrl: r.status === 'Ready' && r.fileUrl ? `${BACKEND_URL}/api/recordings/${r.id}/stream` : undefined,
     audioUrl: r.audioUrl,
     audioSizeBytes: r.audioSizeBytes,
     transcriptUrl: r.transcriptUrl,

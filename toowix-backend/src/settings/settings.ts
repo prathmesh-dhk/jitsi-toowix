@@ -5,6 +5,7 @@ import { Company } from '../models/Company';
 import { Recording } from '../models/Recording';
 import { Session } from '../models/Session';
 import { getFirebaseAuth } from '../config/firebase';
+import { persistAvatarIfDataUri } from '../uploads/avatarStorage';
 
 const resolveUser = async (req: AuthenticatedRequest) => {
   if (!req.firebaseUid) return null;
@@ -82,7 +83,16 @@ export const updateProfileSettingsHandler = async (req: AuthenticatedRequest, re
       }
       user.fullName = fullName.trim();
     }
-    if (avatarUrl !== undefined) user.avatarUrl = avatarUrl || null;
+    if (avatarUrl !== undefined) {
+      try {
+        const requestOrigin = `${req.protocol}://${req.get('host')}`;
+
+        user.avatarUrl = (await persistAvatarIfDataUri(avatarUrl, String(user._id), requestOrigin)) || null;
+      } catch (error: any) {
+        res.status(400).json({ error: error.message || 'Could not process profile picture' });
+        return;
+      }
+    }
 
     if (phoneNumber !== undefined && phoneNumber !== null && phoneNumber !== '') {
       if (!/^[+]?[\d\s()-]{7,20}$/.test(phoneNumber)) {

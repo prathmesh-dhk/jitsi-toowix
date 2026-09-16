@@ -10,6 +10,7 @@ import { Provider } from 'react-redux';
 import { createScreenSharingIssueEvent } from '../../../react/features/analytics/AnalyticsEvents';
 import { sendAnalytics } from '../../../react/features/analytics/functions';
 import Avatar from '../../../react/features/base/avatar/components/Avatar';
+import { getAvatarColor } from '../../../react/features/base/avatar/functions';
 import theme from '../../../react/features/base/components/themes/participantsPaneTheme.json';
 import { getSsrcRewritingFeatureFlag } from '../../../react/features/base/config/functions.any';
 import i18next from '../../../react/features/base/i18n/i18next';
@@ -46,6 +47,30 @@ import AudioLevels from '../audio_levels/AudioLevels';
 import { VIDEO_CONTAINER_TYPE, VideoContainer } from './VideoContainer';
 
 const logger = Logger.getLogger('ui:videolayout');
+
+/**
+ * Darkens a '#rrggbb' hex color by blending it toward black. Used to derive the large-video
+ * tile's background fill from the same per-participant color the avatar circle itself uses,
+ * so the two are visually distinct (darker tile, brighter circle) instead of identical.
+ *
+ * @param {string} hex - The color to darken, as '#rrggbb'.
+ * @param {number} amount - 0 (unchanged) to 1 (black).
+ * @returns {string}
+ */
+function _darkenHexColor(hex, amount) {
+    const match = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex ?? '');
+
+    if (!match) {
+        return hex;
+    }
+
+    const factor = 1 - amount;
+    const channel = h => Math.round(parseInt(h, 16) * factor)
+        .toString(16)
+        .padStart(2, '0');
+
+    return `#${channel(match[1])}${channel(match[2])}${channel(match[3])}`;
+}
 
 const DESKTOP_CONTAINER_TYPE = 'desktop';
 
@@ -560,6 +585,28 @@ export default class LargeVideoManager {
                     size = { 96 } />
             </Provider>
         );
+
+        // Fill the whole large-video tile with a DARKENED version of the same per-participant
+        // color the avatar circle uses (getAvatarColor mirrors exactly what Avatar.tsx
+        // computes), so the bright circle actually stands out in the middle instead of
+        // blending into an identically-colored tile (same hue, different shade -- matches the
+        // reference design's darker box + brighter circle look). Presentation-only: doesn't
+        // touch tracks, connection, or media state -- #dominantSpeaker's existing visibility
+        // toggle (VideoContainer.showAvatar) already hides this whenever real video is shown,
+        // so no extra show/hide wiring is needed here.
+        const dominantSpeakerEl = document.getElementById('dominantSpeaker');
+
+        if (dominantSpeakerEl) {
+            const state = APP.store.getState();
+            const participant = getParticipantById(state, this.id);
+            const name = participant?.name ?? getParticipantDisplayName(state, this.id);
+            const customAvatarBackgrounds = state['features/dynamic-branding']?.avatarBackgrounds ?? [];
+            const color = getAvatarColor(name, customAvatarBackgrounds);
+            const darkened = _darkenHexColor(color, 0.45);
+
+            dominantSpeakerEl.style.background
+                = `radial-gradient(circle, ${darkened} 0%, ${_darkenHexColor(color, 0.6)} 100%)`;
+        }
     }
 
     /**

@@ -1,4 +1,4 @@
-import { inspectRecording } from './media';
+import { inspectRecording, resolveRecordingFilePath } from './media';
 import { mayManageResource } from '../middleware/ownership';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -7,6 +7,7 @@ import { Meeting } from '../models/Meeting';
 import { Recording } from '../models/Recording';
 import { Company } from '../models/Company';
 import { notifyCompany, notifyUser } from '../notifications/createNotification';
+import fs from 'fs';
 
 const resolveUser = async (req: AuthenticatedRequest) => {
   if (!req.firebaseUid) return null;
@@ -272,6 +273,75 @@ export const getRecordingHandler = async (req: Request, res: Response): Promise<
   } catch (error: any) {
     console.error('[Recordings] Error fetching single recording:', error.message);
     res.status(500).json({ error: 'Failed to fetch recording' });
+  }
+};
+
+/**
+ * GET /api/recordings/:id/stream
+ * Streams the actual recording bytes for the <video> element to play. This was the missing
+ * piece of the pipeline: the finalize script (Jibri) only ever sent metadata (fileUrl as a bare
+ * relative path inside the recorder mount) to /ingest -- nothing ever uploaded the file to
+ * public storage or exposed a route to serve it, so the frontend's `<video src={fileUrl}>`
+ * had nothing valid to actually fetch, even for recordings whose media itself was fine.
+ * Supports HTTP Range requests (required for browsers to seek/scrub, and for some browsers to
+ * play at all) via a real 206 Partial Content response.
+ */
+export const streamRecordingHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const recording = await Recording.findById(req.params.id);
+    if (!recording || !recording.fileUrl || recording.status !== 'Ready') {
+      res.status(404).json({ error: 'Recording not available' });
+      return;
+    }
+
+    let filePath: string;
+    try {
+      filePath = await resolveRecordingFilePath(recording.fileUrl);
+    } catch {
+      res.status(404).json({ error: 'Recording file not found' });
+      return;
+    }
+
+    const stat = await fs.promises.stat(filePath).catch(() => null);
+    if (!stat || !stat.isFile()) {
+      res.status(404).json({ error: 'Recording file not found' });
+      return;
+    }
+
+    const range = req.headers.range;
+
+    if (range) {
+      const match = /bytes=(\d*)-(\d*)/.exec(range);
+      const start = match?.[1] ? parseInt(match[1], 10) : 0;
+      const end = match?.[2] ? parseInt(match[2], 10) : stat.size - 1;
+
+      if (Number.isNaN(start) || Number.isNaN(end) || start > end || end >= stat.size) {
+        res.status(416).set('Content-Range', `bytes */${stat.size}`).end();
+        return;
+      }
+
+      res.status(206);
+      res.set({
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(end - start + 1),
+        'Content-Type': 'video/mp4',
+      });
+      fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+      res.status(200);
+      res.set({
+        'Content-Length': String(stat.size),
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'bytes',
+      });
+      fs.createReadStream(filePath).pipe(res);
+    }
+  } catch (error: any) {
+    console.error('[Recordings] Error streaming recording:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to stream recording' });
+    }
   }
 };
 

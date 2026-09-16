@@ -252,9 +252,9 @@ export function ShareRecordingModal({
               }}
             >
               <img
-                src="/favicon.png"
+                src="/assets/toowix-logo.svg"
                 alt="Toowix"
-                style={{ width: '22px', height: '22px', borderRadius: '4px', objectFit: 'contain' }}
+                style={{ width: '22px', height: '22px', objectFit: 'contain' }}
               />
             </div>
             <div>
@@ -680,7 +680,7 @@ export function ShareRecordingModal({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <img src="/favicon.png" alt="Toowix" style={{ width: '16px', height: '16px', borderRadius: '3px' }} />
+            <img src="/assets/toowix-logo.svg" alt="Toowix" style={{ width: '16px', height: '16px', objectFit: 'contain' }} />
             <span style={{ fontSize: '12px', color: saveSuccess ? '#059669' : '#6B7280', fontWeight: saveSuccess ? 600 : 400 }}>
               {saveSuccess ? 'Changes saved ✓' : 'Toowix Cloud Recording'}
             </span>

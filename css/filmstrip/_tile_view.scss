@@ -6,6 +6,12 @@
         align-items: center;
         box-sizing: border-box;
         overscroll-behavior: contain;
+        // react-window's grid virtualization sets overflow:auto via inline style on this
+        // element for its own scroll handling -- with tile view sized to actually fit every
+        // tile (no need to scroll through a real grid), that inline style was showing a
+        // visible scrollbar cutting through the middle of the tiles. !important is required
+        // to beat the inline style.
+        overflow: hidden !important;
     }
 
     .filmstrip__videos .videocontainer {

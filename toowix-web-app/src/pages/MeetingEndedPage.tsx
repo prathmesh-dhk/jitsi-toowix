@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RotateCcw, CheckCircle2, ShieldAlert, LogOut, Video, Timer, X } from 'lucide-react';
 import { useTheme } from '../lib/theme';
+import { auth } from '../lib/firebase';
 
 export function MeetingEndedPage() {
   const { isDark } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
+
+  const handleReturnHome = () => {
+    const hasUser = !!localStorage.getItem('toowix_user') || !!localStorage.getItem('toowix_session_token') || !!auth.currentUser;
+    if (hasUser) {
+      navigate('/dashboard');
+    } else {
+      navigate('/');
+    }
+  };
 
   const state = (location.state || {}) as {
     roomId?: string;
@@ -63,6 +73,7 @@ export function MeetingEndedPage() {
     >
       {/* Top Left Logo */}
       <header
+        onClick={handleReturnHome}
         style={{
           position: 'fixed',
           top: 0,
@@ -71,6 +82,7 @@ export function MeetingEndedPage() {
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
+          cursor: 'pointer',
         }}
       >
         <div
@@ -296,8 +308,8 @@ export function MeetingEndedPage() {
             </button>
           )}
 
-          <Link
-            to="/"
+          <button
+            onClick={handleReturnHome}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -309,7 +321,6 @@ export function MeetingEndedPage() {
               border: `1px solid ${isDark ? '#3C4043' : '#DADCE0'}`,
               fontWeight: 600,
               fontSize: '15px',
-              textDecoration: 'none',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
             }}
@@ -317,7 +328,7 @@ export function MeetingEndedPage() {
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
           >
             <ArrowLeft size={16} /> Return to Home
-          </Link>
+          </button>
         </div>
       </div>
     </div>
