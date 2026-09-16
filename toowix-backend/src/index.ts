@@ -11,6 +11,12 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Behind nginx in production (talk-proxy.conf sets X-Forwarded-Proto/Host) -- without this,
+// req.protocol always reports 'http' regardless of the real scheme, which would make
+// persistAvatarIfDataUri build an http:// URL on an https:// site (mixed content, likely
+// blocked by the browser) instead of the real https:// origin.
+app.set('trust proxy', true);
+
 // Security & Parsing Middleware
 app.use(helmet());
 app.use(
