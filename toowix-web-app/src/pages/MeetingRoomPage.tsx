@@ -636,9 +636,14 @@ const DocumentPipContent = memo(function DocumentPipContent({
                       justifyContent: 'center',
                       fontSize: '16px',
                       fontWeight: 600,
+                      overflow: 'hidden',
                     }}
                   >
-                    {initial}
+                    {(p as any).avatarUrl ? (
+                      <img src={(p as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                    ) : (
+                      initial
+                    )}
                   </div>
                   <span
                     style={{
@@ -2776,6 +2781,7 @@ export function MeetingRoomPage() {
         return {
           id: r.id,
           name: r.name,
+          avatarUrl: r.avatarUrl,
           muted: r.muted,
           video: r.video,
           raisedHand: existing?.raisedHand || false,
@@ -3803,9 +3809,14 @@ export function MeetingRoomPage() {
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
+                            overflow: 'hidden',
                           }}
                         >
-                          {rInitial}
+                          {(remote as any).avatarUrl ? (
+                            <img src={(remote as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                          ) : (
+                            rInitial
+                          )}
                         </div>
                       )}
                       <div
@@ -4141,9 +4152,14 @@ export function MeetingRoomPage() {
                             alignItems: 'center',
                             justifyContent: 'center',
                             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                            overflow: 'hidden',
                           }}
                         >
-                          {pinnedInitial}
+                          {(pinned as any)?.avatarUrl ? (
+                            <img src={(pinned as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                          ) : (
+                            pinnedInitial
+                          )}
                         </div>
                       )}
                       <div
@@ -4329,9 +4345,14 @@ export function MeetingRoomPage() {
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
+                                  overflow: 'hidden',
                                 }}
                               >
-                                {initial}
+                                {(p as any).avatarUrl ? (
+                                  <img src={(p as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                                ) : (
+                                  initial
+                                )}
                               </div>
                             )}
                             <div
@@ -4582,9 +4603,14 @@ export function MeetingRoomPage() {
                             alignItems: 'center',
                             justifyContent: 'center',
                             boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+                            overflow: 'hidden',
                           }}
                         >
-                          {initial}
+                          {(remote as any).avatarUrl ? (
+                            <img src={(remote as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                          ) : (
+                            initial
+                          )}
                         </div>
                       </div>
                     )}
@@ -4982,9 +5008,14 @@ export function MeetingRoomPage() {
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
+                                overflow: 'hidden',
                               }}
                             >
-                              {pInitial}
+                              {(p as any).avatarUrl ? (
+                                <img src={(p as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                              ) : (
+                                pInitial
+                              )}
                             </div>
                             <div>
                               <div style={{ fontSize: '13px', color: '#E8EAED', fontWeight: 500 }}>

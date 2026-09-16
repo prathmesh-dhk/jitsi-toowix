@@ -37,6 +37,7 @@ declare global {
 export interface IRemoteParticipant {
   id: string;
   name: string;
+  avatarUrl: string | null;
   muted: boolean;
   video: boolean;
   raisedHand: boolean;
@@ -314,6 +315,7 @@ export function useJitsiMeeting({
   const localDesktopTrackRef = useRef<any>(null);
   const remoteDesktopTracksRef = useRef<Record<string, any>>({});
   const remoteNamesRef = useRef<Record<string, string>>({});
+  const remoteAvatarsRef = useRef<Record<string, string | null>>({});
   const toggleScreenShareRef = useRef<() => void>(() => {});
   const onKickedRef = useRef(onKicked);
   const existingStreamRef = useRef(existingStream);
@@ -375,6 +377,7 @@ export function useJitsiMeeting({
       [id]: {
         id,
         name: prev[id]?.name ?? remoteNamesRef.current[id] ?? 'Participant',
+        avatarUrl: prev[id]?.avatarUrl ?? remoteAvatarsRef.current[id] ?? null,
         muted: prev[id]?.muted ?? true,
         video: prev[id]?.video ?? false,
         raisedHand: prev[id]?.raisedHand ?? false,
@@ -539,13 +542,21 @@ export function useJitsiMeeting({
               }
 
               const name = participant.getDisplayName() || 'Participant';
+              // The JWT's context.user.avatar (see generateJitsiToken on the backend) is
+              // propagated to every other participant as this "identity" -- it's the real
+              // mechanism for remote avatars, not something lib-jitsi-meet exposes as a plain
+              // getter. Only ever a short http(s) URL now (never a base64 blob -- see the JWT
+              // fix), so no size concerns reading it back out here.
+              const avatarUrl = participant.getIdentity?.()?.user?.avatar || null;
 
               remoteNamesRef.current[id] = name;
-              patchParticipant(id, { name });
+              remoteAvatarsRef.current[id] = avatarUrl;
+              patchParticipant(id, { name, avatarUrl });
             });
 
             room.on(JitsiMeetJS.events.conference.USER_LEFT, (id: string) => {
               delete remoteNamesRef.current[id];
+              delete remoteAvatarsRef.current[id];
               delete remoteDesktopTracksRef.current[id];
               recomputeRemoteScreenShare();
               setRemoteParticipants(prev => {
@@ -809,6 +820,7 @@ export function useJitsiMeeting({
       }
       remoteDesktopTracksRef.current = {};
       remoteNamesRef.current = {};
+      remoteAvatarsRef.current = {};
       setConnected(false);
       setJoined(false);
       setRemoteParticipants({});
