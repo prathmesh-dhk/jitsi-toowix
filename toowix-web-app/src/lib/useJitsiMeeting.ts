@@ -949,12 +949,29 @@ export function useJitsiMeeting({
       return;
     }
 
-    try {
-      const [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({ devices: [ 'desktop' ] });
+    let desktopTrack: any;
 
-      if (!desktopTrack) {
-        return;
-      }
+    try {
+      [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({ devices: [ 'desktop' ] });
+    } catch {
+      // User cancelled the OS share picker, or permission was denied -- silently no-op,
+      // matches the previous toggleShareScreen behavior. Nothing was acquired yet, so there's
+      // nothing to clean up.
+      return;
+    }
+
+    if (!desktopTrack) {
+      return;
+    }
+
+    // Everything past this point is a REAL failure if it throws -- the picker already
+    // succeeded, the user has a live desktop track, and something in wiring it into the
+    // conference went wrong (track negotiation, JVB rejecting the track, etc.). This used to
+    // be swallowed by the same bare catch as the picker-cancel case above, which is why a
+    // real failure here looked identical to "nothing happened" with zero feedback. Surface it
+    // instead (thrown to the caller, which shows the "Could not start screen sharing" banner)
+    // and make sure the half-acquired track doesn't leak.
+    try {
       localDesktopTrackRef.current = desktopTrack;
       desktopTrack.addEventListener(JitsiMeetJS.events.track.LOCAL_TRACK_STOPPED, () => {
         // Fires when the user clicks the browser's own "Stop sharing" bar instead of our button.
@@ -970,9 +987,18 @@ export function useJitsiMeeting({
       }
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
-    } catch {
-      // user cancelled the OS share picker, or permission was denied -- no error surfaced,
-      // matches the previous toggleShareScreen behavior of silently no-op'ing on cancel.
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[useJitsiMeeting] screen share track failed after picker succeeded:', err);
+      if (localDesktopTrackRef.current === desktopTrack) {
+        localDesktopTrackRef.current = null;
+      }
+      try {
+        desktopTrack.dispose();
+      } catch {
+        // best-effort
+      }
+      throw err;
     }
   }, []);
 
