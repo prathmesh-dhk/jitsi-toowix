@@ -2715,8 +2715,6 @@ export function MeetingRoomPage() {
     setIsScreenSharing(jitsiMeeting.isScreenSharing);
   }, [jitsiMeeting.isScreenSharing]);
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] MeetingRoomPage received remoteScreenShare:', jitsiMeeting.remoteScreenShare);
     setRemoteScreenStream(jitsiMeeting.remoteScreenShare?.stream || null);
     setRemotePresenterName(jitsiMeeting.remoteScreenShare?.presenterName || null);
   }, [jitsiMeeting.remoteScreenShare]);
@@ -2886,15 +2884,10 @@ export function MeetingRoomPage() {
 
   // Synchronize remote presentation stream to remote presentation video element
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] remote presentation video binding effect, hasVideoEl:', !!remotePresentationVideoRef.current, 'hasStream:', !!remoteScreenStream);
     if (remotePresentationVideoRef.current) {
       remotePresentationVideoRef.current.srcObject = remoteScreenStream;
       if (remoteScreenStream) {
-        remotePresentationVideoRef.current.play().catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('[DEBUG] remote presentation video play() failed:', err);
-        });
+        remotePresentationVideoRef.current.play().catch(() => { });
       }
     }
   }, [remoteScreenStream]);
