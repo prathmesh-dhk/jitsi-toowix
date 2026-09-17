@@ -2884,6 +2884,8 @@ export function MeetingRoomPage() {
 
   // Synchronize remote presentation stream to remote presentation video element
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('[SCREEN-SHARE-DEBUG] remote presentation sync effect fired, remoteScreenStream:', !!remoteScreenStream, 'videoNodeMounted:', !!remotePresentationVideoRef.current);
     if (remotePresentationVideoRef.current) {
       remotePresentationVideoRef.current.srcObject = remoteScreenStream;
       if (remoteScreenStream) {
