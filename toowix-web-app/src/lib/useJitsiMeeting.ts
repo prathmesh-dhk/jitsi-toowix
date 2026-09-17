@@ -313,10 +313,14 @@ export function useJitsiMeeting({
   const localAudioTrackRef = useRef<any>(null);
   const localVideoTrackRef = useRef<any>(null);
   const localDesktopTrackRef = useRef<any>(null);
+  // Guards stopScreenShareInternal against running twice concurrently -- disposing the desktop
+  // track can itself fire the browser's native 'ended' event a second time (surfaced by
+  // lib-jitsi-meet as another LOCAL_TRACK_STOPPED), which would otherwise re-enter the stop path
+  // while the first call is still in flight.
+  const desktopStopInFlightRef = useRef(false);
   const remoteDesktopTracksRef = useRef<Record<string, any>>({});
   const remoteNamesRef = useRef<Record<string, string>>({});
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
-  const toggleScreenShareRef = useRef<() => void>(() => {});
   const onKickedRef = useRef(onKicked);
   const existingStreamRef = useRef(existingStream);
   const cameraRetryInFlightRef = useRef(false);
@@ -515,7 +519,13 @@ export function useJitsiMeeting({
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
               } else if (videoType === 'desktop') {
-                remoteDesktopTracksRef.current[participantId] = track;
+                // A desktop track that arrives already muted must not be shown as an active
+                // presentation -- Jitsi can deliver a track in a muted state before the first
+                // real frame, and registering it here would present a black/frozen tile until
+                // (if ever) it unmutes.
+                if (!track.isMuted()) {
+                  remoteDesktopTracksRef.current[participantId] = track;
+                }
                 recomputeRemoteScreenShare();
               } else {
                 patchParticipant(participantId, { stream: trackToStream(track), video: !track.isMuted() });
@@ -524,7 +534,22 @@ export function useJitsiMeeting({
               track.addEventListener(JitsiMeetJS.events.track.TRACK_MUTE_CHANGED, () => {
                 if (type === 'audio') {
                   patchParticipant(participantId, { muted: track.isMuted() });
-                } else if (videoType !== 'desktop') {
+                } else if (videoType === 'desktop') {
+                  // This is the real signal Jitsi uses to stop a screen share in many cases --
+                  // muting the existing desktop track rather than immediately removing it. This
+                  // listener used to ignore desktop entirely, which is why a stopped share left
+                  // remoteDesktopTracksRef (and therefore the remote presentation view) pointing
+                  // at a track that had stopped producing frames: the last frame froze on
+                  // screen and never cleared.
+                  if (track.isMuted()) {
+                    if (remoteDesktopTracksRef.current[participantId] === track) {
+                      delete remoteDesktopTracksRef.current[participantId];
+                    }
+                  } else {
+                    remoteDesktopTracksRef.current[participantId] = track;
+                  }
+                  recomputeRemoteScreenShare();
+                } else {
                   patchParticipant(participantId, { video: !track.isMuted() });
                 }
               });
@@ -541,8 +566,14 @@ export function useJitsiMeeting({
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: null });
               } else if (videoType === 'desktop') {
-                delete remoteDesktopTracksRef.current[participantId];
-                recomputeRemoteScreenShare();
+                // Only delete if this is still the SAME track instance stored for this
+                // participant. A late/stale TRACK_REMOVED for an old share (already superseded
+                // by a newer desktop track added since) must not clear the current one out from
+                // under it.
+                if (remoteDesktopTracksRef.current[participantId] === track) {
+                  delete remoteDesktopTracksRef.current[participantId];
+                  recomputeRemoteScreenShare();
+                }
               } else {
                 patchParticipant(participantId, { stream: null, video: false });
               }
@@ -941,6 +972,62 @@ export function useJitsiMeeting({
     }
   }, []);
 
+  // Dedicated stop path, used by BOTH the Toowix "Stop presenting" button (via toggleScreenShare
+  // below) and the browser's own native "Stop sharing" bar (LOCAL_TRACK_STOPPED, wired at track
+  // creation time). Screen and camera are separate simultaneous JVB sources in this app (see the
+  // start path's addTrack-only comment below) -- stopping the share must never touch the camera
+  // track at all.
+  //
+  // This used to be `room.replaceTrack(desktopTrack, localVideoTrackRef.current)` whenever the
+  // camera was on. lib-jitsi-meet's real replaceTrack (verified directly against the installed
+  // package) throws synchronously whenever the old and new tracks have different videoTypes:
+  //   "Replacing a track of videoType=desktop with a track of videoType=camera is not supported
+  //   in this mode."
+  // -- camera and desktop are ALWAYS different videoTypes, so that call failed on every single
+  // stop where the camera was on, every time, with zero exception (caught by a bare `catch {}`
+  // right below it). The JVB was never actually told the desktop track was going away; only the
+  // sender's local copy was disposed. Remote viewers kept whatever frame they'd last received,
+  // forever -- the exact frozen-screen-share bug this rewrites.
+  const stopScreenShareInternal = useCallback(async (desktopTrack: any) => {
+    if (!desktopTrack || desktopStopInFlightRef.current) {
+      return;
+    }
+    desktopStopInFlightRef.current = true;
+    try {
+      const room = roomRef.current;
+
+      if (room) {
+        try {
+          await room.removeTrack(desktopTrack);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
+          setError('Could not stop screen sharing cleanly -- please try again.');
+        }
+      }
+
+      // Only clear the ref if it still points at THIS track -- a newer share (started while this
+      // stop was in flight) must not have its own track ripped out from under it.
+      if (localDesktopTrackRef.current === desktopTrack) {
+        localDesktopTrackRef.current = null;
+      }
+      setIsScreenSharing(false);
+      setLocalScreenStream(null);
+
+      // Dispose only after the conference-level removal has been attempted (success or not --
+      // the local capture is ending either way), never before, so a slow removeTrack can't race
+      // a disposed-track error out of _doReplaceTrack/_doRemoveTrack.
+      try {
+        desktopTrack.dispose();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[useJitsiMeeting] Failed to dispose desktop track:', err);
+      }
+    } finally {
+      desktopStopInFlightRef.current = false;
+    }
+  }, []);
+
   const toggleScreenShare = useCallback(async () => {
     const JitsiMeetJS = window.JitsiMeetJS;
     const room = roomRef.current;
@@ -950,21 +1037,7 @@ export function useJitsiMeeting({
     }
 
     if (localDesktopTrackRef.current) {
-      const desktopTrack = localDesktopTrackRef.current;
-
-      localDesktopTrackRef.current = null;
-      setIsScreenSharing(false);
-      setLocalScreenStream(null);
-      try {
-        if (localVideoTrackRef.current) {
-          await room.replaceTrack(desktopTrack, localVideoTrackRef.current);
-        } else {
-          await room.removeTrack(desktopTrack);
-        }
-      } catch {
-        // best-effort
-      }
-      desktopTrack.dispose();
+      await stopScreenShareInternal(localDesktopTrackRef.current);
 
       return;
     }
@@ -1003,17 +1076,22 @@ export function useJitsiMeeting({
     try {
       localDesktopTrackRef.current = desktopTrack;
       desktopTrack.addEventListener(JitsiMeetJS.events.track.LOCAL_TRACK_STOPPED, () => {
-        // Fires when the user clicks the browser's own "Stop sharing" bar instead of our button.
+        // Fires when the user clicks the browser's own "Stop sharing" bar instead of our
+        // button -- goes straight to the dedicated stop path (not back through
+        // toggleScreenShare's start/stop branching) so there's no ambiguity about which track
+        // is being stopped, and the in-flight guard inside stopScreenShareInternal absorbs a
+        // second native 'ended' event if dispose() below triggers one.
         if (localDesktopTrackRef.current === desktopTrack) {
-          toggleScreenShareRef.current();
+          void stopScreenShareInternal(desktopTrack);
         }
       });
 
-      if (localVideoTrackRef.current) {
-        await room.replaceTrack(localVideoTrackRef.current, desktopTrack);
-      } else {
-        await room.addTrack(desktopTrack);
-      }
+      // Desktop is published as its own separate JVB source, alongside (never instead of) the
+      // camera track -- this is how real Jitsi is designed to work (camera and desktop have
+      // distinct videoTypes/source-names at the JVB level), and it's what makes the dedicated
+      // stop path above valid: removeTrack only ever has to undo exactly this addTrack, with the
+      // camera never touched on either side.
+      await room.addTrack(desktopTrack);
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
     } catch (err) {
@@ -1029,7 +1107,7 @@ export function useJitsiMeeting({
       }
       throw err;
     }
-  }, []);
+  }, [ stopScreenShareInternal ]);
 
   // startRecording/stopRecording wrap the raw JitsiConference API correctly: stopRecording
   // REQUIRES the session id returned by startRecording (calling it with no id, as the previous
@@ -1058,10 +1136,6 @@ export function useJitsiMeeting({
     }
     await room.stopRecording(recordingSessionIdRef.current);
   }, []);
-
-  useEffect(() => {
-    toggleScreenShareRef.current = () => { void toggleScreenShare(); };
-  }, [ toggleScreenShare ]);
 
   const switchDeviceInFlightRef = useRef<Record<string, boolean>>({});
 
