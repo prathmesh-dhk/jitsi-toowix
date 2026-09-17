@@ -166,6 +166,26 @@ export interface ILocalTrackAcquisitionResult {
   videoError: any | null;
 }
 
+// Requesting getUserMedia with no deviceId at all (letting the browser pick "the default") is
+// what left the camera black on first join: with more than one camera-like device present (a
+// virtual cam, a second webcam, etc.) the browser's own default-device resolution can silently
+// return a track that never produces a frame, while asking for a SPECIFIC deviceId -- exactly
+// what manually reselecting the camera from the device menu does -- works reliably. Resolve one
+// explicitly up front so the very first join gets the same treatment as a manual reselect.
+async function resolveExplicitDeviceId(kind: 'audioinput' | 'videoinput', preferredId: string | undefined): Promise<string | undefined> {
+  if (preferredId) {
+    return preferredId;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const match = devices.find(d => d.kind === kind && d.deviceId);
+
+    return match?.deviceId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Adopts already-live tracks from an existing MediaStream (typically the prejoin lobby's open
 // camera/mic preview) as JitsiLocalTracks, with zero new getUserMedia() calls -- this is what
 // actually eliminates the device-busy race, rather than just retrying around it. Falls back to
@@ -217,9 +237,11 @@ async function acquireLocalTracks(
 
   if (!result.audioTrack) {
     try {
+      const explicitAudioId = await resolveExplicitDeviceId('audioinput', audioDeviceId);
+
       result.audioTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'audio' ],
-        micDeviceId: audioDeviceId || undefined
+        micDeviceId: explicitAudioId
       });
     } catch (err) {
       result.audioError = err;
@@ -228,9 +250,11 @@ async function acquireLocalTracks(
 
   if (!result.videoTrack) {
     try {
+      const explicitVideoId = await resolveExplicitDeviceId('videoinput', videoDeviceId);
+
       result.videoTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
-        cameraDeviceId: videoDeviceId || undefined
+        cameraDeviceId: explicitVideoId
       });
     } catch (err) {
       result.videoError = err;

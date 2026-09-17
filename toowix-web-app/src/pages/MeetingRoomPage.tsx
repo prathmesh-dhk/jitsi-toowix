@@ -3061,13 +3061,19 @@ export function MeetingRoomPage() {
       } else if (type === 'HAND_TOGGLED') {
         const isRaised = Boolean(payload?.raised);
         const personName = payload?.name || sender || 'Participant';
+        // Only ever update an EXISTING entry -- the real roster is driven entirely by
+        // jitsiMeeting.remoteParticipants (synced a few lines up). senderSessionId is this
+        // app's own HTTP-signaling id, unrelated to real Jitsi participant ids, so it can never
+        // legitimately match one; the old code's fallback branch used it to fabricate a brand
+        // new fake participant tile whenever no name matched yet (e.g. on a race where this
+        // signal arrives before the real Jitsi USER_JOINED/TRACK_ADDED data does), which is
+        // exactly what showed up as "raising a hand makes a new participant join."
         setRemoteParticipants((prev) => {
-          const exists = prev.some((p) => p.name === personName || p.id === senderSessionId);
-          if (exists) {
-            return prev.map((p) => (p.name === personName || p.id === senderSessionId ? { ...p, raisedHand: isRaised } : p));
-          } else {
-            return [...prev, { id: senderSessionId, name: personName, muted: true, video: false, raisedHand: isRaised }];
-          }
+          const matchIndex = prev.findIndex((p) => p.name === personName);
+          if (matchIndex === -1) return prev;
+          const next = [ ...prev ];
+          next[matchIndex] = { ...next[matchIndex], raisedHand: isRaised };
+          return next;
         });
         if (isRaised) {
           setHandRaisedToast(`${personName} raised their hand`);
