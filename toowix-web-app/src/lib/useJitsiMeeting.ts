@@ -297,6 +297,17 @@ export function useJitsiMeeting({
   const [ error, setError ] = useState<string | null>(null);
   const [ cameraError, setCameraError ] = useState<string | null>(null);
   const [ localAudioMuted, setLocalAudioMuted ] = useState(startWithAudioMuted);
+  // Confirmed via direct Jicofo/JVB log inspection: neither room.removeTrack() nor
+  // room.replaceTrack(track, null) actually notifies the server once the browser's native
+  // "Stop sharing" bar has already ended the underlying track -- the bridge keeps believing the
+  // desktop source is live until this participant's whole session ends. Bumping this forces the
+  // main connect effect (keyed on it below) to fully leave and rejoin the conference, which DOES
+  // reliably give the server an accurate, current source list (verified: every fresh
+  // session-initiate in the JVB logs correctly reflects only the joining client's real tracks).
+  const [ reconnectEpoch, setReconnectEpoch ] = useState(0);
+  // Debounced so a quick re-share right after stopping isn't torn down by a reconnect meant for
+  // the PREVIOUS stop -- cleared whenever a new share starts, scheduled fresh on every stop.
+  const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [ localVideoMuted, setLocalVideoMuted ] = useState(startWithVideoMuted);
   const [ hasVideoTrack, setHasVideoTrack ] = useState(false);
   const [ localCameraStream, setLocalCameraStream ] = useState<MediaStream | null>(null);
@@ -950,6 +961,10 @@ export function useJitsiMeeting({
       if (connectionRef.current === myConnection) {
         connectionRef.current = null;
       }
+      if (pendingReconnectTimerRef.current) {
+        clearTimeout(pendingReconnectTimerRef.current);
+        pendingReconnectTimerRef.current = null;
+      }
       if (localDesktopTrackRef.current) {
         try {
           localDesktopTrackRef.current.dispose();
@@ -985,7 +1000,7 @@ export function useJitsiMeeting({
       setSharedVideo(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ enabled, jwt, roomName, jitsiDomain ]);
+  }, [ enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
 
   const toggleAudio = useCallback(() => {
     const track = localAudioTrackRef.current;
@@ -1135,6 +1150,19 @@ export function useJitsiMeeting({
         // eslint-disable-next-line no-console
         console.error('[useJitsiMeeting] Failed to dispose desktop track:', err);
       }
+
+      // Neither of the calls above is trustworthy at actually telling the server the share
+      // ended (see the comment on them) -- force a full leave+rejoin shortly after so Jicofo
+      // rebuilds this participant's source list from scratch, which IS reliable. Delayed and
+      // debounced so a fast re-share isn't caught mid-reconnect and killed (toggleScreenShare's
+      // start path clears this same timer).
+      if (pendingReconnectTimerRef.current) {
+        clearTimeout(pendingReconnectTimerRef.current);
+      }
+      pendingReconnectTimerRef.current = setTimeout(() => {
+        pendingReconnectTimerRef.current = null;
+        setReconnectEpoch(epoch => epoch + 1);
+      }, 1500);
     } finally {
       desktopStopInFlightRef.current = false;
     }
@@ -1160,6 +1188,13 @@ export function useJitsiMeeting({
       return;
     }
     desktopStartInFlightRef.current = true;
+
+    // A fresh share is starting -- cancel any reconnect still pending from a PREVIOUS stop, or
+    // it would tear down (and never restart) the new share moments after this.
+    if (pendingReconnectTimerRef.current) {
+      clearTimeout(pendingReconnectTimerRef.current);
+      pendingReconnectTimerRef.current = null;
+    }
 
     let desktopTrack: any;
 
