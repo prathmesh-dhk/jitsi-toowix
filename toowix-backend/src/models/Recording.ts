@@ -10,6 +10,14 @@ export interface IRecording {
   recordingSessionId?: string;
   status?: 'Processing' | 'Ready' | 'Failed';
   failureReason?: string;
+  sourceFile?: string | null;
+  processedFile?: string | null;
+  processingError?: string | null;
+  processingStartedAt?: Date | null;
+  processingCompletedAt?: Date | null;
+  codec?: string | null;
+  width?: number | null;
+  height?: number | null;
   durationMinutes: number;
   sizeBytes: number;
   fileUrl?: string | null;
@@ -69,6 +77,14 @@ const RecordingSchema = new Schema<IRecordingDocument>(
     recordingSessionId: { type: String },
     status: { type: String, enum: ['Processing', 'Ready', 'Failed'], default: 'Processing' },
     failureReason: { type: String },
+    sourceFile: { type: String, default: null },
+    processedFile: { type: String, default: null },
+    processingError: { type: String, default: null },
+    processingStartedAt: { type: Date, default: null },
+    processingCompletedAt: { type: Date, default: null },
+    codec: { type: String, default: null },
+    width: { type: Number, min: 0, default: null },
+    height: { type: Number, min: 0, default: null },
     durationMinutes: {
       type: Number,
       required: true,
