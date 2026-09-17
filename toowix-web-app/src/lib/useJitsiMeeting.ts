@@ -391,6 +391,9 @@ export function useJitsiMeeting({
   const recomputeRemoteScreenShare = useCallback(() => {
     const entries = Object.entries(remoteDesktopTracksRef.current);
 
+    // eslint-disable-next-line no-console
+    console.log('[DEBUG] recomputeRemoteScreenShare, entries:', entries.length);
+
     if (entries.length === 0) {
       setRemoteScreenShare(null);
 
@@ -398,6 +401,9 @@ export function useJitsiMeeting({
     }
     const [ id, track ] = entries[entries.length - 1];
     const stream = trackToStream(track);
+
+    // eslint-disable-next-line no-console
+    console.log('[DEBUG] remote screen stream computed:', { id, hasStream: !!stream, videoTracks: stream?.getVideoTracks().length });
 
     setRemoteScreenShare(stream ? { stream, presenterName: remoteNamesRef.current[id] || 'Participant' } : null);
   }, []);
@@ -496,9 +502,14 @@ export function useJitsiMeeting({
               const type = track.getType();
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
+              // eslint-disable-next-line no-console
+              console.log('[DEBUG] TRACK_ADDED', { participantId, type, videoType, muted: track.isMuted?.() });
+
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
               } else if (videoType === 'desktop') {
+                // eslint-disable-next-line no-console
+                console.log('[DEBUG] desktop track registered for', participantId);
                 remoteDesktopTracksRef.current[participantId] = track;
                 recomputeRemoteScreenShare();
               } else {
