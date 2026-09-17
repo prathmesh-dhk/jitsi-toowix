@@ -2,12 +2,46 @@ import { inspectRecording, resolveRecordingFilePath } from './media';
 import { mayManageResource } from '../middleware/ownership';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { getFirebaseAuth } from '../config/firebase';
 import { User } from '../models/User';
 import { Meeting } from '../models/Meeting';
 import { Recording } from '../models/Recording';
 import { Company } from '../models/Company';
 import { notifyCompany, notifyUser } from '../notifications/createNotification';
 import fs from 'fs';
+
+/**
+ * GET /:id and /:id/stream are unauthenticated by design (a <video> tag can't attach an
+ * Authorization header, and share links must work for logged-out recipients), so they can't
+ * use verifyFirebaseToken. But that must never mean "anyone who guesses the ObjectId gets the
+ * video" -- so both routes resolve an optional viewer (Authorization header, or ?token= for the
+ * <video> element) and check it against the recording's own sharing model below.
+ */
+const resolveOptionalViewer = async (req: Request): Promise<{ id: string; email: string; companyId: string | null } | null> => {
+  const authHeader = req.headers.authorization;
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  const idToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : queryToken;
+  if (!idToken) return null;
+  try {
+    const decoded = await getFirebaseAuth().verifyIdToken(idToken, true);
+    const user = await User.findOne({ firebaseUid: decoded.uid });
+    if (!user || user.status !== 'ACTIVE') return null;
+    return { id: String(user._id), email: user.email.toLowerCase(), companyId: user.companyId ? String(user.companyId) : null };
+  } catch {
+    return null;
+  }
+};
+
+/** allowShare is this app's explicit "make this a public link" flag; absent that, only the
+ * owner, same-company members, or emails on sharedWith may view/stream the recording. */
+const mayViewRecording = (recording: any, viewer: { id: string; email: string; companyId: string | null } | null): boolean => {
+  if (recording.allowShare === true) return true;
+  if (!viewer) return false;
+  if (String(recording.createdBy) === viewer.id) return true;
+  if (viewer.companyId && recording.companyId && String(recording.companyId) === viewer.companyId) return true;
+  if ((recording.sharedWith || []).includes(viewer.email)) return true;
+  return false;
+};
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{8,128}$/;
 
@@ -294,6 +328,10 @@ export const getRecordingHandler = async (req: Request, res: Response): Promise<
       res.status(404).json({ error: 'Recording not found' });
       return;
     }
+    if (!mayViewRecording(recording, await resolveOptionalViewer(req))) {
+      res.status(404).json({ error: 'Recording not found' });
+      return;
+    }
     res.json({ recording });
   } catch (error: any) {
     console.error('[Recordings] Error fetching single recording:', error.message);
@@ -315,6 +353,10 @@ export const streamRecordingHandler = async (req: Request, res: Response): Promi
   try {
     const recording = await Recording.findById(req.params.id);
     if (!recording || !recording.fileUrl || recording.status !== 'Ready') {
+      res.status(404).json({ error: 'Recording not available' });
+      return;
+    }
+    if (!mayViewRecording(recording, await resolveOptionalViewer(req))) {
       res.status(404).json({ error: 'Recording not available' });
       return;
     }

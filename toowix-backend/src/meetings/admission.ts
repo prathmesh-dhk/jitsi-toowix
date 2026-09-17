@@ -48,6 +48,15 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     const moderator = !!meeting && !!user && String(meeting.createdBy) === String(user._id)
       && (user.role === 'SUPER_ADMIN' || !policy?.whoCanHost || policy.whoCanHost.includes(user.role));
     const requireLobbyPolicy = !!policy?.requireLobby;
+    // requireLobbyPolicy only becomes real protection if Prosody/JVB actually enforces the
+    // `context.room.lobby` claim below -- otherwise a company that turned "Require lobby" on
+    // gets a JWT that *claims* lobby enforcement while the server silently ignores it, which is
+    // worse than not offering the setting at all. JITSI_SERVER_POLICY_VERIFIED is set by
+    // deployment/ops only once the Prosody lobby module has been confirmed active on this
+    // server; until then, fail closed (503) rather than mint a falsely-reassuring token.
+    if (requireLobbyPolicy && process.env.JITSI_SERVER_POLICY_VERIFIED !== 'true') {
+      throw new Error('Lobby enforcement is required by company policy but this deployment has not attested that the server enforces it');
+    }
     const recordingEnabled = !!meeting && moderator && policy?.recordingEnabled !== false && company?.limits?.featureFlags?.recordingEnabled !== false;
     const info = {
       type: meeting?.type || 'Guest', organizerId: meeting ? String(meeting.createdBy) : '',

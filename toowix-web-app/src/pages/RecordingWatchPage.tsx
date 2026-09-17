@@ -58,9 +58,12 @@ export function RecordingWatchPage() {
         // and serves the actual bytes (with Range support for seeking). Using fileUrl directly
         // here was the bug: the browser had nothing real to fetch, even for recordings whose
         // underlying media was perfectly fine.
+        // Same as fetchRecording's own headers above: the stream route requires either
+        // allowShare or an authenticated owner/company/shared viewer, and a <video> element
+        // can't send an Authorization header, so the ID token rides along as ?token= instead.
         setVideoSrc(
           rec.fileUrl && rec.status === 'Ready'
-            ? `${BACKEND_URL}/api/recordings/${id}/stream`
+            ? `${BACKEND_URL}/api/recordings/${id}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`
             : DEFAULT_SAMPLE_VIDEO
         );
         setError(null);

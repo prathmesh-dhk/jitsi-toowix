@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { verifyIdentityToken, verifyFirebaseToken, AuthenticatedRequest } from '../middleware/auth';
+import { authRateLimiter } from '../middleware/rateLimit';
 import { signupHandler } from '../auth/signup';
 import { verifyEmailHandler } from '../auth/verify-email';
 import { loginGateHandler } from '../auth/login';
@@ -9,7 +10,7 @@ import { sendVerificationEmailHandler } from '../auth/send-verification-email';
 const router = Router();
 
 // Tue-BE-1: Signup
-router.post('/signup', verifyIdentityToken, signupHandler);
+router.post('/signup', authRateLimiter, verifyIdentityToken, signupHandler);
 
 // Tue-BE-1: Email verification sync
 router.post('/verify-email', verifyIdentityToken, verifyEmailHandler);
@@ -21,10 +22,10 @@ router.post('/send-verification-email', verifyIdentityToken, sendVerificationEma
 router.post('/send-verification-email', verifyFirebaseToken, sendVerificationEmailHandler);
 
 // Tue-BE-2: Login Gate
-router.post('/login-gate', verifyIdentityToken, loginGateHandler);
+router.post('/login-gate', authRateLimiter, verifyIdentityToken, loginGateHandler);
 
 // Tue-BE-3: Forgot Password (public)
-router.post('/forgot-password', forgotPasswordHandler);
+router.post('/forgot-password', authRateLimiter, forgotPasswordHandler);
 
 router.get('/session', verifyFirebaseToken, (req: AuthenticatedRequest, res) => { res.json({ authorized: true, user: req.accountUser }); });
 
