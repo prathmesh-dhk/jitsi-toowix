@@ -100,6 +100,26 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Races a promise against a timeout WITHOUT abandoning the original promise -- it keeps running
+// in the background (still resolving/rejecting the shared trackOperationQueueRef chain in
+// runSerializedRoomOperation) so later queued operations are unaffected. This exists because
+// room.removeTrack/addTrack/replaceTrack are real network+signaling calls with no timeout of
+// their own; if one ever stalls (slow JVB response, a renegotiation hiccup), a bare `await`
+// leaves the caller hanging forever with no way to update its own UI -- which is exactly what
+// froze the screen-share tile on its last frame: stopScreenShareInternal awaited removeTrack
+// before clearing isScreenSharing/localScreenStream, so a stalled removeTrack meant the tile
+// never got the chance to clear.
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutError)), ms);
+
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      err => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 // lib-jitsi-meet wraps the native getUserMedia error into its OWN JitsiTrackError taxonomy and
 // does not preserve the original DOMException name for anything it doesn't specifically
 // recognize -- a real-hardware NotReadableError ("Could not start video/audio source", Chrome's
@@ -1033,7 +1053,11 @@ export function useJitsiMeeting({
 
       if (room) {
         try {
-          await runSerializedRoomOperation(() => room.removeTrack(desktopTrack));
+          // 6s ceiling: removeTrack is a real signaling round-trip with no timeout of its own --
+          // if it stalls, the tile below must still clear so the UI doesn't stay frozen on the
+          // last frame forever. The underlying removeTrack keeps running in the background (see
+          // withTimeout's comment) so the conference-side state still converges once it settles.
+          await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
