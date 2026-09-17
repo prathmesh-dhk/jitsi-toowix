@@ -13,13 +13,14 @@ const deleteFileIfPresent = async (root: string, relativePath: string) => {
 
 const runCleanup = async () => {
   try {
-    const root = path.resolve(process.env.RECORDINGS_STORAGE_PATH || '/recordings-storage');
+    const root = path.resolve(process.env.RECORDING_ROOT || process.env.RECORDINGS_STORAGE_PATH || '/recordings-storage');
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
     const expired = await Recording.find({ recordedAt: { $lt: cutoff } });
 
     for (const recording of expired) {
-      if (recording.fileUrl) {
-        await deleteFileIfPresent(root, recording.fileUrl);
+      const files = new Set([recording.fileUrl, recording.sourceFile, recording.processedFile].filter(Boolean) as string[]);
+      for (const file of files) {
+        await deleteFileIfPresent(root, file);
       }
       await recording.deleteOne();
     }

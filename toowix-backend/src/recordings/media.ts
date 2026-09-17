@@ -7,12 +7,16 @@ const execute = promisify(execFile);
 export function parseProbe(probe: any, sizeBytes: number) {
   const durationSeconds = Number(probe.format?.duration);
   const streams = probe.streams || [];
+  const video = streams.find((s: any) => s.codec_type === 'video');
+  const audio = streams.find((s: any) => s.codec_type === 'audio');
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0
-    || !streams.some((s: any) => s.codec_type === 'video') || !streams.some((s: any) => s.codec_type === 'audio')) {
+    || !video || !audio) {
     throw new Error('Completed recording must contain video, audio and a positive duration');
   }
   return { durationSeconds, sizeBytes, container: String(probe.format?.format_name || ''),
-    codecs: streams.map((s: any) => String(s.codec_name || 'unknown')) };
+    codecs: streams.map((s: any) => String(s.codec_name || 'unknown')),
+    codec: String(video.codec_name || 'unknown'), audioCodec: String(audio.codec_name || 'unknown'),
+    width: Number(video.width) || 0, height: Number(video.height) || 0 };
 }
 
 /**
@@ -21,6 +25,10 @@ export function parseProbe(probe: any, sizeBytes: number) {
  * playback stream route, so both use the exact same path-traversal guard.
  */
 export async function resolveRecordingFilePath(relativeFile: string): Promise<string> {
+  if (typeof relativeFile !== 'string' || !relativeFile.trim() || relativeFile.includes('\0')
+    || path.isAbsolute(relativeFile) || relativeFile.split(/[\\/]/).some(part => part === '..')) {
+    throw new Error('Recording path is outside the recording root');
+  }
   const root = await fs.realpath(process.env.RECORDING_ROOT || process.env.RECORDINGS_STORAGE_PATH || '/recordings-storage');
   const file = await fs.realpath(path.resolve(root, relativeFile));
   const relative = path.relative(root, file);

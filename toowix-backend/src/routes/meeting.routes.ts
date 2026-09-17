@@ -1,6 +1,7 @@
 import { roomAdmission, attendance } from '../meetings/admission';
 import { Router } from 'express';
 import { optionalAccount, verifyFirebaseToken } from '../middleware/auth';
+import { meetingAccessRateLimiter } from '../middleware/rateLimit';
 import {
   createMeetingHandler,
   listMeetingsHandler,
@@ -26,19 +27,19 @@ import {
 
 const router = Router();
 
-router.get('/rsvp', rsvpMeetingHandler); // public, no auth -- RSVP links from email
-router.post('/rsvp', rsvpMeetingHandler); // public, no auth -- RSVP response from web app
+router.get('/rsvp', meetingAccessRateLimiter, rsvpMeetingHandler); // public, no auth -- RSVP links from email
+router.post('/rsvp', meetingAccessRateLimiter, rsvpMeetingHandler); // public, no auth -- RSVP response from web app
 router.get('/room/:roomSlug', optionalAccount, roomAdmission); // public, no auth -- guests need this too
 router.post('/room/:roomSlug/attendance/join', attendance); // public, no auth
 router.post('/room/:roomSlug/attendance/leave', attendance); // public, no auth
-router.post('/room/:roomSlug/admission', optionalAccount, roomAdmission);
+router.post('/room/:roomSlug/admission', meetingAccessRateLimiter, optionalAccount, roomAdmission);
 
 // Real-time WebRTC Signaling routes
 router.post('/room/:roomSlug/signal', optionalAccount, postSignalHandler);
 router.get('/room/:roomSlug/signal', optionalAccount, getSignalsHandler);
 
 // Google Meet Waiting Room & Host Admission routes
-router.post('/room/:roomSlug/lobby/knock', optionalAccount, knockLobbyHandler);
+router.post('/room/:roomSlug/lobby/knock', meetingAccessRateLimiter, optionalAccount, knockLobbyHandler);
 router.get('/room/:roomSlug/lobby/status', optionalAccount, getLobbyStatusHandler);
 router.post('/room/:roomSlug/lobby/cancel', optionalAccount, cancelLobbyHandler);
 router.get('/room/:roomSlug/lobby/pending', optionalAccount, listPendingLobbyHandler);

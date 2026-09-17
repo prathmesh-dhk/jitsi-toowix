@@ -7,6 +7,11 @@ const { spawn } = require('node:child_process');
 const WebSocket = require('../../node_modules/ws');
 const root = path.resolve(__dirname, '..');
 const profile = fs.mkdtempSync(path.join(root, '.browser-test-'));
+const resultPath = process.env.RECORDING_E2E_RESULT_PATH || path.join(__dirname, 'recording-live-result.json');
+const sshTarget = process.env.RECORDING_E2E_SSH_TARGET || 'root@192.168.22.59';
+const talkBaseUrl = (process.env.RECORDING_E2E_BASE_URL || 'https://talk.toowix.com').replace(/\/$/, '');
+const meetingDomain = new URL(talkBaseUrl).hostname;
+const recordingDurationMs = Math.max(30_000, Number.parseInt(process.env.RECORDING_E2E_DURATION_MS || '130000', 10));
 let chrome, server, ws;
 const pending = new Map(); let id = 0;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -24,14 +29,14 @@ async function until(expression) {
 }
 (async () => {
   const remoteContext = await new Promise((resolve, reject) => {
-    const ssh = spawn('C:\\Windows\\System32\\OpenSSH\\ssh.exe', ['-o','BatchMode=yes','root@192.168.22.59','docker exec -i toowix-backend node'], { windowsHide:true, stdio:['pipe','pipe','pipe'] });
+    const ssh = spawn('C:\\Windows\\System32\\OpenSSH\\ssh.exe', ['-o','BatchMode=yes',sshTarget,'docker exec -i toowix-backend node'], { windowsHide:true, stdio:['pipe','pipe','pipe'] });
     let output=''; ssh.stdout.on('data',chunk=>output+=chunk); ssh.stderr.on('data',()=>{});
     ssh.on('exit',code=> { if(code) return reject(new Error('Could not prepare live test')); const line=output.split('\n').find(x=>x.startsWith('TEST_CONTEXT ')); if(!line)return reject(new Error('No test context')); resolve(JSON.parse(line.slice(13))); });
     ssh.stdin.end(fs.readFileSync(path.join(__dirname,'recording-live-context.js'),'utf8'));
   });
   server = http.createServer((req,res)=>{
     res.setHeader('Content-Type','text/html');
-    res.end('<!doctype html><title>Toowix Recording Verification</title><div id="clock"></div><div id="meet" style="height:90vh"></div><script src="https://talk.toowix.com/external_api.js"></script><script>setInterval(()=>document.getElementById("clock").textContent="Screen content verification "+new Date().toISOString(),1000)</script>');
+    res.end(`<!doctype html><title>Toowix Recording Verification</title><div id="clock"></div><div id="meet" style="height:90vh"></div><script src="${talkBaseUrl}/external_api.js"></script><script>setInterval(()=>document.getElementById("clock").textContent="Screen content verification "+new Date().toISOString(),1000)</script>`);
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
@@ -45,7 +50,7 @@ async function until(expression) {
   ws.on('message', raw => { const data = JSON.parse(raw); if (data.id && pending.has(data.id)) { const p = pending.get(data.id); pending.delete(data.id); data.error ? p.reject(new Error(data.error.message)) : p.resolve(data.result); } });
   await send('Page.enable'); await send('Runtime.enable');
   await send('Page.navigate',{url:base}); await until('!!window.JitsiMeetExternalAPI');
-  const create = (token, guest) => `window.events=[]; window.api=new JitsiMeetExternalAPI('talk.toowix.com',{roomName:${JSON.stringify(remoteContext.room)},jwt:${JSON.stringify(token)},parentNode:document.getElementById('meet'),configOverwrite:{prejoinConfig:{enabled:false},startWithAudioMuted:${guest},startWithVideoMuted:false,p2p:{enabled:false}},userInfo:{displayName:${JSON.stringify(guest?'Verification B':'Verification A')}}}); ['videoConferenceJoined','recordingStatusChanged','screenSharingStatusChanged','errorOccurred'].forEach(name=>api.addListener(name,data=>events.push({name,on:data.on,error:data.error?.name||data.name,time:Date.now()})));`;
+  const create = (token, guest) => `window.events=[]; window.api=new JitsiMeetExternalAPI(${JSON.stringify(meetingDomain)},{roomName:${JSON.stringify(remoteContext.room)},jwt:${JSON.stringify(token)},parentNode:document.getElementById('meet'),configOverwrite:{prejoinConfig:{enabled:false},startWithAudioMuted:${guest},startWithVideoMuted:false,p2p:{enabled:false}},userInfo:{displayName:${JSON.stringify(guest?'Verification B':'Verification A')}}}); ['videoConferenceJoined','recordingStatusChanged','screenSharingStatusChanged','errorOccurred'].forEach(name=>api.addListener(name,data=>events.push({name,on:data.on,error:data.error?.name||data.name,time:Date.now()})));`;
   await evaluate(create(remoteContext.hostToken,false));
   await until('events.some(e=>e.name==="videoConferenceJoined")');
   console.log('Host joined',remoteContext.room);
@@ -67,12 +72,12 @@ async function until(expression) {
   try {await until('events.some(e=>e.name==="screenSharingStatusChanged"&&e.on)');screenShared=true;console.log('Screen sharing confirmed');}catch{console.log('Screen sharing did not confirm; continuing media recording verification');}
   for(let i=0;i<13;i++) await delay(5000);
   if(screenShared){await evaluate(`api.executeCommand('toggleShareScreen')`);await until('events.some(e=>e.name==="screenSharingStatusChanged"&&!e.on)');console.log('Screen stopped; microphone recording continues');}
-  await delay(Math.max(0,130000-(Date.now()-activeSince)));
+  await delay(Math.max(0,recordingDurationMs-(Date.now()-activeSince)));
   await evaluate(`api.executeCommand('stopRecording','file')`);
   await until('events.some(e=>e.name==="recordingStatusChanged"&&!e.on)');
   console.log('Recording stopped after',Math.round((Date.now()-activeSince)/1000),'seconds');
   const events=await evaluate('events');
-  fs.writeFileSync(path.join(__dirname,'recording-live-result.json'),JSON.stringify({room:remoteContext.room,screenShared,events},null,2));
+  fs.writeFileSync(resultPath,JSON.stringify({room:remoteContext.room,screenShared,events},null,2));
   await evaluate(`api.executeCommand('hangup');api.dispose()`);
   ws=guestSocket;await evaluate(`api.executeCommand('hangup');api.dispose()`);guestSocket.close();ws=hostSocket;
   console.log('Live recording complete; final media still requires probe/playback verification');

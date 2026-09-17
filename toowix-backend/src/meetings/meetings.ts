@@ -379,6 +379,7 @@ export const listMeetingsHandler = async (req: AuthenticatedRequest, res: Respon
     }
 
     const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+    const company = user.companyId ? await Company.findById(user.companyId) : null;
     const meetingDocuments = await Meeting.find(filter)
       .populate('createdBy', 'fullName email avatarUrl')
       .sort({ createdAt: -1 })
@@ -414,7 +415,16 @@ export const listMeetingsHandler = async (req: AuthenticatedRequest, res: Respon
         recordingByMeeting.get(String(meeting._id)) ||
         recordingByMeeting.get(meeting.roomSlug) ||
         recordingByMeeting.get(meeting.name);
-      return enrichMeetingWithResources(meeting, recording);
+      const enriched = enrichMeetingWithResources(meeting, recording);
+      // The list is company-wide (every teammate sees every company meeting so they can find
+      // it), but a plaintext passcode must only go to people who could actually attend this
+      // specific meeting -- same rule the single-meeting GET/:id and room-admission endpoints
+      // already enforce via mayAttend. Without this, any company member could read the
+      // passcode of a Private meeting they were never invited to straight off the list.
+      if (enriched.passcode && !mayAttend(meeting, user, company)) {
+        delete enriched.passcode;
+      }
+      return enriched;
     });
 
     res.json({ meetings });
@@ -656,6 +666,18 @@ export const rsvpMeetingHandler = async (req: Request, res: Response): Promise<v
     if (!meeting) {
       res.status(404).json({ error: 'Meeting not found' });
       return;
+    }
+
+    // RSVP is public/unauthenticated (invitees click a link from their invite email), but the
+    // response echoes back meeting.passcode -- when the meeting has an actual invitee list,
+    // require the submitted email to be on it so an arbitrary caller can't RSVP as anyone to
+    // harvest a Private meeting's passcode.
+    if (Array.isArray(meeting.invitees) && meeting.invitees.length > 0) {
+      const isInvitee = meeting.invitees.some((invitee: string) => invitee.toLowerCase() === cleanEmail);
+      if (!isInvitee) {
+        res.status(403).json({ error: 'This email is not on the invite list for this meeting' });
+        return;
+      }
     }
 
     meeting.rsvps = meeting.rsvps || [];

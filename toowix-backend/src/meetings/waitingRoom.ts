@@ -8,6 +8,20 @@ import { Company } from '../models/Company';
 import { generateJitsiToken } from '../auth/jitsi-token';
 import { jitsiConfig } from '../config/jitsi';
 import { notifyUser } from '../notifications/createNotification';
+import { mayManageResource } from '../middleware/ownership';
+
+/**
+ * Host-only lobby/meeting-control actions (admit, deny, announce, end-for-everyone, list
+ * pending) must only be callable by the meeting's creator or a company admin of the same
+ * tenant -- the routes themselves use `optionalAccount` (guests need the sibling `knock`/
+ * `status` routes unauthenticated), so each handler re-derives and checks identity here.
+ */
+async function requireHost(req: AuthenticatedRequest, meeting: any): Promise<boolean> {
+  if (!req.firebaseUid) return false;
+  const user = await User.findOne({ firebaseUid: req.firebaseUid });
+  if (!user) return false;
+  return mayManageResource(user, meeting);
+}
 
 function generateCredentials(room: string, identity: { id: string; name: string; email: string }, moderator: boolean, companyId?: string | null) {
   const participantEntryId = crypto.randomBytes(12).toString('hex');
@@ -232,6 +246,10 @@ export async function listPendingLobbyHandler(req: AuthenticatedRequest, res: Re
       res.json({ waiting: [], count: 0 });
       return;
     }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can view the waiting room' });
+      return;
+    }
     const waiting = (meeting.waitingQueue || []).filter(p => p.status === 'WAITING');
     res.json({ waiting, count: waiting.length, hostAnnouncement: meeting.hostAnnouncement || null });
   } catch (err: any) {
@@ -252,6 +270,21 @@ export async function admitLobbyHandler(req: AuthenticatedRequest, res: Response
     if (!meeting) {
       res.status(404).json({ error: 'Meeting not found' });
       return;
+    }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can admit participants' });
+      return;
+    }
+    if (meeting.cancelledAt || meeting.endedAt) {
+      res.status(403).json({ error: 'Meeting has ended or been cancelled' });
+      return;
+    }
+    if (meeting.scheduledAt && meeting.durationMinutes) {
+      const expiresAt = new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000);
+      if (Date.now() > expiresAt.getTime()) {
+        res.status(410).json({ error: 'This meeting link has expired.' });
+        return;
+      }
     }
 
     let admittedCount = 0;
@@ -291,6 +324,10 @@ export async function denyLobbyHandler(req: AuthenticatedRequest, res: Response)
       res.status(404).json({ error: 'Meeting not found' });
       return;
     }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can deny participants' });
+      return;
+    }
 
     const item = (meeting.waitingQueue || []).find(p => p.id === requestId);
     if (item) {
@@ -318,6 +355,10 @@ export async function announceLobbyHandler(req: AuthenticatedRequest, res: Respo
       res.status(404).json({ error: 'Meeting not found' });
       return;
     }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can broadcast an announcement' });
+      return;
+    }
 
     meeting.hostAnnouncement = String(message || '').slice(0, 300);
     await meeting.save();
@@ -337,13 +378,17 @@ const endedMeetingSlugs = new Set<string>();
 export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
-    endedMeetingSlugs.add(room);
 
     const meeting = await Meeting.findOne({ roomSlug: room });
     if (!meeting) {
       res.status(404).json({ error: 'Meeting not found' });
       return;
     }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can end the meeting for everyone' });
+      return;
+    }
+    endedMeetingSlugs.add(room);
 
     meeting.endedAt = new Date();
     meeting.waitingQueue = [];

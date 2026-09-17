@@ -2,12 +2,55 @@ import { inspectRecording, resolveRecordingFilePath } from './media';
 import { mayManageResource } from '../middleware/ownership';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { getFirebaseAuth } from '../config/firebase';
 import { User } from '../models/User';
 import { Meeting } from '../models/Meeting';
 import { Recording } from '../models/Recording';
 import { Company } from '../models/Company';
 import { notifyCompany, notifyUser } from '../notifications/createNotification';
 import fs from 'fs';
+
+/**
+ * GET /:id and /:id/stream are unauthenticated by design (a <video> tag can't attach an
+ * Authorization header, and share links must work for logged-out recipients), so they can't
+ * use verifyFirebaseToken. But that must never mean "anyone who guesses the ObjectId gets the
+ * video" -- so both routes resolve an optional viewer (Authorization header, or ?token= for the
+ * <video> element) and check it against the recording's own sharing model below.
+ */
+const resolveOptionalViewer = async (req: Request): Promise<{ id: string; email: string; companyId: string | null } | null> => {
+  const authHeader = req.headers.authorization;
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  const idToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : queryToken;
+  if (!idToken) return null;
+  try {
+    const decoded = await getFirebaseAuth().verifyIdToken(idToken, true);
+    const user = await User.findOne({ firebaseUid: decoded.uid });
+    if (!user || user.status !== 'ACTIVE') return null;
+    return { id: String(user._id), email: user.email.toLowerCase(), companyId: user.companyId ? String(user.companyId) : null };
+  } catch {
+    return null;
+  }
+};
+
+/** allowShare is this app's explicit "make this a public link" flag; absent that, only the
+ * owner, same-company members, or emails on sharedWith may view/stream the recording. */
+const mayViewRecording = (recording: any, viewer: { id: string; email: string; companyId: string | null } | null): boolean => {
+  if (recording.allowShare === true) return true;
+  if (!viewer) return false;
+  if (String(recording.createdBy) === viewer.id) return true;
+  if (viewer.companyId && recording.companyId && String(recording.companyId) === viewer.companyId) return true;
+  if ((recording.sharedWith || []).includes(viewer.email)) return true;
+  return false;
+};
+
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{8,128}$/;
+
+const isFinalRelativeFile = (value: unknown, recordingSessionId: string): value is string => {
+  if (typeof value !== 'string' || !value.trim() || value.includes('\0') || value.startsWith('/') || value.startsWith('\\')) return false;
+  const parts = value.replace(/\\/g, '/').split('/');
+  return parts.length >= 2 && parts[parts.length - 2] === recordingSessionId && parts[parts.length - 1] === 'final.mp4'
+    && !parts.includes('..');
+};
 
 const resolveUser = async (req: AuthenticatedRequest) => {
   if (!req.firebaseUid) return null;
@@ -73,12 +116,11 @@ const isAdminRole = (role?: string) => role === 'COMPANY_ADMIN' || role === 'SUP
 
 /**
  * POST /api/recordings/ingest
- * Called by the Jibri finalize script (or, until that's deployed, a manual test) once a
- * recording file has been uploaded to storage (Cloudflare R2). Not user-authenticated --
+ * Called by the Jibri finalize worker as it processes a local recording. Not user-authenticated --
  * Jibri isn't a logged-in user -- instead it's gated by a shared secret in the
  * Authorization header, checked against RECORDING_INGEST_KEY.
  *
- * Body: { roomSlug, fileUrl, sizeBytes, durationMinutes, recordedAt? }
+ * Body: { roomSlug, recordingSessionId, status, relativeFile, fileUrl, recordedAt?, metadata }
  * roomSlug identifies which Meeting this belongs to, so companyId/createdBy/name are
  * resolved from the real meeting record rather than trusted from the caller.
  */
@@ -94,15 +136,15 @@ export const ingestRecordingHandler = async (req: Request, res: Response): Promi
     const { roomSlug, fileUrl, status = 'Ready', recordedAt } = req.body;
     const relativeFile = req.body.relativeFile || fileUrl;
     const recordingSessionId = req.body.recordingSessionId || (typeof relativeFile === 'string' ? relativeFile.split('/')[0] : undefined);
-    if (typeof recordingSessionId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(recordingSessionId) || !['Processing', 'Ready', 'Failed'].includes(status)) {
+    if (typeof recordingSessionId !== 'string' || !SESSION_ID_PATTERN.test(recordingSessionId) || !['Processing', 'Ready', 'Failed'].includes(status)) {
       res.status(400).json({ error: 'Valid recordingSessionId and status are required' }); return;
     }
     if (!roomSlug || typeof roomSlug !== 'string') {
       res.status(400).json({ error: 'roomSlug is required' });
       return;
     }
-    if (status === 'Ready' && (typeof fileUrl !== 'string' || typeof relativeFile !== 'string')) {
-      res.status(400).json({ error: 'Completed recording requires a fileUrl and relativeFile in the recording mount' }); return;
+    if (status === 'Ready' && (!isFinalRelativeFile(relativeFile, recordingSessionId) || !isFinalRelativeFile(fileUrl, recordingSessionId))) {
+      res.status(400).json({ error: 'Completed recording must reference the session final.mp4 in the recording mount' }); return;
     }
 
     const meeting = await Meeting.findOne({ roomSlug: roomSlug.trim().toLowerCase() });
@@ -126,29 +168,46 @@ export const ingestRecordingHandler = async (req: Request, res: Response): Promi
       try {
         recording = await Recording.create({ recordingSessionId, companyId: meeting.companyId || null,
           meetingId: meeting._id, createdBy: meeting.createdBy, name: meeting.name,
-          recordedAt: recordedAt ? new Date(recordedAt) : new Date(), durationMinutes: 0, sizeBytes: 0, status: 'Processing' });
+          recordedAt: recordedAt ? new Date(recordedAt) : new Date(), durationMinutes: 0, sizeBytes: 0, status: 'Processing',
+          sourceFile: req.body.sourceFile || null, processedFile: req.body.processedFile || null,
+          processingStartedAt: new Date() });
       } catch (error: any) {
         if (error.code === 11000) { res.status(409).json({ error: 'Recording finalization is already in progress; retry this session ID' }); return; }
         throw error;
       }
     }
-    if (status === 'Processing') { res.status(202).json({ recording }); return; }
+    if (status === 'Processing') {
+      await Recording.updateOne({ _id: recording._id, status: { $ne: 'Ready' } }, { $set: {
+        status: 'Processing', sourceFile: req.body.sourceFile || recording.sourceFile || null,
+        processedFile: req.body.processedFile || recording.processedFile || null,
+        processingStartedAt: new Date(), allowDownload: false,
+      }, $unset: { failureReason: 1, processingError: 1, processingCompletedAt: 1, fileUrl: 1 } });
+      res.status(202).json({ recording: await Recording.findById(recording._id) }); return;
+    }
     if (status === 'Failed') {
-      await Recording.updateOne({ _id: recording._id, status: { $ne: 'Ready' } }, { $set: { status: 'Failed', failureReason: 'Recorder reported failure' } });
+      const processingError = typeof req.body.processingError === 'string' ? req.body.processingError.slice(0, 2000) : 'Recorder reported failure';
+      await Recording.updateOne({ _id: recording._id, status: { $ne: 'Ready' } }, { $set: {
+        status: 'Failed', failureReason: processingError, processingError, processingCompletedAt: new Date(), allowDownload: false,
+      }, $unset: { fileUrl: 1 } });
       res.json({ recording: await Recording.findById(recording._id) }); return;
     }
     try {
       const metadata = await inspectRecording(relativeFile);
+      const processedFile = isFinalRelativeFile(req.body.processedFile, recordingSessionId) ? req.body.processedFile : relativeFile;
       // CAS prevents late processing/failure retries from overwriting a finalized result.
       const ready = await Recording.findOneAndUpdate({ _id: recording._id, status: { $ne: 'Ready' } }, { $set: {
         durationSeconds: metadata.durationSeconds, durationMinutes: metadata.durationSeconds / 60,
-        sizeBytes: metadata.sizeBytes, status: 'Ready', fileUrl, allowDownload: true,
+        sizeBytes: metadata.sizeBytes, status: 'Ready', fileUrl: relativeFile, allowDownload: true,
+        sourceFile: req.body.sourceFile || recording.sourceFile || null, processedFile,
+        processingError: null, processingCompletedAt: new Date(), codec: metadata.codec,
+        width: metadata.width, height: metadata.height,
       }, $unset: { failureReason: 1 } }, { new: true });
       if (!ready) { res.json({ recording: await Recording.findById(recording._id) }); return; }
       recording = ready;
     } catch {
       await Recording.updateOne({ _id: recording._id, status: { $ne: 'Ready' } }, { $set: {
-        status: 'Failed', failureReason: 'Media validation failed; check recorder finalization, recording mount and ffprobe/ffmpeg logs', allowDownload: false,
+        status: 'Failed', failureReason: 'Media validation failed; check final.mp4, recording mount and ffprobe/ffmpeg logs',
+        processingError: 'Media validation failed', processingCompletedAt: new Date(), allowDownload: false,
       }, $unset: { fileUrl: 1 } });
       res.status(422).json({ error: 'Recording failed media validation', recordingSessionId }); return;
     }
@@ -269,6 +328,10 @@ export const getRecordingHandler = async (req: Request, res: Response): Promise<
       res.status(404).json({ error: 'Recording not found' });
       return;
     }
+    if (!mayViewRecording(recording, await resolveOptionalViewer(req))) {
+      res.status(404).json({ error: 'Recording not found' });
+      return;
+    }
     res.json({ recording });
   } catch (error: any) {
     console.error('[Recordings] Error fetching single recording:', error.message);
@@ -290,6 +353,10 @@ export const streamRecordingHandler = async (req: Request, res: Response): Promi
   try {
     const recording = await Recording.findById(req.params.id);
     if (!recording || !recording.fileUrl || recording.status !== 'Ready') {
+      res.status(404).json({ error: 'Recording not available' });
+      return;
+    }
+    if (!mayViewRecording(recording, await resolveOptionalViewer(req))) {
       res.status(404).json({ error: 'Recording not available' });
       return;
     }

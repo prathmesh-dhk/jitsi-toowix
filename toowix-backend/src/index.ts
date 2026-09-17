@@ -19,9 +19,25 @@ app.set('trust proxy', true);
 
 // Security & Parsing Middleware
 app.use(helmet());
+// `origin: true` (reflect any Origin) combined with `credentials: true` is a credentialed-
+// wildcard CORS hole -- any site can make an authenticated cross-origin request and read the
+// response. Restrict to an explicit allowlist (CORS_ALLOWED_ORIGINS, comma-separated, falling
+// back to APP_URL) in production; local/dev keeps the old permissive behavior for convenience
+// since there's no real cross-tenant risk on a developer's own machine.
+const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || process.env.APP_URL || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 app.use(
   cors({
-    origin: true,
+    origin: process.env.NODE_ENV === 'production'
+      ? (origin, callback) => {
+          // Non-browser/same-origin callers (curl, server health checks, nginx) send no Origin
+          // header at all -- only enforce the allowlist against requests that present one.
+          if (!origin || corsAllowedOrigins.includes(origin)) return callback(null, true);
+          callback(new Error('Not allowed by CORS'));
+        }
+      : true,
     credentials: true,
   })
 );

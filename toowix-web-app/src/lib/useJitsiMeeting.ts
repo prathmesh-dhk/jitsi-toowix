@@ -443,14 +443,9 @@ export function useJitsiMeeting({
 
     const entries = Object.entries(remoteDesktopTracksRef.current);
 
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] recomputeRemoteScreenShare, entries:', entries.map(([ id ]) => id));
-
     if (entries.length === 0) {
       screenShareClearTimerRef.current = setTimeout(() => {
         screenShareClearTimerRef.current = null;
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG] debounced clear firing, setting remoteScreenShare to null');
         setRemoteScreenShare(null);
       }, 600);
 
@@ -575,8 +570,6 @@ export function useJitsiMeeting({
                 if (type === 'audio') {
                   patchParticipant(participantId, { muted: track.isMuted() });
                 } else if (videoType === 'desktop') {
-                  // eslint-disable-next-line no-console
-                  console.log('[DEBUG] remote desktop TRACK_MUTE_CHANGED, participantId:', participantId, 'isMuted:', track.isMuted());
                   // This is the real signal Jitsi uses to stop a screen share in many cases --
                   // muting the existing desktop track rather than immediately removing it. This
                   // listener used to ignore desktop entirely, which is why a stopped share left
@@ -608,8 +601,6 @@ export function useJitsiMeeting({
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: null });
               } else if (videoType === 'desktop') {
-                // eslint-disable-next-line no-console
-                console.log('[DEBUG] remote desktop TRACK_REMOVED, participantId:', participantId, 'isCurrentEntry:', remoteDesktopTracksRef.current[participantId] === track);
                 // Only delete if this is still the SAME track instance stored for this
                 // participant. A late/stale TRACK_REMOVED for an old share (already superseded
                 // by a newer desktop track added since) must not clear the current one out from
@@ -1033,8 +1024,6 @@ export function useJitsiMeeting({
   // sender's local copy was disposed. Remote viewers kept whatever frame they'd last received,
   // forever -- the exact frozen-screen-share bug this rewrites.
   const stopScreenShareInternal = useCallback(async (desktopTrack: any) => {
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] stopScreenShareInternal called, inFlight:', desktopStopInFlightRef.current, 'hasTrack:', !!desktopTrack);
     if (!desktopTrack || desktopStopInFlightRef.current) {
       return;
     }
@@ -1044,19 +1033,12 @@ export function useJitsiMeeting({
 
       if (room) {
         try {
-          // eslint-disable-next-line no-console
-          console.log('[DEBUG] calling room.removeTrack for desktop track, disposed:', desktopTrack.disposed, 'nativeReadyState:', desktopTrack.getTrack?.()?.readyState);
           await runSerializedRoomOperation(() => room.removeTrack(desktopTrack));
-          // eslint-disable-next-line no-console
-          console.log('[DEBUG] room.removeTrack succeeded');
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
           setError('Could not stop screen sharing cleanly -- please try again.');
         }
-      } else {
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG] no room available when stopping screen share');
       }
 
       // Only clear the ref if it still points at THIS track -- a newer share (started while this

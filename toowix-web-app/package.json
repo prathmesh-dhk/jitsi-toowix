@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:recording:e2e": "node tests/recording-e2e.cjs"
   },
   "dependencies": {
     "firebase": "^10.12.0",

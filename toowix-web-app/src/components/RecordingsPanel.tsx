@@ -85,7 +85,7 @@ const formatSize = (bytes: number) => {
   return `${(bytes / 1024).toFixed(0)} KB`;
 };
 
-const mapApiRecording = (r: IApiRecording): IRecording => {
+const mapApiRecording = (r: IApiRecording, idToken?: string): IRecording => {
   const organizerName = typeof r.createdBy === 'object' ? r.createdBy?.fullName || r.createdBy?.email || 'Unknown' : 'Unknown';
   return {
     id: r.id,
@@ -103,7 +103,12 @@ const mapApiRecording = (r: IApiRecording): IRecording => {
     // playback seeking works) is what actually serves the bytes. Resolving it to a real URL
     // right here means every consumer (the inline player modal, download buttons, the details
     // panel) gets a working link for free instead of needing this fix repeated at each site.
-    fileUrl: r.status === 'Ready' && r.fileUrl ? `${BACKEND_URL}/api/recordings/${r.id}/stream` : undefined,
+    // The stream route requires either allowShare or an authenticated owner/company/shared
+    // viewer (see toowix-backend recordings.ts mayViewRecording) -- a <video> element can't send
+    // an Authorization header, so the caller's ID token rides along as ?token= instead.
+    fileUrl: r.status === 'Ready' && r.fileUrl
+      ? `${BACKEND_URL}/api/recordings/${r.id}/stream${idToken ? `?token=${encodeURIComponent(idToken)}` : ''}`
+      : undefined,
     audioUrl: r.audioUrl,
     audioSizeBytes: r.audioSizeBytes,
     transcriptUrl: r.transcriptUrl,
@@ -279,7 +284,7 @@ export function RecordingsPanel() {
         });
         const data = await response.json();
         if (response.ok) {
-          setRecordings((data.recordings || []).map(mapApiRecording));
+          setRecordings((data.recordings || []).map((r: IApiRecording) => mapApiRecording(r, idToken)));
           setStats(data.stats || { count: 0, totalDurationMinutes: 0, totalSizeBytes: 0 });
         }
       } catch (e) {
