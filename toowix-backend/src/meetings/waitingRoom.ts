@@ -348,7 +348,20 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
     meeting.endedAt = new Date();
     meeting.waitingQueue = [];
     meeting.hostJoined = false;
-    await meeting.save();
+
+    // Per the retention policy, an instant meeting (no scheduledAt, not part of a recurring
+    // series -- scheduled/company/recurring meetings have their own time-based expiry handled
+    // by the retention sweep in retention.ts) is destroyed immediately when the host ends it.
+    // getLiveMeetingStatusHandler below still reports the correct "ended" status afterwards via
+    // the in-memory endedMeetingSlugs set, so deleting the document here doesn't break polling
+    // clients that check live-status after this point.
+    const isInstantMeeting = !meeting.scheduledAt && !meeting.recurrence;
+
+    if (isInstantMeeting) {
+      await meeting.deleteOne();
+    } else {
+      await meeting.save();
+    }
 
     res.json({ success: true, message: 'Meeting ended for everyone', endedAt: meeting.endedAt });
   } catch (err: any) {
