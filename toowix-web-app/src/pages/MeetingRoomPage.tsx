@@ -3557,6 +3557,7 @@ export function MeetingRoomPage() {
                     autoPlay
                     playsInline
                     muted
+                    data-testid="remote-screen-share-video"
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 ) : jitsiMeeting.sharedVideo ? (
@@ -5566,6 +5567,7 @@ export function MeetingRoomPage() {
           <button
             onClick={handleToggleScreenShare}
             title={isScreenSharing ? 'Stop presenting' : 'Present now'}
+            data-testid="screen-share-toggle"
             style={{
               width: '48px',
               height: '48px',
