@@ -318,6 +318,16 @@ export function useJitsiMeeting({
   // lib-jitsi-meet as another LOCAL_TRACK_STOPPED), which would otherwise re-enter the stop path
   // while the first call is still in flight.
   const desktopStopInFlightRef = useRef(false);
+  // Guards the START path the same way desktopStopInFlightRef guards the stop path.
+  // createLocalTracks({ devices: ['desktop'] }) awaits the OS share picker before resolving, and
+  // localDesktopTrackRef.current isn't set until AFTER that resolves -- so a rapid double
+  // click/tap on the toggle button (or two independent callers) used to run the picker twice
+  // and call room.addTrack twice. The first addTrack succeeds; the second then hits
+  // lib-jitsi-meet's "only one local track per videoType" check in JitsiConference.addTrack
+  // (rtc.getLocalTracks(VIDEO) already contains the first desktop track) and rejects with
+  // "Cannot add second video track to the conference" -- this is the exact failure confirmed in
+  // production ("screen share track failed after picker succeeded"), not a server-timing issue.
+  const desktopStartInFlightRef = useRef(false);
   // room.addTrack/removeTrack/replaceTrack each trigger a real WebRTC SDP renegotiation with the
   // JVB. Screen-share start/stop, camera device switching, and the camera-retry-after-busy-error
   // path (toggleVideo) can each independently call one of these -- with no coordination between
@@ -1085,6 +1095,13 @@ export function useJitsiMeeting({
       return;
     }
 
+    // See desktopStartInFlightRef's comment above: without this, a second call landing while the
+    // OS share picker from a first call is still open runs the whole start sequence twice.
+    if (desktopStartInFlightRef.current) {
+      return;
+    }
+    desktopStartInFlightRef.current = true;
+
     let desktopTrack: any;
 
     try {
@@ -1102,10 +1119,14 @@ export function useJitsiMeeting({
       // User cancelled the OS share picker, or permission was denied -- silently no-op,
       // matches the previous toggleShareScreen behavior. Nothing was acquired yet, so there's
       // nothing to clean up.
+      desktopStartInFlightRef.current = false;
+
       return;
     }
 
     if (!desktopTrack) {
+      desktopStartInFlightRef.current = false;
+
       return;
     }
 
@@ -1137,9 +1158,18 @@ export function useJitsiMeeting({
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
-    } catch (err) {
+    } catch (err: any) {
       // eslint-disable-next-line no-console
-      console.error('[useJitsiMeeting] screen share track failed after picker succeeded:', err);
+      console.error(
+        '[useJitsiMeeting] screen share track failed after picker succeeded:',
+        err?.message || err?.name || (() => {
+          try {
+            return JSON.stringify(err);
+          } catch {
+            return String(err);
+          }
+        })()
+      );
       if (localDesktopTrackRef.current === desktopTrack) {
         localDesktopTrackRef.current = null;
       }
@@ -1149,6 +1179,8 @@ export function useJitsiMeeting({
         // best-effort
       }
       throw err;
+    } finally {
+      desktopStartInFlightRef.current = false;
     }
   }, [ stopScreenShareInternal ]);
 
