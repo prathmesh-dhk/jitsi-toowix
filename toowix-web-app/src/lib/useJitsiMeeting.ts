@@ -972,7 +972,16 @@ export function useJitsiMeeting({
     let desktopTrack: any;
 
     try {
-      [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({ devices: [ 'desktop' ] });
+      // Without desktopSharingResolution, lib-jitsi-meet captures at window.screen.width/height
+      // -- i.e. the sender's FULL native display resolution (1440p/4K on a lot of laptops now),
+      // which is expensive to encode every frame regardless of the already-conservative 5fps
+      // default frame rate. Capping it to 1080p is what actually reduces the CPU/GPU cost on
+      // constrained hardware (e.g. two full browser call instances competing for one machine's
+      // CPU during same-device testing) -- screen content is legible at 1080p either way.
+      [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({
+        devices: [ 'desktop' ],
+        desktopSharingResolution: { width: { max: 1920 }, height: { max: 1080 } }
+      });
     } catch {
       // User cancelled the OS share picker, or permission was denied -- silently no-op,
       // matches the previous toggleShareScreen behavior. Nothing was acquired yet, so there's
