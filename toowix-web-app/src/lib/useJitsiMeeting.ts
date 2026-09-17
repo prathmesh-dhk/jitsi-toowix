@@ -38,6 +38,7 @@ export interface IRemoteParticipant {
   id: string;
   name: string;
   avatarUrl: string | null;
+  isModerator: boolean;
   muted: boolean;
   video: boolean;
   raisedHand: boolean;
@@ -338,6 +339,10 @@ export function useJitsiMeeting({
   const [ localScreenStream, setLocalScreenStream ] = useState<MediaStream | null>(null);
   const [ isScreenSharing, setIsScreenSharing ] = useState(false);
   const [ remoteParticipants, setRemoteParticipants ] = useState<Record<string, IRemoteParticipant>>({});
+  // This is sourced from the live conference role, rather than from the token that admitted
+  // the user. It lets someone who is promoted during a meeting receive moderator controls
+  // without having to leave and rejoin.
+  const [ isModerator, setIsModerator ] = useState(false);
   const [ remoteScreenShare, setRemoteScreenShare ] = useState<{ stream: MediaStream; presenterName: string } | null>(null);
   // Native Jitsi/JVB-computed dominant speaker (real audio-level based detection, not a
   // client-side guess) -- 'local' when the local user is currently the loudest, a remote
@@ -472,6 +477,7 @@ export function useJitsiMeeting({
         id,
         name: prev[id]?.name ?? remoteNamesRef.current[id] ?? 'Participant',
         avatarUrl: prev[id]?.avatarUrl ?? remoteAvatarsRef.current[id] ?? null,
+        isModerator: prev[id]?.isModerator ?? false,
         muted: prev[id]?.muted ?? true,
         video: prev[id]?.video ?? false,
         raisedHand: prev[id]?.raisedHand ?? false,
@@ -726,7 +732,28 @@ export function useJitsiMeeting({
 
               remoteNamesRef.current[id] = name;
               remoteAvatarsRef.current[id] = avatarUrl;
-              patchParticipant(id, { name, avatarUrl });
+              patchParticipant(id, {
+                name,
+                avatarUrl,
+                isModerator: participant.getRole?.() === 'moderator'
+              });
+            });
+
+            // A moderator promotion is applied by Jicofo/MUC and broadcast to every client.
+            // Keep the roster and the local moderator controls in sync with that authoritative
+            // conference event; do not optimistically mark a participant as a moderator.
+            room.on(JitsiMeetJS.events.conference.USER_ROLE_CHANGED, (id: string, role: string) => {
+              if (isStale()) {
+                return;
+              }
+              const moderator = role === 'moderator';
+
+              if (id === room.myUserId()) {
+                setIsModerator(moderator);
+
+                return;
+              }
+              patchParticipant(id, { isModerator: moderator });
             });
 
             room.on(JitsiMeetJS.events.conference.USER_LEFT, (id: string) => {
@@ -748,6 +775,7 @@ export function useJitsiMeeting({
                 return;
               }
               setLocalParticipantId(room.myUserId());
+              setIsModerator(Boolean(room.isModerator?.()));
               setJoined(true);
             });
 
@@ -1007,6 +1035,7 @@ export function useJitsiMeeting({
       setConnected(false);
       setJoined(false);
       setRemoteParticipants({});
+      setIsModerator(false);
       setLocalCameraStream(null);
       setLocalScreenStream(null);
       setRemoteScreenShare(null);
@@ -1509,6 +1538,29 @@ export function useJitsiMeeting({
     });
   }, []);
 
+  // Mirrors jitsi-meet's GRANT_MODERATOR middleware, which calls
+  // JitsiConference.grantOwner(participantId). The server authorizes this against the local
+  // participant's current conference role and emits USER_ROLE_CHANGED after it succeeds.
+  const grantModerator = useCallback(async (participantId: string) => {
+    const room = roomRef.current;
+
+    if (!room || !room.isModerator?.()) {
+      throw new Error('Only a conference moderator can grant moderator rights.');
+    }
+    const participant = room.getParticipantById?.(participantId);
+
+    if (!participant) {
+      throw new Error('That participant is no longer in the meeting.');
+    }
+    if (participant.getRole?.() === 'moderator') {
+      return;
+    }
+    if (typeof room.grantOwner !== 'function') {
+      throw new Error('This Jitsi server does not support moderator promotion.');
+    }
+    await Promise.resolve(room.grantOwner(participantId));
+  }, []);
+
   return {
     connected,
     joined,
@@ -1521,6 +1573,7 @@ export function useJitsiMeeting({
     localScreenStream,
     isScreenSharing,
     remoteParticipants,
+    isModerator,
     remoteScreenShare,
     dominantSpeakerId,
     localParticipantId,
@@ -1538,6 +1591,7 @@ export function useJitsiMeeting({
     shareVideo,
     updateSharedVideoStatus,
     stopSharedVideo,
+    grantModerator,
     room: roomRef
   };
 }

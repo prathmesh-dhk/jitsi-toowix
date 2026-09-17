@@ -907,7 +907,7 @@ export function MeetingRoomPage() {
   const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
   const [remoteParticipants, setRemoteParticipants] = useState<
-    Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
+    Array<{ id: string; name: string; avatarUrl?: string | null; moderator?: boolean; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
   >([]);
   const [currentTime, setCurrentTime] = useState(() =>
     new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -1024,6 +1024,10 @@ export function MeetingRoomPage() {
   // reacquisition) every time anyone started/stopped screen sharing.
   const initPipStreamRef = useRef<() => void>(() => { });
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showGrantModeratorDialog, setShowGrantModeratorDialog] = useState(false);
+  const [selectedModeratorId, setSelectedModeratorId] = useState<string | null>(null);
+  const [grantingModerator, setGrantingModerator] = useState(false);
+  const [grantModeratorError, setGrantModeratorError] = useState<string | null>(null);
   const [showOtherWaysModal, setShowOtherWaysModal] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showVirtualBackgroundModal, setShowVirtualBackgroundModal] = useState(false);
@@ -2714,6 +2718,13 @@ export function MeetingRoomPage() {
   useEffect(() => {
     setIsScreenSharing(jitsiMeeting.isScreenSharing);
   }, [jitsiMeeting.isScreenSharing]);
+  // The admission response establishes the original host. Jitsi's live role is additionally
+  // authoritative for users promoted while the meeting is already running.
+  useEffect(() => {
+    if (jitsiMeeting.isModerator) {
+      setIsModerator(true);
+    }
+  }, [jitsiMeeting.isModerator]);
   useEffect(() => {
     setRemoteScreenStream(jitsiMeeting.remoteScreenShare?.stream || null);
     setRemotePresenterName(jitsiMeeting.remoteScreenShare?.presenterName || null);
@@ -2782,6 +2793,7 @@ export function MeetingRoomPage() {
           id: r.id,
           name: r.name,
           avatarUrl: r.avatarUrl,
+          moderator: r.isModerator,
           muted: r.muted,
           video: r.video,
           raisedHand: existing?.raisedHand || false,
@@ -2947,6 +2959,25 @@ export function MeetingRoomPage() {
         setRecordingToast(null);
         setCallError('Could not start recording. Please try again.');
       }
+    }
+  };
+
+  const handleGrantModerator = async () => {
+    const participant = remoteParticipants.find((item) => item.id === selectedModeratorId);
+
+    if (!isModerator || !participant || participant.moderator) {
+      return;
+    }
+    setGrantingModerator(true);
+    setGrantModeratorError(null);
+    try {
+      await jitsiMeeting.grantModerator(participant.id);
+      setShowGrantModeratorDialog(false);
+      setSelectedModeratorId(null);
+    } catch (error) {
+      setGrantModeratorError(error instanceof Error ? error.message : 'Could not make this participant a moderator.');
+    } finally {
+      setGrantingModerator(false);
     }
   };
 
@@ -5031,7 +5062,7 @@ export function MeetingRoomPage() {
                                 {p.name}
                               </div>
                               <div style={{ fontSize: '11px', color: '#9AA0A6' }}>
-                                Participant
+                                {p.moderator ? 'Moderator' : 'Participant'}
                               </div>
                             </div>
                           </div>
@@ -5756,6 +5787,32 @@ export function MeetingRoomPage() {
                     {recording ? 'Stop recording' : 'Record meeting'}
                   </button>
                 )}
+                {isModerator && remoteParticipants.some((participant) => !participant.moderator) && (
+                  <button
+                    onClick={() => {
+                      setGrantModeratorError(null);
+                      setSelectedModeratorId(null);
+                      setShowGrantModeratorDialog(true);
+                      setShowMoreMenu(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '8px 12px',
+                      background: 'transparent',
+                      border: 'none',
+                      borderRadius: '8px',
+                      color: '#E8EAED',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <ShieldCheck size={16} />
+                    Make someone a moderator
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setShowSettingsModal(true);
@@ -6144,6 +6201,134 @@ export function MeetingRoomPage() {
             setShowShareVideoDialog(false);
           }}
         />
+
+        {/* Conference-level moderator promotion. The actual change is made by Jitsi/Jicofo;
+            this dialog only selects and confirms the participant to promote. */}
+        {showGrantModeratorDialog && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.65)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 200,
+              padding: '20px',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="grant-moderator-title"
+              style={{
+                backgroundColor: '#2D2E30',
+                borderRadius: '20px',
+                padding: '24px',
+                maxWidth: '420px',
+                width: '100%',
+                boxShadow: '0 12px 32px rgba(0, 0, 0, 0.5)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <h3 id="grant-moderator-title" style={{ margin: 0, color: '#fff', fontSize: '18px', fontWeight: 600 }}>
+                  Make someone a moderator
+                </h3>
+                <button
+                  onClick={() => setShowGrantModeratorDialog(false)}
+                  disabled={grantingModerator}
+                  aria-label="Close"
+                  style={{ background: 'none', border: 'none', color: '#9AA0A6', cursor: grantingModerator ? 'default' : 'pointer' }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <p style={{ color: '#9AA0A6', fontSize: '13px', margin: '0 0 14px', lineHeight: 1.45 }}>
+                Moderators can manage participants and recording. Select a participant to give them these meeting permissions.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+                {remoteParticipants.filter((participant) => !participant.moderator).map((participant, index) => {
+                  const theme = getParticipantColorTheme(participant.name, index + 1);
+                  const initial = (participant.name.trim() || 'P').charAt(0).toUpperCase();
+                  const selected = selectedModeratorId === participant.id;
+
+                  return (
+                    <button
+                      key={participant.id}
+                      onClick={() => setSelectedModeratorId(participant.id)}
+                      disabled={grantingModerator}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        width: '100%',
+                        padding: '10px',
+                        borderRadius: '12px',
+                        border: selected ? '1px solid #8AB4F8' : '1px solid rgba(255,255,255,0.1)',
+                        backgroundColor: selected ? 'rgba(138, 180, 248, 0.15)' : 'rgba(255,255,255,0.04)',
+                        color: '#E8EAED',
+                        cursor: grantingModerator ? 'default' : 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: '30px',
+                          height: '30px',
+                          borderRadius: '50%',
+                          backgroundColor: theme.avatarBg,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '13px',
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {participant.avatarUrl ? (
+                          <img src={participant.avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : initial}
+                      </span>
+                      <span style={{ fontSize: '14px', fontWeight: 500 }}>{participant.name}</span>
+                      {selected && <Check size={17} color="#8AB4F8" style={{ marginLeft: 'auto' }} />}
+                    </button>
+                  );
+                })}
+              </div>
+              {grantModeratorError && (
+                <p role="alert" style={{ color: '#F28B82', fontSize: '13px', margin: '14px 0 0' }}>
+                  {grantModeratorError}
+                </p>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
+                <button
+                  onClick={() => setShowGrantModeratorDialog(false)}
+                  disabled={grantingModerator}
+                  style={{ padding: '8px 16px', borderRadius: '16px', backgroundColor: 'transparent', color: '#E8EAED', border: '1px solid rgba(255,255,255,0.15)', cursor: grantingModerator ? 'default' : 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleGrantModerator}
+                  disabled={!selectedModeratorId || grantingModerator}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '16px',
+                    backgroundColor: !selectedModeratorId || grantingModerator ? 'rgba(138, 180, 248, 0.45)' : '#1A73E8',
+                    color: '#fff',
+                    border: 'none',
+                    fontWeight: 600,
+                    cursor: !selectedModeratorId || grantingModerator ? 'default' : 'pointer',
+                  }}
+                >
+                  {grantingModerator ? 'Making moderator…' : 'Make moderator'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Moderator Broadcast Announcement Dialog */}
         {showAnnounceDialog && (
