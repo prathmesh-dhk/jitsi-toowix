@@ -1091,15 +1091,30 @@ export function useJitsiMeeting({
 
       if (room) {
         try {
-          // 6s ceiling: removeTrack is a real signaling round-trip with no timeout of its own --
-          // if it stalls, the tile below must still clear so the UI doesn't stay frozen on the
-          // last frame forever. The underlying removeTrack keeps running in the background (see
-          // withTimeout's comment) so the conference-side state still converges once it settles.
-          await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
+          // Confirmed via direct JVB/Jicofo log inspection: when the browser's native "Stop
+          // sharing" bar ends the track, room.removeTrack() resolves locally with no error, but
+          // lib-jitsi-meet never sends the server a source-remove for it -- the bridge keeps
+          // believing the desktop source is still live indefinitely (until the whole participant
+          // leaves), which is what left OTHER participants frozen/black. replaceTrack(old, null)
+          // is documented to always perform a real offer/answer renegotiation cycle (unlike
+          // removeTrack, which appears to skip it once the track is already in an ended state),
+          // and passing null as the new track avoids the old desktop<->camera videoType-mismatch
+          // throw entirely (see the historical note above -- there's no new track to conflict).
+          // 6s ceiling: this is a real signaling round-trip with no timeout of its own -- if it
+          // stalls, the tile below must still clear so the UI doesn't stay frozen forever. The
+          // underlying call keeps running in the background (see withTimeout's comment) so the
+          // conference-side state still converges once it settles.
+          await withTimeout(runSerializedRoomOperation(() => room.replaceTrack(desktopTrack, null)), 6000, 'Timed out removing desktop track');
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
-          setError('Could not stop screen sharing cleanly -- please try again.');
+          console.error('[useJitsiMeeting] replaceTrack(desktopTrack, null) failed, falling back to removeTrack:', err);
+          try {
+            await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
+          } catch (fallbackErr) {
+            // eslint-disable-next-line no-console
+            console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', fallbackErr);
+            setError('Could not stop screen sharing cleanly -- please try again.');
+          }
         }
       }
 
