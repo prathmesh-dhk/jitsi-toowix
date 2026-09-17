@@ -566,7 +566,6 @@ export const cancelMeetingHandler = async (req: AuthenticatedRequest, res: Respo
     }
 
     meeting.cancelledAt = new Date();
-    await meeting.save();
 
     if (meeting.companyId) {
       notifyCompany(
@@ -582,7 +581,14 @@ export const cancelMeetingHandler = async (req: AuthenticatedRequest, res: Respo
       );
     }
 
-    res.json({ meeting: await meeting.populate('createdBy', 'fullName email avatarUrl') });
+    // Per the retention policy, a cancelled meeting is destroyed immediately rather than
+    // soft-cancelled -- populate the response first since deleteOne() below removes the
+    // document, not just this in-memory reference.
+    const responseMeeting = await meeting.populate('createdBy', 'fullName email avatarUrl');
+
+    await meeting.deleteOne();
+
+    res.json({ meeting: responseMeeting });
   } catch (error: any) {
     console.error('[Meetings] Error cancelling meeting:', error.message);
     res.status(500).json({ error: 'Failed to cancel meeting' });
