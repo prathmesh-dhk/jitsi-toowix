@@ -455,16 +455,39 @@ export function useJitsiMeeting({
   // produces that flicker; a real "everyone stopped sharing" still clears, just ~600ms later.
   const screenShareClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // True only while the track's underlying native MediaStreamTrack can still produce frames.
+  // A JitsiTrack whose native track already has readyState 'ended' will never emit another
+  // frame -- treating it as "active" is exactly what shows a permanently frozen last frame.
+  const isDesktopTrackUsable = (track: any): boolean => {
+    const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
+
+    return !nativeTrack || nativeTrack.readyState !== 'ended';
+  };
+
   const recomputeRemoteScreenShare = useCallback(() => {
     if (screenShareClearTimerRef.current) {
       clearTimeout(screenShareClearTimerRef.current);
       screenShareClearTimerRef.current = null;
     }
 
+    // Defensive purge: the native browser "Stop sharing" bar can make lib-jitsi-meet emit
+    // TRACK_MUTE_CHANGED (unmuted) and TRACK_REMOVED for the same track slightly out of order.
+    // If a stray "unmuted" event lands AFTER the track has actually ended, the old code would
+    // re-insert a dead track here with nothing left to ever clear it -- a permanent frozen
+    // frame on the viewer's side. Strip any already-ended entries before deciding what's active,
+    // regardless of which event path let them in.
+    for (const [ participantId, track ] of Object.entries(remoteDesktopTracksRef.current)) {
+      if (!isDesktopTrackUsable(track)) {
+        // eslint-disable-next-line no-console
+        console.log('[SCREEN-SHARE-DEBUG] purging dead desktop track, participantId:', participantId);
+        delete remoteDesktopTracksRef.current[participantId];
+      }
+    }
+
     const entries = Object.entries(remoteDesktopTracksRef.current);
     // TEMP diagnostic for the "viewer's screen-share freezes after presenter stops" investigation
-    // -- remove once root-caused. Unconditional (not DEV-gated) so it shows up on the production
-    // build being tested against.
+    // -- remove once confirmed fixed. Unconditional (not DEV-gated) so it shows up on the
+    // production build being tested against.
     // eslint-disable-next-line no-console
     console.log('[SCREEN-SHARE-DEBUG] recomputeRemoteScreenShare, entryCount:', entries.length, 'ids:', entries.map(([ pid ]) => pid));
 
@@ -589,7 +612,7 @@ export function useJitsiMeeting({
                 // (if ever) it unmutes.
                 // eslint-disable-next-line no-console
                 console.log('[SCREEN-SHARE-DEBUG] remote desktop TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted());
-                if (!track.isMuted()) {
+                if (!track.isMuted() && isDesktopTrackUsable(track)) {
                   remoteDesktopTracksRef.current[participantId] = track;
                 }
                 recomputeRemoteScreenShare();
@@ -609,7 +632,7 @@ export function useJitsiMeeting({
                   // screen and never cleared.
                   // eslint-disable-next-line no-console
                   console.log('[SCREEN-SHARE-DEBUG] remote desktop TRACK_MUTE_CHANGED, participantId:', participantId, 'isMuted:', track.isMuted(), 'isSameTrackInRef:', remoteDesktopTracksRef.current[participantId] === track);
-                  if (track.isMuted()) {
+                  if (track.isMuted() || !isDesktopTrackUsable(track)) {
                     if (remoteDesktopTracksRef.current[participantId] === track) {
                       delete remoteDesktopTracksRef.current[participantId];
                     }
