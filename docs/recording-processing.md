@@ -106,3 +106,20 @@ resolve the system binaries.
 This pipeline intentionally creates one mixed Jibri recording. True
 per-participant recording or compositing is a future feature requiring a
 separate recorder/track compositor and is not implemented here.
+
+## Live end-to-end verification
+
+`toowix-web-app/tests/recording-e2e.cjs` exercises the whole deployed path:
+two browser participants, confirmed Jibri start/stop, finalizer status polling,
+local `final.mp4` ffprobe/decode validation in the backend container, and an
+HTTP Range stream request. It refuses to run when conferences are active or
+when the deployed Jibri/backend code does not contain the `final.mp4` contract.
+
+Run it only against an approved, idle environment:
+
+```powershell
+$env:RECORDING_E2E_ALLOW_LIVE = 'true'
+$env:RECORDING_E2E_SSH_TARGET = 'root@recording-host'
+$env:RECORDING_E2E_BASE_URL = 'https://talk.example.com'
+npm run test:recording:e2e
+```
