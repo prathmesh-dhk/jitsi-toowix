@@ -318,6 +318,18 @@ export function useJitsiMeeting({
   // lib-jitsi-meet as another LOCAL_TRACK_STOPPED), which would otherwise re-enter the stop path
   // while the first call is still in flight.
   const desktopStopInFlightRef = useRef(false);
+  // room.addTrack/removeTrack/replaceTrack each trigger a real WebRTC SDP renegotiation with the
+  // JVB. Screen-share start/stop, camera device switching, and the camera-retry-after-busy-error
+  // path (toggleVideo) can each independently call one of these -- with no coordination between
+  // them, two such calls firing close together (e.g. a screen-share stop landing at the same
+  // moment a camera retry succeeds and re-adds the camera track) can race each other's
+  // offer/answer cycles. Confirmed in production: a remote participant's console showed
+  // "No SSRC lines found in remote SDP ... track creation failed" for the OTHER participant's
+  // camera track right as a screen-share stop was also negotiating, which corrupted that peer
+  // connection's state badly enough that the connection eventually broke down entirely. Routing
+  // every one of these calls through this single promise chain guarantees only one such
+  // negotiation is ever in flight against this room at a time.
+  const trackOperationQueueRef = useRef<Promise<any>>(Promise.resolve());
   const remoteDesktopTracksRef = useRef<Record<string, any>>({});
   const remoteNamesRef = useRef<Record<string, string>>({});
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
@@ -374,6 +386,19 @@ export function useJitsiMeeting({
   onKickedRef.current = onKicked;
   existingStreamRef.current = existingStream;
   deviceIdsRef.current = { audioDeviceId, videoDeviceId };
+
+  // Runs `fn` only after every previously-queued room operation has settled (see
+  // trackOperationQueueRef above for why). `.then(fn, fn)` -- not `.then(fn).catch(...)` -- so a
+  // PRIOR failed operation still lets this one run instead of leaving the queue stuck forever;
+  // the queue's own stored promise is separately caught so one failure can't reject the chain
+  // for whichever operation queues next.
+  const runSerializedRoomOperation = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    const result = trackOperationQueueRef.current.then(fn, fn);
+
+    trackOperationQueueRef.current = result.catch(() => undefined);
+
+    return result;
+  }, []);
 
   const patchParticipant = useCallback((id: string, patch: Partial<IRemoteParticipant>) => {
     setRemoteParticipants(prev => ({
@@ -967,7 +992,7 @@ export function useJitsiMeeting({
 
       if (room) {
         try {
-          await room.addTrack(newTrack);
+          await runSerializedRoomOperation(() => room.addTrack(newTrack));
         } catch {
           // best-effort
         }
@@ -1011,7 +1036,7 @@ export function useJitsiMeeting({
         try {
           // eslint-disable-next-line no-console
           console.log('[DEBUG] calling room.removeTrack for desktop track, disposed:', desktopTrack.disposed, 'nativeReadyState:', desktopTrack.getTrack?.()?.readyState);
-          await room.removeTrack(desktopTrack);
+          await runSerializedRoomOperation(() => room.removeTrack(desktopTrack));
           // eslint-disable-next-line no-console
           console.log('[DEBUG] room.removeTrack succeeded');
         } catch (err) {
@@ -1109,7 +1134,7 @@ export function useJitsiMeeting({
       // distinct videoTypes/source-names at the JVB level), and it's what makes the dedicated
       // stop path above valid: removeTrack only ever has to undo exactly this addTrack, with the
       // camera never touched on either side.
-      await room.addTrack(desktopTrack);
+      await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
     } catch (err) {
@@ -1197,9 +1222,9 @@ export function useJitsiMeeting({
       }
 
       if (room && oldTrack) {
-        await room.replaceTrack(oldTrack, newTrack);
+        await runSerializedRoomOperation(() => room.replaceTrack(oldTrack, newTrack));
       } else if (room) {
-        await room.addTrack(newTrack);
+        await runSerializedRoomOperation(() => room.addTrack(newTrack));
       }
 
       if (oldTrack) {
