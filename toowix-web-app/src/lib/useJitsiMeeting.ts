@@ -388,22 +388,32 @@ export function useJitsiMeeting({
     }));
   }, []);
 
+  // When presenter A stops and presenter B starts right after, A's TRACK_REMOVED fires (which
+  // would clear remoteScreenShare to null) before B's TRACK_ADDED arrives moments later -- that
+  // brief null forces the whole presentation stage to unmount back to tile view and then
+  // immediately remount for B, which is what showed up as a laggy/stuck handoff between
+  // presenters. Debounce the "nobody is sharing" clear slightly so a same-beat handoff never
+  // produces that flicker; a real "everyone stopped sharing" still clears, just ~600ms later.
+  const screenShareClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const recomputeRemoteScreenShare = useCallback(() => {
+    if (screenShareClearTimerRef.current) {
+      clearTimeout(screenShareClearTimerRef.current);
+      screenShareClearTimerRef.current = null;
+    }
+
     const entries = Object.entries(remoteDesktopTracksRef.current);
 
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] recomputeRemoteScreenShare, entries:', entries.length);
-
     if (entries.length === 0) {
-      setRemoteScreenShare(null);
+      screenShareClearTimerRef.current = setTimeout(() => {
+        screenShareClearTimerRef.current = null;
+        setRemoteScreenShare(null);
+      }, 600);
 
       return;
     }
     const [ id, track ] = entries[entries.length - 1];
     const stream = trackToStream(track);
-
-    // eslint-disable-next-line no-console
-    console.log('[DEBUG] remote screen stream computed:', { id, hasStream: !!stream, videoTracks: stream?.getVideoTracks().length });
 
     setRemoteScreenShare(stream ? { stream, presenterName: remoteNamesRef.current[id] || 'Participant' } : null);
   }, []);
@@ -502,14 +512,9 @@ export function useJitsiMeeting({
               const type = track.getType();
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
-              // eslint-disable-next-line no-console
-              console.log('[DEBUG] TRACK_ADDED', { participantId, type, videoType, muted: track.isMuted?.() });
-
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
               } else if (videoType === 'desktop') {
-                // eslint-disable-next-line no-console
-                console.log('[DEBUG] desktop track registered for', participantId);
                 remoteDesktopTracksRef.current[participantId] = track;
                 recomputeRemoteScreenShare();
               } else {
@@ -830,6 +835,10 @@ export function useJitsiMeeting({
         localDesktopTrackRef.current = null;
       }
       remoteDesktopTracksRef.current = {};
+      if (screenShareClearTimerRef.current) {
+        clearTimeout(screenShareClearTimerRef.current);
+        screenShareClearTimerRef.current = null;
+      }
       remoteNamesRef.current = {};
       remoteAvatarsRef.current = {};
       setConnected(false);
