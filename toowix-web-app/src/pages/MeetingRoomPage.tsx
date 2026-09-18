@@ -1,7 +1,7 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { useJitsiMeeting } from '../lib/useJitsiMeeting';
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
@@ -51,7 +51,11 @@ import { useTheme } from '../lib/theme';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { VirtualBackgroundModal } from '../components/VirtualBackgroundModal';
 import { ShareVideoDialog } from '../components/ShareVideoDialog';
-import { SharedVideoManager } from '../components/SharedVideoManager';
+// Lazy-loaded: pulls in react-youtube, only actually needed by the small minority of calls that
+// ever share a YouTube video -- was previously a static import, bundling it into every join.
+const SharedVideoManager = lazy(() =>
+  import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
+);
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -3600,16 +3604,18 @@ export function MeetingRoomPage() {
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 ) : jitsiMeeting.sharedVideo ? (
-                  <SharedVideoManager
-                    sharedVideo={jitsiMeeting.sharedVideo}
-                    localParticipantId={jitsiMeeting.localParticipantId}
-                    isLocalAudioMuted={jitsiMeeting.localAudioMuted}
-                    onMuteLocalAudio={() => {
-                      if (!jitsiMeeting.localAudioMuted) jitsiMeeting.toggleAudio();
-                    }}
-                    onStatusUpdate={jitsiMeeting.updateSharedVideoStatus}
-                    onError={() => jitsiMeeting.stopSharedVideo()}
-                  />
+                  <Suspense fallback={null}>
+                    <SharedVideoManager
+                      sharedVideo={jitsiMeeting.sharedVideo}
+                      localParticipantId={jitsiMeeting.localParticipantId}
+                      isLocalAudioMuted={jitsiMeeting.localAudioMuted}
+                      onMuteLocalAudio={() => {
+                        if (!jitsiMeeting.localAudioMuted) jitsiMeeting.toggleAudio();
+                      }}
+                      onStatusUpdate={jitsiMeeting.updateSharedVideoStatus}
+                      onError={() => jitsiMeeting.stopSharedVideo()}
+                    />
+                  </Suspense>
                 ) : null}
 
                 {/* Floating Top Banner: Presentation Status */}

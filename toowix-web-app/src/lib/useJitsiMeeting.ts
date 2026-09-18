@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { createVirtualBackgroundEffect } from './virtualBackground/createVirtualBackgroundEffect';
-import { IVirtualBackground } from './virtualBackground/JitsiStreamBackgroundEffect';
-import { NoiseSuppressionEffect } from './noiseSuppression/NoiseSuppressionEffect';
+// Type-only -- the runtime implementations (TensorFlow/MediaPipe segmentation model, RNNoise
+// WASM module) are heavy and only actually needed if a participant turns these features on, so
+// they're dynamically import()'d at the point of use below instead of bundled into every page
+// load. This was previously a static top-level import, bundling both into the main chunk for
+// every single join regardless of whether either feature was ever touched.
+import type { IVirtualBackground } from './virtualBackground/JitsiStreamBackgroundEffect';
+import type { NoiseSuppressionEffect } from './noiseSuppression/NoiseSuppressionEffect';
 import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/constants';
 import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
 
@@ -1446,6 +1450,7 @@ export function useJitsiMeeting({
       return;
     }
 
+    const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     const effect = await createVirtualBackgroundEffect(config);
 
     if (track) {
@@ -1469,6 +1474,7 @@ export function useJitsiMeeting({
       return;
     }
 
+    const { NoiseSuppressionEffect } = await import('./noiseSuppression/NoiseSuppressionEffect');
     const effect = new NoiseSuppressionEffect();
 
     if (track) {
