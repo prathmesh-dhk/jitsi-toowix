@@ -271,7 +271,12 @@ def processing_command(source: pathlib.Path, temporary: pathlib.Path, log: pathl
         command.extend(["-preset", preset, "-crf", crf])
         if max_width > 0:
             command.extend(["-vf", f"scale=w='min(iw,{max_width})':h=-2"])
-    command.extend(["-c:a", audio_codec, "-b:a", audio_bitrate, "-movflags", "+faststart", str(temporary)])
+    # -f mp4 is required, not cosmetic: ffmpeg picks the output muxer from the output filename's
+    # extension by default, and the atomic-publish temp file is named final.mp4.tmp -- ffmpeg
+    # only looks at the LAST extension (.tmp), fails to recognize it, and errors with "Unable to
+    # choose an output format" before writing a single byte. Confirmed live (production Jibri
+    # host's processing.log, status 234) after fixing the unrelated filename-check bug above.
+    command.extend(["-c:a", audio_codec, "-b:a", audio_bitrate, "-movflags", "+faststart", "-f", "mp4", str(temporary)])
     run_command(command, 60 * 60, log)
 
 
