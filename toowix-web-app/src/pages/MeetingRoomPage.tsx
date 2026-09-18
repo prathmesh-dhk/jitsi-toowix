@@ -1170,18 +1170,45 @@ export function MeetingRoomPage() {
       setCaptionInterim(interim);
     };
 
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveRestartFailures = 0;
+
     recognition.onerror = (event: any) => {
-      if (event.error === 'no-speech') return; // ignore silence
-      if (event.error === 'not-allowed') {
+      if (event.error === 'no-speech' || event.error === 'aborted') return; // ignore silence/manual stop
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         setCaptionText('⚠️ Microphone access denied. Allow mic permission to use captions.');
+      } else if (event.error === 'network') {
+        // Chrome's built-in recognizer sends audio to a remote speech service -- this fires
+        // when that service can't be reached (offline, or a network/firewall blocking it),
+        // not a bug in this page. Surfacing it beats silently showing nothing forever.
+        setCaptionText('⚠️ Live captions need internet access to a speech service -- check your network/firewall.');
+      } else {
+        setCaptionText(`⚠️ Live captions stopped (${event.error}). Try turning captions off and on again.`);
       }
     };
 
     recognition.onend = () => {
-      // Auto-restart so captions stay active as long as enabled
-      if (captionsEnabled && speechRecognitionRef.current === recognition) {
-        try { recognition.start(); } catch { }
+      // Auto-restart so captions stay active as long as enabled. Restarting the SAME
+      // recognition instance synchronously inside onend is a known race (throws
+      // InvalidStateError because the browser hasn't fully torn it down yet) -- a short delay
+      // avoids that. If it keeps failing, stop retrying instead of failing silently forever.
+      if (!captionsEnabled || speechRecognitionRef.current !== recognition) {
+        return;
       }
+      restartTimer = setTimeout(() => {
+        try {
+          recognition.start();
+          consecutiveRestartFailures = 0;
+        } catch (err) {
+          consecutiveRestartFailures += 1;
+          if (consecutiveRestartFailures >= 3) {
+            setCaptionText('⚠️ Live captions stopped unexpectedly. Turn captions off and on to retry.');
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn('[Captions] restart failed, will retry:', err);
+          }
+        }
+      }, 300);
     };
 
     try {
@@ -1190,6 +1217,7 @@ export function MeetingRoomPage() {
     } catch { }
 
     return () => {
+      if (restartTimer) clearTimeout(restartTimer);
       try { recognition.stop(); } catch { }
       speechRecognitionRef.current = null;
     };
