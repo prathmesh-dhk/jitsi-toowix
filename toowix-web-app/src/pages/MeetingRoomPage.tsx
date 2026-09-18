@@ -7371,38 +7371,38 @@ export function MeetingRoomPage() {
                   title={micEnabled ? 'Turn microphone off' : 'Turn microphone on'}
                 >
                   {micEnabled ? <Mic size={20} /> : <MicOff size={20} />}
+                  {micEnabled && !micPermissionError && (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        right: '5px',
+                        bottom: '6px',
+                        display: 'flex',
+                        alignItems: 'flex-end',
+                        gap: '1px',
+                        height: '10px',
+                      }}
+                    >
+                      {[0.6, 1.0, 0.8].map((mult, idx) => {
+                        const h = Math.max(2, Math.min(9, Math.round(media.level * 18 * mult)));
+                        return (
+                          <i
+                            key={idx}
+                            style={{
+                              display: 'block',
+                              width: '2px',
+                              height: `${h}px`,
+                              backgroundColor: '#34A853',
+                              borderRadius: '2px',
+                              transition: 'height 80ms ease',
+                            }}
+                          />
+                        );
+                      })}
+                    </span>
+                  )}
                 </button>
-
-                {/* Animated 3-Bar Audio Volume Visualizer */}
-                {micEnabled && !micPermissionError && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      right: '-18px',
-                      display: 'flex',
-                      alignItems: 'flex-end',
-                      gap: '2px',
-                      height: '16px',
-                      padding: '2px',
-                    }}
-                  >
-                    {[0.6, 1.0, 0.8].map((mult, idx) => {
-                      const h = Math.max(3, Math.min(16, Math.round(media.level * 24 * mult)));
-                      return (
-                        <span
-                          key={idx}
-                          style={{
-                            width: '3px',
-                            height: `${h}px`,
-                            backgroundColor: '#34A853',
-                            borderRadius: '2px',
-                            transition: 'height 0.08s ease',
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
               </div>
 
               {/* Camera Toggle */}
