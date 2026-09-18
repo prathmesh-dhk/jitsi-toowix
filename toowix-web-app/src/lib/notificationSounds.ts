@@ -6,6 +6,18 @@ type ToneStep = { freq: number; startMs: number; durationMs: number; gain?: numb
 
 let sharedContext: AudioContext | null = null;
 
+function playAsset(src: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const audio = new Audio(src);
+
+  // A notification must never block the meeting if autoplay policy, a muted device, or an
+  // unloaded asset prevents it from playing.
+  audio.volume = 0.75;
+  audio.play().catch(() => { });
+}
+
 function getContext(): AudioContext | null {
   if (typeof window === 'undefined') {
     return null;
@@ -60,33 +72,22 @@ export function playParticipantJoinedTone() {
   ]);
 }
 
-// Mirror of the join tone, descending -- someone leaving.
+// User-provided soft logout cue -- someone leaving.
 export function playParticipantLeftTone() {
-  playTone([
-    { freq: 659, startMs: 0, durationMs: 130 },
-    { freq: 494, startMs: 100, durationMs: 180 }
-  ]);
+  playAsset('/sounds/participant-left.wav');
 }
 
 // A distinct three-note rising arpeggio -- recording is a higher-stakes event, gets a more
 // deliberate/attention-grabbing cue than a plain join/leave blip.
 export function playRecordingStartedTone() {
-  playTone([
-    { freq: 523, startMs: 0, durationMs: 140, gain: 0.14, type: 'triangle' },
-    { freq: 659, startMs: 120, durationMs: 140, gain: 0.14, type: 'triangle' },
-    { freq: 784, startMs: 240, durationMs: 220, gain: 0.15, type: 'triangle' }
-  ]);
+  playAsset('/sounds/recording-started.wav');
 }
 
 // Exact descending mirror of the recording-started arpeggio (same three pitches, reverse order)
 // -- recognizably "the recording cue" as a pair, but unmistakably the stop side of it. Square
 // wave instead of triangle also keeps it timbrally distinct from playMeetingEndedTone.
 export function playRecordingStoppedTone() {
-  playTone([
-    { freq: 784, startMs: 0, durationMs: 130, gain: 0.12, type: 'square' },
-    { freq: 659, startMs: 110, durationMs: 130, gain: 0.12, type: 'square' },
-    { freq: 523, startMs: 220, durationMs: 200, gain: 0.13, type: 'square' }
-  ]);
+  playAsset('/sounds/recording-stopped.wav');
 }
 
 // A soft, low double-beep -- a gentle heads-up (time remaining), not an alert.
