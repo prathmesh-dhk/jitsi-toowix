@@ -64,12 +64,9 @@ function playTone(steps: ToneStep[]) {
   }
 }
 
-// Two quick ascending notes -- someone arriving.
+// User-provided soft two-tone cue -- someone arriving.
 export function playParticipantJoinedTone() {
-  playTone([
-    { freq: 587, startMs: 0, durationMs: 130 },
-    { freq: 784, startMs: 100, durationMs: 160 }
-  ]);
+  playAsset('/sounds/participant-joined.wav');
 }
 
 // User-provided soft logout cue -- someone leaving.
@@ -87,7 +84,11 @@ export function playRecordingStartedTone() {
 // -- recognizably "the recording cue" as a pair, but unmistakably the stop side of it. Square
 // wave instead of triangle also keeps it timbrally distinct from playMeetingEndedTone.
 export function playRecordingStoppedTone() {
-  playAsset('/sounds/recording-stopped.wav');
+  playTone([
+    { freq: 784, startMs: 0, durationMs: 130, gain: 0.12, type: 'square' },
+    { freq: 659, startMs: 110, durationMs: 130, gain: 0.12, type: 'square' },
+    { freq: 523, startMs: 220, durationMs: 200, gain: 0.13, type: 'square' }
+  ]);
 }
 
 // A soft, low double-beep -- a gentle heads-up (time remaining), not an alert.
