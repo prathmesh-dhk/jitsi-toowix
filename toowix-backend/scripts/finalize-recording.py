@@ -372,13 +372,21 @@ def post_status(payload: Dict[str, Any], status: str, log: pathlib.Path, retries
 
 
 def locate_inputs(root: pathlib.Path, configured_output_root: pathlib.Path, args: list[str]) -> Tuple[str, str, pathlib.Path]:
+    require_exact_name = False
     if len(args) == 3:
         room_slug, session_id, source_text = args
         source = pathlib.Path(source_text).expanduser().resolve()
+        # This 3-argument form is the documented explicit-path CLI usage -- the caller is
+        # expected to have already named the file jibri-output.mp4 per that usage string.
+        require_exact_name = True
     elif len(args) == 1:
         folder = pathlib.Path(args[0]).expanduser().resolve()
         ensure_inside(root, folder)
         session_id = folder.name
+        # This is the form Jibri actually invokes (finalize_script called with just the session
+        # directory). Real Jibri deployments name the file "<roomSlug>_<timestamp>.mp4", never
+        # literally jibri-output.mp4 -- "exactly one MP4 in this session's own directory" is
+        # what actually identifies the real Jibri output here, not a fixed filename.
         preferred = folder / "jibri-output.mp4"
         candidates = [preferred] if preferred.exists() else sorted(folder.glob("*.mp4"))
         if len(candidates) != 1:
@@ -394,7 +402,7 @@ def locate_inputs(root: pathlib.Path, configured_output_root: pathlib.Path, args
     ensure_inside(configured_output_root, session_dir)
     if session_dir.name != session_id:
         raise FinalizationError("Jibri output must be inside the directory named by recordingSessionId")
-    if source.name != "jibri-output.mp4":
+    if require_exact_name and source.name != "jibri-output.mp4":
         raise FinalizationError("Jibri output must be named jibri-output.mp4")
     if not room_slug or len(room_slug) > 255:
         raise FinalizationError("Invalid room slug")
