@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { CalendarPlus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 
 export function MeetingLinkExpiredPage() {
   return (
@@ -65,19 +65,22 @@ export function MeetingLinkExpiredPage() {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '9px',
+            gap: '8px',
             minHeight: '44px',
-            padding: '0 20px',
-            borderRadius: 'var(--radius-md)',
+            padding: '0 18px',
+            border: '1px solid rgba(255, 255, 255, 0.16)',
+            borderRadius: '10px',
             background: 'var(--color-primary)',
             color: '#FFFFFF',
-            fontWeight: 700,
+            fontSize: '15px',
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
             textDecoration: 'none',
-            boxShadow: '0 3px 10px rgba(79, 70, 229, 0.28)',
+            boxShadow: '0 5px 12px rgba(79, 70, 229, 0.22)',
           }}
         >
-          <CalendarPlus size={19} aria-hidden="true" />
-          Create a new meeting
+          <Plus size={18} strokeWidth={2.25} aria-hidden="true" />
+          Create meeting
         </Link>
       </section>
     </main>
