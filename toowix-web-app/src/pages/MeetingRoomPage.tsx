@@ -49,6 +49,13 @@ import {
   Youtube,
 } from 'lucide-react';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
+import {
+  playMeetingEndedTone,
+  playParticipantJoinedTone,
+  playParticipantLeftTone,
+  playRecordingStartedTone,
+  playTimeWarningTone,
+} from '../lib/notificationSounds';
 import { useTheme } from '../lib/theme';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { VirtualBackgroundModal } from '../components/VirtualBackgroundModal';
@@ -847,6 +854,12 @@ export function MeetingRoomPage() {
   const [participation, setParticipation] = useState<'guest' | 'account'>(
     location.state?.participation === 'account' ? 'account' : 'guest'
   );
+  // Free/unauthenticated instant meeting from the public landing page's "New Meeting" button --
+  // capped at 30 minutes, like a free-tier call limit. Captured once at mount (not re-read from
+  // location.state on every render) so it can't be lost on an in-page navigation.
+  const [isFreeInstantMeeting] = useState<boolean>(Boolean((location.state as any)?.freeInstantMeeting));
+  const freeInstantExpiresAtRef = useRef<number | null>(null);
+  const tenMinuteWarningFiredRef = useRef(false);
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
   const [joining, setJoining] = useState(false);
@@ -1053,6 +1066,14 @@ export function MeetingRoomPage() {
   const inCallVideoRef = useRef<HTMLVideoElement | null>(null);
   const presentationVideoRef = useRef<HTMLVideoElement | null>(null);
   const [recordingToast, setRecordingToast] = useState<string | null>(null);
+  const [participantToast, setParticipantToast] = useState<string | null>(null);
+  const [timeLimitToast, setTimeLimitToast] = useState<string | null>(null);
+  // Tracks who was already in the room so the very first roster population (when I join and see
+  // everyone already present) never fires a flood of "joined" toasts/sounds -- only genuine
+  // later joins/leaves do. Names are kept separately so a departed participant's name is still
+  // known for the "X left the meeting" toast after they've already been removed from the roster.
+  const knownParticipantIdsRef = useRef<Set<string> | null>(null);
+  const knownParticipantNamesRef = useRef<Record<string, string>>({});
   const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [remotePresenterName, setRemotePresenterName] = useState<string | null>(null);
   const remotePresentationVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -2662,9 +2683,19 @@ export function MeetingRoomPage() {
   // client silently dropping out at a slightly different moment; a non-moderator still has its
   // own fallback leave in case the moderator's client isn't present for some reason.
   useEffect(() => {
-    if (!hasJoined || !meetingInfo?.expiresAt) return;
-    const msRemaining = new Date(meetingInfo.expiresAt).getTime() - Date.now();
+    if (isFreeInstantMeeting && hasJoined && !freeInstantExpiresAtRef.current) {
+      freeInstantExpiresAtRef.current = Date.now() + 30 * 60 * 1000;
+    }
+  }, [isFreeInstantMeeting, hasJoined]);
+
+  const effectiveExpiresAt = meetingInfo?.expiresAt
+    || (freeInstantExpiresAtRef.current ? new Date(freeInstantExpiresAtRef.current).toISOString() : null);
+
+  useEffect(() => {
+    if (!hasJoined || !effectiveExpiresAt) return;
+    const msRemaining = new Date(effectiveExpiresAt).getTime() - Date.now();
     const fire = () => {
+      playMeetingEndedTone();
       if (isModerator) {
         void handleEndMeetingForEveryone();
       } else {
@@ -2681,7 +2712,26 @@ export function MeetingRoomPage() {
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasJoined, meetingInfo?.expiresAt, isModerator]);
+  }, [hasJoined, effectiveExpiresAt, isModerator]);
+
+  // 10-minutes-remaining heads-up -- a gentle toast + tone, not an alert, fired once per meeting.
+  useEffect(() => {
+    if (!hasJoined || !effectiveExpiresAt || tenMinuteWarningFiredRef.current) return;
+    const msUntilWarning = new Date(effectiveExpiresAt).getTime() - Date.now() - 10 * 60 * 1000;
+
+    if (msUntilWarning <= 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (tenMinuteWarningFiredRef.current) return;
+      tenMinuteWarningFiredRef.current = true;
+      playTimeWarningTone();
+      setTimeLimitToast('10 minutes left in this meeting');
+      setTimeout(() => setTimeLimitToast((t) => (t === '10 minutes left in this meeting' ? null : t)), 6000);
+    }, msUntilWarning);
+
+    return () => clearTimeout(timer);
+  }, [hasJoined, effectiveExpiresAt]);
 
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
@@ -2783,6 +2833,9 @@ export function MeetingRoomPage() {
       wasRecordingRef.current = jitsiMeeting.recording;
       setRecordingToast(jitsiMeeting.recording ? 'Recording has started' : 'Recording has stopped');
       setTimeout(() => setRecordingToast((t) => (t === (jitsiMeeting.recording ? 'Recording has started' : 'Recording has stopped') ? null : t)), 4000);
+      if (jitsiMeeting.recording) {
+        playRecordingStartedTone();
+      }
     }
   }, [jitsiMeeting.recording]);
 
@@ -2813,6 +2866,40 @@ export function MeetingRoomPage() {
       })
     );
     setRemoteParticipantCount(list.length);
+  }, [jitsiMeeting.remoteParticipants]);
+
+  // Join/leave toast + sound (Google-Meet-style "X joined"/"X left" cues). Skips the very first
+  // roster snapshot -- otherwise everyone already in the room would fire a "joined" notification
+  // the instant I join, which is not what a join/leave cue is supposed to mean.
+  useEffect(() => {
+    const list = Object.values(jitsiMeeting.remoteParticipants) as any[];
+    const currentIds = new Set(list.map((r) => r.id));
+    const previousIds = knownParticipantIdsRef.current;
+
+    if (previousIds) {
+      for (const r of list) {
+        if (!previousIds.has(r.id)) {
+          const name = r.name || 'Someone';
+
+          setParticipantToast(`${name} joined the meeting`);
+          playParticipantJoinedTone();
+          setTimeout(() => setParticipantToast((t) => (t === `${name} joined the meeting` ? null : t)), 3500);
+        }
+      }
+      for (const id of previousIds) {
+        if (!currentIds.has(id)) {
+          const name = knownParticipantNamesRef.current[id] || 'Someone';
+
+          setParticipantToast(`${name} left the meeting`);
+          playParticipantLeftTone();
+          setTimeout(() => setParticipantToast((t) => (t === `${name} left the meeting` ? null : t)), 3500);
+        }
+      }
+    }
+    knownParticipantIdsRef.current = currentIds;
+    for (const r of list) {
+      knownParticipantNamesRef.current[r.id] = r.name || 'Someone';
+    }
   }, [jitsiMeeting.remoteParticipants]);
 
   useEffect(() => {
@@ -6640,8 +6727,8 @@ export function MeetingRoomPage() {
           </div>
         )}
 
-        {/* Floating Toast Notification (Raise Hand, Recording, PiP Hint) */}
-        {(handRaisedToast || recordingToast || pipHintToast) && (
+        {/* Floating Toast Notification (Raise Hand, Recording, Participant Join/Leave, Time Limit, PiP Hint) */}
+        {(handRaisedToast || recordingToast || participantToast || timeLimitToast || pipHintToast) && (
           <div
             style={{
               position: 'fixed',
@@ -6693,6 +6780,40 @@ export function MeetingRoomPage() {
                   }}
                 />
                 <span>{recordingToast}</span>
+              </>
+            ) : participantToast ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1A73E8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <UserPlus size={14} color="#FFFFFF" />
+                </div>
+                <span>{participantToast}</span>
+              </>
+            ) : timeLimitToast ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#F9AB00',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Clock size={14} color="#202124" />
+                </div>
+                <span>{timeLimitToast}</span>
               </>
             ) : (
               <>
