@@ -86,6 +86,16 @@ export function playTimeWarningTone() {
   ]);
 }
 
+// A bright three-note rising major arpeggio -- distinct from the join tone (which is only two
+// notes and lower-pitched): this one specifically marks the meeting itself beginning.
+export function playMeetingStartedTone() {
+  playTone([
+    { freq: 523, startMs: 0, durationMs: 150, gain: 0.13 },
+    { freq: 659, startMs: 130, durationMs: 150, gain: 0.13 },
+    { freq: 880, startMs: 260, durationMs: 240, gain: 0.14 }
+  ]);
+}
+
 // A longer three-note descending tone -- the meeting is ending now.
 export function playMeetingEndedTone() {
   playTone([

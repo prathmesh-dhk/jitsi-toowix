@@ -51,6 +51,7 @@ import {
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import {
   playMeetingEndedTone,
+  playMeetingStartedTone,
   playParticipantJoinedTone,
   playParticipantLeftTone,
   playRecordingStartedTone,
@@ -1074,6 +1075,7 @@ export function MeetingRoomPage() {
   // known for the "X left the meeting" toast after they've already been removed from the roster.
   const knownParticipantIdsRef = useRef<Set<string> | null>(null);
   const knownParticipantNamesRef = useRef<Record<string, string>>({});
+  const meetingStartedSoundFiredRef = useRef(false);
   const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [remotePresenterName, setRemotePresenterName] = useState<string | null>(null);
   const remotePresentationVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -2669,6 +2671,7 @@ export function MeetingRoomPage() {
     (reason: string = 'You have left the meeting.') => {
       if (leavingRef.current) return;
       leavingRef.current = true;
+      playMeetingEndedTone();
       recordAttendanceLeave();
       // Persist guest display name so rejoin works without re-asking
       if (!auth.currentUser && displayName) {
@@ -2723,7 +2726,6 @@ export function MeetingRoomPage() {
     if (!hasJoined || !effectiveExpiresAt) return;
     const msRemaining = new Date(effectiveExpiresAt).getTime() - Date.now();
     const fire = () => {
-      playMeetingEndedTone();
       if (isModerator) {
         void handleEndMeetingForEveryone();
       } else {
@@ -2937,6 +2939,15 @@ export function MeetingRoomPage() {
       recordAttendanceJoin();
     }
   }, [hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin]);
+
+  // "Meeting started" cue -- fires once, the moment I actually connect to the conference (not
+  // on every render/reconnect flicker; meetingStartedSoundFiredRef guards that).
+  useEffect(() => {
+    if (jitsiMeeting.joined && !meetingStartedSoundFiredRef.current) {
+      meetingStartedSoundFiredRef.current = true;
+      playMeetingStartedTone();
+    }
+  }, [jitsiMeeting.joined]);
 
   useEffect(() => {
     return () => {
