@@ -7358,8 +7358,8 @@ export function MeetingRoomPage() {
                     width: '44px',
                     height: '44px',
                     borderRadius: '50%',
-                    backgroundColor: micEnabled ? '#34A853' : '#EA4335',
-                    color: '#FFFFFF',
+                    backgroundColor: micEnabled ? '#FFFFFF' : '#EA4335',
+                    color: micEnabled ? '#202124' : '#FFFFFF',
                     border: 'none',
                     display: 'flex',
                     alignItems: 'center',
@@ -7370,15 +7370,14 @@ export function MeetingRoomPage() {
                   }}
                   title={micEnabled ? 'Turn microphone off' : 'Turn microphone on'}
                 >
-                  {micEnabled ? <Mic size={20} color="#FFFFFF" /> : <MicOff size={20} />}
+                  {micEnabled ? <Mic size={20} color="#202124" /> : <MicOff size={20} />}
                   {micEnabled && !micPermissionError && (
                     <span
                       aria-hidden="true"
                       style={{
                         position: 'absolute',
-                        left: '50%',
-                        bottom: '4px',
-                        transform: 'translateX(-50%)',
+                        right: '5px',
+                        bottom: '6px',
                         display: 'flex',
                         alignItems: 'flex-end',
                         gap: '1px',
@@ -7394,7 +7393,7 @@ export function MeetingRoomPage() {
                               display: 'block',
                               width: '2px',
                               height: `${h}px`,
-                              backgroundColor: 'rgba(255, 255, 255, 0.92)',
+                              backgroundColor: '#34A853',
                               borderRadius: '2px',
                               transition: 'height 80ms ease',
                             }}
