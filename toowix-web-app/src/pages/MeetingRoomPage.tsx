@@ -45,8 +45,10 @@ import {
   Maximize,
   Minimize,
   Wind,
+  Wifi,
   Youtube,
 } from 'lucide-react';
+import { getNetworkStatusLabel } from '../lib/networkQuality';
 import { useTheme } from '../lib/theme';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { VirtualBackgroundModal } from '../components/VirtualBackgroundModal';
@@ -2845,6 +2847,12 @@ export function MeetingRoomPage() {
   }, [hasJoined, roomId, leaveMeeting]);
 
   const formattedRoomTitle = roomId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const networkStatusLabel = getNetworkStatusLabel(jitsiMeeting.lowDataMode, jitsiMeeting.networkState);
+  const networkStatusColor = jitsiMeeting.networkState === 'POOR' || jitsiMeeting.lowDataMode === 'audio-only'
+    ? '#F9AB00'
+    : jitsiMeeting.networkState === 'DEGRADED' || jitsiMeeting.networkState === 'RECOVERING'
+      ? '#8AB4F8'
+      : '#81C995';
 
   // ===========================================================================
   // STAGE 2: IN-MEETING VIEW (Google Meet Fullscreen Canvas)
@@ -3439,6 +3447,25 @@ export function MeetingRoomPage() {
             >
               <Info size={16} />
             </button>
+
+            {/* State-change-only connection indicator. Detailed WebRTC metrics remain
+                diagnostics-only; this compact status is safe to show to all participants. */}
+            <div
+              title={networkStatusLabel}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                color: networkStatusColor,
+                backgroundColor: 'rgba(255,255,255,0.05)',
+                border: `1px solid ${networkStatusColor}55`,
+                padding: '3px 8px',
+                borderRadius: '12px',
+              }}
+            >
+              <Wifi size={13} />
+              <span style={{ fontSize: '11px', fontWeight: 600 }}>{networkStatusLabel}</span>
+            </div>
 
             {/* Active Recording Pill Badge (Strictly decoupled from clock time) */}
             {recording && (
@@ -5855,6 +5882,52 @@ export function MeetingRoomPage() {
                   <Settings size={16} />
                   Settings
                 </button>
+                <div
+                  style={{
+                    margin: '4px 0',
+                    padding: '8px 10px',
+                    borderTop: '1px solid rgba(255,255,255,0.08)',
+                    borderBottom: '1px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#9AA0A6', fontSize: '11px', marginBottom: '7px' }}>
+                    <Wifi size={14} />
+                    Data usage
+                  </div>
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    {([
+                      [ 'auto', 'Auto' ],
+                      [ 'low-data', 'Low data' ],
+                      [ 'audio-only', 'Audio only' ],
+                    ] as const).map(([mode, label]) => {
+                      const selected = jitsiMeeting.lowDataMode === mode;
+
+                      return (
+                        <button
+                          key={mode}
+                          onClick={() => {
+                            jitsiMeeting.setLowDataMode(mode).catch(() => {
+                              setCallError('Could not change the data-saving mode. Please try again.');
+                            });
+                          }}
+                          style={{
+                            flex: 1,
+                            padding: '6px 4px',
+                            borderRadius: '8px',
+                            border: selected ? '1px solid #8AB4F8' : '1px solid rgba(255,255,255,0.12)',
+                            backgroundColor: selected ? 'rgba(138,180,248,0.18)' : 'transparent',
+                            color: selected ? '#8AB4F8' : '#DADCE0',
+                            fontSize: '11px',
+                            fontWeight: selected ? 600 : 400,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 {isModerator && (
                   <button
                     onClick={() => {

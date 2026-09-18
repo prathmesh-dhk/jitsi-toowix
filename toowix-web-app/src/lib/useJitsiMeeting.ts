@@ -9,6 +9,15 @@ import type { IVirtualBackground } from './virtualBackground/JitsiStreamBackgrou
 import type { NoiseSuppressionEffect } from './noiseSuppression/NoiseSuppressionEffect';
 import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/constants';
 import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
+import {
+  classifyNetwork,
+  getMediaQualityPolicy,
+  type INetworkMetrics,
+  type LowDataMode,
+  NETWORK_RECOVERY_STABLE_MS,
+  NETWORK_STATS_INTERVAL_MS,
+  type NetworkState
+} from './networkQuality';
 
 export interface ISharedVideoState {
   muted?: boolean;
@@ -104,6 +113,36 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
+const EMPTY_NETWORK_METRICS: INetworkMetrics = {
+  availableOutgoingBitrateKbps: null,
+  candidateType: null,
+  connectionState: null,
+  jitterMs: null,
+  packetLossPercent: null,
+  rttMs: null,
+  videoBitrateKbps: null
+};
+
+interface IPreviousVideoStats {
+  bytesSent: number;
+  timestamp: number;
+}
+
+function readLowDataMode(): LowDataMode {
+  try {
+    const saved = localStorage.getItem(LOW_DATA_MODE_STORAGE_KEY);
+
+    if (saved === 'low-data' || saved === 'audio-only') {
+      return saved;
+    }
+  } catch {
+    // Storage can be unavailable in a restricted browser context. Auto is still safe.
+  }
+
+  return 'auto';
+}
 
 // Races a promise against a timeout WITHOUT abandoning the original promise -- it keeps running
 // in the background (still resolving/rejecting the shared trackOperationQueueRef chain in
@@ -343,6 +382,8 @@ export function useJitsiMeeting({
   const [ localScreenStream, setLocalScreenStream ] = useState<MediaStream | null>(null);
   const [ isScreenSharing, setIsScreenSharing ] = useState(false);
   const [ remoteParticipants, setRemoteParticipants ] = useState<Record<string, IRemoteParticipant>>({});
+  const [ networkState, setNetworkState ] = useState<NetworkState>('GOOD');
+  const [ lowDataMode, setLowDataModeState ] = useState<LowDataMode>(readLowDataMode);
   // This is sourced from the live conference role, rather than from the token that admitted
   // the user. It lets someone who is promoted during a meeting receive moderator controls
   // without having to leave and rejoin.
@@ -377,6 +418,17 @@ export function useJitsiMeeting({
   const localAudioTrackRef = useRef<any>(null);
   const localVideoTrackRef = useRef<any>(null);
   const localDesktopTrackRef = useRef<any>(null);
+  const networkStateRef = useRef<NetworkState>('GOOD');
+  const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
+  const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
+  const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
+  const poorSampleCountRef = useRef(0);
+  const degradedSampleCountRef = useRef(0);
+  const goodSinceRef = useRef<number | null>(null);
+  const lastAppliedQualityKeyRef = useRef<string | null>(null);
+  // Only this mode is allowed to mute/unmute the camera automatically. A manual user mute must
+  // never be undone when the network recovers or Low Data Mode changes.
+  const audioOnlyMutedVideoRef = useRef(false);
   // Guards stopScreenShareInternal against running twice concurrently -- disposing the desktop
   // track can itself fire the browser's native 'ended' event a second time (surfaced by
   // lib-jitsi-meet as another LOCAL_TRACK_STOPPED), which would otherwise re-enter the stop path
@@ -491,6 +543,219 @@ export function useJitsiMeeting({
       }
     }));
   }, []);
+
+  // Applies only public lib-jitsi-meet receiver/sender controls. This does not acquire a new
+  // camera/microphone stream and does not manipulate individual video frames.
+  const applyMediaQualityPolicy = useCallback(async (
+    requestedState = networkStateRef.current,
+    requestedMode = lowDataModeRef.current
+  ) => {
+    const room = roomRef.current;
+
+    if (!room) {
+      return;
+    }
+    const participantCount = room.getParticipants?.().length || 0;
+    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount);
+    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal' ].join(':');
+
+    if (lastAppliedQualityKeyRef.current === key) {
+      return;
+    }
+    try {
+      room.setLastN?.(policy.lastN);
+      room.setReceiverVideoConstraint?.(policy.receiveMaxHeight);
+      room.setDesktopSharingFrameRate?.(policy.desktopFps);
+      await Promise.resolve(room.setSenderVideoConstraint?.(policy.sendMaxHeight));
+
+      const cameraTrack = localVideoTrackRef.current;
+      if (policy.audioOnly && cameraTrack && !cameraTrack.isMuted?.()) {
+        await cameraTrack.mute();
+        audioOnlyMutedVideoRef.current = true;
+        setLocalVideoMuted(true);
+      } else if (!policy.audioOnly && audioOnlyMutedVideoRef.current && cameraTrack?.isMuted?.()) {
+        await cameraTrack.unmute();
+        audioOnlyMutedVideoRef.current = false;
+        setLocalVideoMuted(false);
+      }
+      lastAppliedQualityKeyRef.current = key;
+      if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+        // Do not include meeting, token, or participant data in diagnostics.
+        console.info('[Toowix network] media quality applied', { mode: requestedMode, state: requestedState, policy });
+      }
+    } catch (err) {
+      // A particular older bridge/browser can reject a quality preference. Media must keep
+      // flowing with Jitsi defaults rather than treating this as a call failure.
+      if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+        console.warn('[Toowix network] could not apply media quality preference', err);
+      }
+    }
+  }, []);
+
+  const setLowDataMode = useCallback(async (mode: LowDataMode) => {
+    lowDataModeRef.current = mode;
+    setLowDataModeState(mode);
+    lastAppliedQualityKeyRef.current = null;
+    try {
+      localStorage.setItem(LOW_DATA_MODE_STORAGE_KEY, mode);
+    } catch {
+      // A storage failure must not block a temporary in-call preference.
+    }
+
+    // Segmentation effects are intentionally disabled for data-saving modes. They consume
+    // local CPU/GPU and can worsen encode stability on weak devices.
+    if (mode !== 'auto' && virtualBackgroundRef.current) {
+      virtualBackgroundRef.current = null;
+      try {
+        await localVideoTrackRef.current?.setEffect(undefined);
+      } catch {
+        // Quality controls remain useful even if a browser refuses to remove an effect.
+      }
+    }
+    await applyMediaQualityPolicy(networkStateRef.current, mode);
+  }, [ applyMediaQualityPolicy ]);
+
+  const updateNetworkStateFromMetrics = useCallback(async (metrics: INetworkMetrics) => {
+    networkMetricsRef.current = metrics;
+    const observed = classifyNetwork(metrics);
+    const now = Date.now();
+    const current = networkStateRef.current;
+    let next = current;
+
+    if (observed === 'POOR') {
+      poorSampleCountRef.current += 1;
+      degradedSampleCountRef.current = 0;
+      goodSinceRef.current = null;
+      // A disconnected/failed connection is acted on immediately. Otherwise two consecutive
+      // samples avoid lowering video for a short stats spike.
+      if ([ 'disconnected', 'failed', 'closed' ].includes(metrics.connectionState || '') || poorSampleCountRef.current >= 2) {
+        next = 'POOR';
+      }
+    } else if (observed === 'DEGRADED') {
+      poorSampleCountRef.current = 0;
+      degradedSampleCountRef.current += 1;
+      goodSinceRef.current = null;
+      if (degradedSampleCountRef.current >= 2 && current !== 'POOR') {
+        next = 'DEGRADED';
+      }
+    } else {
+      poorSampleCountRef.current = 0;
+      degradedSampleCountRef.current = 0;
+      if (current === 'GOOD') {
+        next = 'GOOD';
+      } else {
+        goodSinceRef.current ||= now;
+        const stableFor = now - goodSinceRef.current;
+
+        if (stableFor >= NETWORK_RECOVERY_STABLE_MS && current !== 'RECOVERING') {
+          next = 'RECOVERING';
+        } else if (stableFor >= NETWORK_RECOVERY_STABLE_MS * 2 && current === 'RECOVERING') {
+          next = 'GOOD';
+          goodSinceRef.current = null;
+        }
+      }
+    }
+
+    if (next !== current) {
+      networkStateRef.current = next;
+      setNetworkState(next);
+      lastAppliedQualityKeyRef.current = null;
+      await applyMediaQualityPolicy(next);
+      if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+        console.info('[Toowix network] state changed', { state: next, metrics });
+      }
+    }
+  }, [ applyMediaQualityPolicy ]);
+
+  // Poll the active Jitsi peer connection at a deliberately low rate. Raw samples stay in refs;
+  // the page only re-renders when the small GOOD/DEGRADED/POOR/RECOVERING state changes.
+  useEffect(() => {
+    if (!joined) {
+      return;
+    }
+    let disposed = false;
+
+    const collectNetworkMetrics = async () => {
+      const room = roomRef.current;
+      const connectionState = room?.getConnectionState?.() || null;
+      const jitsiPeerConnection = room?.getActivePeerConnection?.();
+      const peerConnection = jitsiPeerConnection?.peerconnection;
+
+      if (!room || !peerConnection?.getStats) {
+        await updateNetworkStateFromMetrics({ ...EMPTY_NETWORK_METRICS, connectionState });
+
+        return;
+      }
+      try {
+        const stats: RTCStatsReport = await peerConnection.getStats();
+        if (disposed) {
+          return;
+        }
+        const localCandidates = new Map<string, any>();
+        let selectedPair: any = null;
+        let packetsLost = 0;
+        let packetsReceived = 0;
+        let jitterSeconds: number | null = null;
+        let videoBytesSent = 0;
+
+        stats.forEach((report: any) => {
+          if (report.type === 'local-candidate') {
+            localCandidates.set(report.id, report);
+          }
+          if (report.type === 'candidate-pair' && (report.selected || (report.nominated && report.state === 'succeeded'))) {
+            selectedPair = report;
+          }
+          const mediaKind = report.kind || report.mediaType;
+          if ((report.type === 'inbound-rtp' || report.type === 'remote-inbound-rtp') && (mediaKind === 'audio' || mediaKind === 'video')) {
+            packetsLost += Number(report.packetsLost) || 0;
+            packetsReceived += Number(report.packetsReceived) || 0;
+            if (mediaKind === 'audio' && Number.isFinite(report.jitter)) {
+              jitterSeconds = Math.max(jitterSeconds || 0, Number(report.jitter));
+            }
+          }
+          if (report.type === 'outbound-rtp' && mediaKind === 'video') {
+            videoBytesSent += Number(report.bytesSent) || 0;
+          }
+        });
+
+        const now = performance.now();
+        const previous = previousVideoStatsRef.current;
+        let videoBitrateKbps: number | null = null;
+        if (previous && now > previous.timestamp && videoBytesSent >= previous.bytesSent) {
+          videoBitrateKbps = ((videoBytesSent - previous.bytesSent) * 8) / (now - previous.timestamp);
+        }
+        previousVideoStatsRef.current = { bytesSent: videoBytesSent, timestamp: now };
+        const localCandidate = selectedPair?.localCandidateId ? localCandidates.get(selectedPair.localCandidateId) : null;
+        const availableOutgoingBitrate = Number(selectedPair?.availableOutgoingBitrate);
+        const currentRoundTripTime = Number(selectedPair?.currentRoundTripTime);
+        const packetTotal = packetsLost + packetsReceived;
+
+        await updateNetworkStateFromMetrics({
+          availableOutgoingBitrateKbps: Number.isFinite(availableOutgoingBitrate) ? availableOutgoingBitrate / 1000 : null,
+          candidateType: localCandidate?.candidateType || null,
+          connectionState,
+          jitterMs: jitterSeconds === null ? null : jitterSeconds * 1000,
+          packetLossPercent: packetTotal > 0 ? (packetsLost / packetTotal) * 100 : null,
+          rttMs: Number.isFinite(currentRoundTripTime) ? currentRoundTripTime * 1000 : null,
+          videoBitrateKbps
+        });
+      } catch (err) {
+        if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+          console.warn('[Toowix network] WebRTC stats collection failed', err);
+        }
+      }
+    };
+
+    void applyMediaQualityPolicy();
+    void collectNetworkMetrics();
+    const timer = window.setInterval(() => void collectNetworkMetrics(), NETWORK_STATS_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      previousVideoStatsRef.current = null;
+    };
+  }, [ applyMediaQualityPolicy, joined, updateNetworkStateFromMetrics ]);
 
   // When presenter A stops and presenter B starts right after, A's TRACK_REMOVED fires (which
   // would clear remoteScreenShare to null) before B's TRACK_ADDED arrives moments later -- that
@@ -1056,6 +1321,14 @@ export function useJitsiMeeting({
       setJoined(false);
       setRemoteParticipants({});
       setIsModerator(false);
+      networkStateRef.current = 'GOOD';
+      setNetworkState('GOOD');
+      networkMetricsRef.current = EMPTY_NETWORK_METRICS;
+      poorSampleCountRef.current = 0;
+      degradedSampleCountRef.current = 0;
+      goodSinceRef.current = null;
+      lastAppliedQualityKeyRef.current = null;
+      audioOnlyMutedVideoRef.current = false;
       setLocalCameraStream(null);
       setLocalScreenStream(null);
       setRemoteScreenShare(null);
@@ -1096,6 +1369,9 @@ export function useJitsiMeeting({
   // and cameraRetryInFlightRef guards against a second click starting a parallel capture
   // request while one is already in progress.
   const toggleVideo = useCallback(async () => {
+    if (lowDataModeRef.current === 'audio-only') {
+      return;
+    }
     const track = localVideoTrackRef.current;
 
     if (track) {
@@ -1159,16 +1435,9 @@ export function useJitsiMeeting({
   // start path's addTrack-only comment below) -- stopping the share must never touch the camera
   // track at all.
   //
-  // This used to be `room.replaceTrack(desktopTrack, localVideoTrackRef.current)` whenever the
-  // camera was on. lib-jitsi-meet's real replaceTrack (verified directly against the installed
-  // package) throws synchronously whenever the old and new tracks have different videoTypes:
-  //   "Replacing a track of videoType=desktop with a track of videoType=camera is not supported
-  //   in this mode."
-  // -- camera and desktop are ALWAYS different videoTypes, so that call failed on every single
-  // stop where the camera was on, every time, with zero exception (caught by a bare `catch {}`
-  // right below it). The JVB was never actually told the desktop track was going away; only the
-  // sender's local copy was disposed. Remote viewers kept whatever frame they'd last received,
-  // forever -- the exact frozen-screen-share bug this rewrites.
+  // Desktop and camera are different Jitsi video types and are never replaced with one another.
+  // Stopping a share removes only its separate desktop source; this is the conference lifecycle
+  // expected by remote TRACK_MUTE_CHANGED/TRACK_REMOVED listeners below.
   const stopScreenShareInternal = useCallback(async (desktopTrack: any) => {
     if (!desktopTrack || desktopStopInFlightRef.current) {
       return;
@@ -1179,30 +1448,14 @@ export function useJitsiMeeting({
 
       if (room) {
         try {
-          // Confirmed via direct JVB/Jicofo log inspection: when the browser's native "Stop
-          // sharing" bar ends the track, room.removeTrack() resolves locally with no error, but
-          // lib-jitsi-meet never sends the server a source-remove for it -- the bridge keeps
-          // believing the desktop source is still live indefinitely (until the whole participant
-          // leaves), which is what left OTHER participants frozen/black. replaceTrack(old, null)
-          // is documented to always perform a real offer/answer renegotiation cycle (unlike
-          // removeTrack, which appears to skip it once the track is already in an ended state),
-          // and passing null as the new track avoids the old desktop<->camera videoType-mismatch
-          // throw entirely (see the historical note above -- there's no new track to conflict).
-          // 6s ceiling: this is a real signaling round-trip with no timeout of its own -- if it
-          // stalls, the tile below must still clear so the UI doesn't stay frozen forever. The
-          // underlying call keeps running in the background (see withTimeout's comment) so the
-          // conference-side state still converges once it settles.
-          await withTimeout(runSerializedRoomOperation(() => room.replaceTrack(desktopTrack, null)), 6000, 'Timed out removing desktop track');
+          // A bounded remove prevents a signaling stall from trapping the UI on the old
+          // presentation. The underlying operation is still allowed to settle in its serialized
+          // queue after the visual state has been cleared.
+          await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.error('[useJitsiMeeting] replaceTrack(desktopTrack, null) failed, falling back to removeTrack:', err);
-          try {
-            await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
-          } catch (fallbackErr) {
-            // eslint-disable-next-line no-console
-            console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', fallbackErr);
-            setError('Could not stop screen sharing cleanly -- please try again.');
-          }
+          console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
+          setError('Could not stop screen sharing cleanly -- please try again.');
         }
       }
 
@@ -1270,6 +1523,13 @@ export function useJitsiMeeting({
     }
 
     let desktopTrack: any;
+    // Resolution applies when the browser creates the desktop source. We intentionally do not
+    // tear down and re-prompt an already active share merely to change its resolution.
+    const desktopPolicy = getMediaQualityPolicy(
+      lowDataModeRef.current,
+      networkStateRef.current,
+      room.getParticipants?.().length || 0
+    );
 
     try {
       // Without desktopSharingResolution, lib-jitsi-meet captures at window.screen.width/height
@@ -1280,7 +1540,10 @@ export function useJitsiMeeting({
       // CPU during same-device testing) -- screen content is legible at 1080p either way.
       [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({
         devices: [ 'desktop' ],
-        desktopSharingResolution: { width: { max: 1920 }, height: { max: 1080 } }
+        desktopSharingResolution: {
+          width: { max: desktopPolicy.desktopMaxWidth },
+          height: { max: desktopPolicy.desktopMaxHeight }
+        }
       });
     } catch {
       // User cancelled the OS share picker, or permission was denied -- silently no-op,
@@ -1323,6 +1586,7 @@ export function useJitsiMeeting({
       // stop path above valid: removeTrack only ever has to undo exactly this addTrack, with the
       // camera never touched on either side.
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
+      room.setDesktopSharingFrameRate?.(desktopPolicy.desktopFps);
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
     } catch (err: any) {
@@ -1456,6 +1720,10 @@ export function useJitsiMeeting({
   // the UI can show an error instead of silently doing nothing.
   const setVirtualBackground = useCallback(async (config: IVirtualBackground | null) => {
     const track = localVideoTrackRef.current;
+
+    if (config && config.backgroundType !== 'none' && lowDataModeRef.current !== 'auto') {
+      throw new Error('Background effects are disabled while Low Data Mode is active.');
+    }
 
     if (!config || config.backgroundType === 'none') {
       virtualBackgroundRef.current = null;
@@ -1596,6 +1864,8 @@ export function useJitsiMeeting({
     isScreenSharing,
     remoteParticipants,
     isModerator,
+    networkState,
+    lowDataMode,
     remoteScreenShare,
     dominantSpeakerId,
     localParticipantId,
@@ -1607,6 +1877,7 @@ export function useJitsiMeeting({
     stopRecording,
     switchDevice,
     setVirtualBackground,
+    setLowDataMode,
     noiseSuppressionEnabled,
     toggleNoiseSuppression,
     sharedVideo,
