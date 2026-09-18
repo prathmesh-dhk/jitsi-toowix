@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, RotateCcw, CheckCircle2, ShieldAlert, LogOut, Video, Timer, X } from 'lucide-react';
+import { ArrowLeft, RotateCcw, CheckCircle2, ShieldAlert, LogOut, Timer, X } from 'lucide-react';
 import { useTheme } from '../lib/theme';
 import { auth } from '../lib/firebase';
 
@@ -85,20 +85,11 @@ export function MeetingEndedPage() {
           cursor: 'pointer',
         }}
       >
-        <div
-          style={{
-            width: '36px',
-            height: '36px',
-            borderRadius: '10px',
-            backgroundColor: '#4F46E5',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#FFFFFF',
-          }}
-        >
-          <Video size={20} />
-        </div>
+        <img
+          src="/assets/toowix-logo.svg"
+          alt="Toowix"
+          style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+        />
         <span style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.3px' }}>
           Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
         </span>
