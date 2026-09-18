@@ -1,6 +1,9 @@
 server {
     listen 3000;
     server_name _;
+    # This server sits behind the public TLS proxy. Keep redirects relative so
+    # clients are never sent to the private/internal port 3000.
+    absolute_redirect off;
 
     location ~ ^/meet/ {
         proxy_pass http://127.0.0.1:3001;
