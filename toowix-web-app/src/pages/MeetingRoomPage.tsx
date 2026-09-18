@@ -55,6 +55,7 @@ import {
   playParticipantJoinedTone,
   playParticipantLeftTone,
   playRecordingStartedTone,
+  playRecordingStoppedTone,
   playTimeWarningTone,
 } from '../lib/notificationSounds';
 import { useTheme } from '../lib/theme';
@@ -2865,6 +2866,8 @@ export function MeetingRoomPage() {
       setTimeout(() => setRecordingToast((t) => (t === (jitsiMeeting.recording ? 'Recording has started' : 'Recording has stopped') ? null : t)), 4000);
       if (jitsiMeeting.recording) {
         playRecordingStartedTone();
+      } else {
+        playRecordingStoppedTone();
       }
     }
   }, [jitsiMeeting.recording]);
