@@ -13,7 +13,7 @@ server {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
     }
-    location ~ ^/(dashboard|home|login|signin|signup|register|forgot-password|verify-email|settings|rsvp|recordings|recording|meeting-ended)(/|$) {
+    location ~ ^/(dashboard|home|login|signin|signup|register|forgot-password|verify-email|settings|rsvp|recordings|recording|meeting-ended|meeting-link-expired)(/|$) {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
     }
@@ -92,6 +92,6 @@ server {
     location / {
         # A bare /room-name used to reach stock Jitsi and create an unrestricted
         # conference. Send every unknown path to Toowix's entry page instead.
-        return 302 /?meeting=unavailable;
+        return 302 /meeting-link-expired;
     }
 }

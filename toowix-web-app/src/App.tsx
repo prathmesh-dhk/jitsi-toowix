@@ -1,15 +1,14 @@
 import { AccountGuard } from './components/AccountGuard';
 import { MeetingEndedPage } from './pages/MeetingEndedPage';
 import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, useNavigate, useSearchParams, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom';
 import { Video, Plus, Keyboard, ShieldCheck, Users, Sparkles } from 'lucide-react';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from './lib/meeting-id';
+import { MeetingLinkExpiredPage } from './pages/MeetingLinkExpiredPage';
 
 function HomePage() {
   const [customRoom, setCustomRoom] = useState('');
-  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const meetingUnavailable = searchParams.get('meeting') === 'unavailable';
 
   const handleStartInstant = () => {
     const newRoomId = `instant-${generateUniqueMeetingId()}`;
@@ -111,24 +110,6 @@ function HomePage() {
           >
             <Sparkles size={16} /> Enterprise Video Collaboration
           </div>
-
-          {meetingUnavailable && (
-            <div
-              role="alert"
-              style={{
-                marginBottom: '24px',
-                padding: '14px 18px',
-                border: '1px solid #F2C6C6',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: '#FFF5F5',
-                color: '#9B1C1C',
-                fontSize: '15px',
-                lineHeight: 1.5,
-              }}
-            >
-              This meeting is not available. Please sign in and create a meeting, or ask the organizer for a valid Toowix meeting link.
-            </div>
-          )}
 
           <h1
             style={{
@@ -305,6 +286,7 @@ export default function App() {
           <Route path="/recording/:id" element={<RecordingWatchPage />} />
           <Route element={<AccountGuard />}><Route path="/dashboard" element={<DashboardPage />} /></Route>
           <Route path="/meeting-ended" element={<MeetingEndedPage />} />
+          <Route path="/meeting-link-expired" element={<MeetingLinkExpiredPage />} />
           <Route path="/home" element={<HomePage />} />
           <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
           {/* New direct lib-jitsi-meet path -- no iframe, real tracks in real <video>
