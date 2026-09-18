@@ -92,6 +92,6 @@ server {
     location / {
         # A bare /room-name used to reach stock Jitsi and create an unrestricted
         # conference. Send every unknown path to Toowix's entry page instead.
-        return 302 /;
+        return 302 /?meeting=unavailable;
     }
 }
