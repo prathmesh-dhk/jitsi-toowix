@@ -7367,41 +7367,34 @@ export function MeetingRoomPage() {
                     cursor: 'pointer',
                     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
                     transition: 'all 0.15s ease',
-                  }}
-                  title={micEnabled ? 'Turn microphone off' : 'Turn microphone on'}
-                >
-                  {micEnabled ? <Mic size={20} color="#202124" /> : <MicOff size={20} />}
-                  {micEnabled && !micPermissionError && (
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        position: 'absolute',
-                        right: '5px',
-                        bottom: '6px',
-                        display: 'flex',
-                        alignItems: 'flex-end',
-                        gap: '1px',
-                        height: '10px',
-                      }}
-                    >
-                      {[0.6, 1.0, 0.8].map((mult, idx) => {
-                        const h = Math.max(2, Math.min(9, Math.round(media.level * 18 * mult)));
-                        return (
-                          <i
-                            key={idx}
-                            style={{
-                              display: 'block',
-                              width: '2px',
-                              height: `${h}px`,
-                              backgroundColor: '#34A853',
-                              borderRadius: '2px',
-                              transition: 'height 80ms ease',
-                            }}
-                          />
-                        );
-                      })}
-                    </span>
-                  )}
+                }}
+                title={micEnabled ? 'Turn microphone off' : 'Turn microphone on'}
+              >
+                  {micEnabled ? (() => {
+                    // The green area is clipped within the microphone capsule itself and
+                    // follows the actual input level, rather than being a separate indicator.
+                    const fillHeight = micPermissionError ? 0 : Math.max(2, Math.min(10, Math.round(media.level * 120)));
+                    return (
+                      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                        <defs>
+                          <clipPath id="lobby-mic-level-fill">
+                            <rect x="8.6" y="2.5" width="6.8" height="11" rx="3.4" />
+                          </clipPath>
+                        </defs>
+                        <rect
+                          x="8.6"
+                          y={13.5 - fillHeight}
+                          width="6.8"
+                          height={fillHeight}
+                          fill="#34A853"
+                          clipPath="url(#lobby-mic-level-fill)"
+                          style={{ transition: 'y 80ms ease, height 80ms ease' }}
+                        />
+                        <rect x="8.6" y="2.5" width="6.8" height="11" rx="3.4" fill="none" stroke="#202124" strokeWidth="1.8" />
+                        <path d="M5.8 10.5v.8a6.2 6.2 0 0 0 12.4 0v-.8M12 17.5v3.2M8.8 20.7h6.4" fill="none" stroke="#202124" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    );
+                  })() : <MicOff size={20} />}
                 </button>
               </div>
 
