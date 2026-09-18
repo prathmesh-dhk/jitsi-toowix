@@ -1,10 +1,7 @@
 import { Link } from 'react-router-dom';
 import { CalendarPlus } from 'lucide-react';
-import { useTheme } from '../lib/theme';
 
 export function MeetingLinkExpiredPage() {
-  const { isDark } = useTheme();
-
   return (
     <main
       style={{
@@ -14,9 +11,9 @@ export function MeetingLinkExpiredPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: isDark ? '#202124' : '#F8F9FA',
-        color: isDark ? '#F8FAFC' : '#202124',
-        fontFamily: "'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        background: 'var(--color-bg)',
+        color: 'var(--color-text-primary)',
+        fontFamily: 'var(--font-family)',
       }}
     >
       <section
@@ -27,10 +24,10 @@ export function MeetingLinkExpiredPage() {
           padding: '42px 34px',
           boxSizing: 'border-box',
           textAlign: 'center',
-          background: isDark ? '#2D2E30' : '#FFFFFF',
-          border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.10)' : '#E5E7EB'}`,
-          borderRadius: '24px',
-          boxShadow: isDark ? '0 12px 34px rgba(0, 0, 0, 0.35)' : '0 12px 34px rgba(0, 0, 0, 0.08)',
+          background: 'var(--color-card)',
+          border: '1px solid var(--color-card-border)',
+          borderRadius: 'var(--radius-xl)',
+          boxShadow: 'var(--shadow-lg)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px', marginBottom: '30px' }}>
@@ -39,14 +36,14 @@ export function MeetingLinkExpiredPage() {
             alt="Toowix"
             style={{ width: '30px', height: '30px', objectFit: 'contain' }}
           />
-          <span style={{ fontSize: '20px', fontWeight: 700 }}>
-            Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
+          <span style={{ fontSize: '20px', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+            Toowix <span style={{ color: 'var(--color-primary)' }}>Meet</span>
           </span>
         </div>
 
         <h1
           id="meeting-link-expired-title"
-          style={{ margin: '0 0 12px', fontSize: '28px', lineHeight: 1.25, color: isDark ? '#FFFFFF' : '#202124' }}
+          style={{ margin: '0 0 12px', fontSize: '28px', lineHeight: 1.25, color: 'var(--color-text-primary)' }}
         >
           This link has expired.
         </h1>
@@ -54,7 +51,7 @@ export function MeetingLinkExpiredPage() {
           style={{
             margin: '0 auto 28px',
             maxWidth: '400px',
-            color: isDark ? '#B8BDC6' : '#5F6368',
+            color: 'var(--color-text-secondary)',
             fontSize: '15px',
             lineHeight: 1.55,
           }}
@@ -71,8 +68,8 @@ export function MeetingLinkExpiredPage() {
             gap: '9px',
             minHeight: '44px',
             padding: '0 20px',
-            borderRadius: '10px',
-            background: '#4F46E5',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-primary)',
             color: '#FFFFFF',
             fontWeight: 700,
             textDecoration: 'none',
