@@ -2788,6 +2788,10 @@ export function MeetingRoomPage() {
   // already expects (id, name, muted, video, raisedHand[, stream/audioStream for tiles]).
   useEffect(() => {
     const list = Object.values(jitsiMeeting.remoteParticipants);
+    // TEMP diagnostic for the "join/leave freezes other tiles" investigation -- remove once
+    // root-caused. Unconditional so it shows up on the production build.
+    // eslint-disable-next-line no-console
+    console.log('[TILE-DEBUG] remoteParticipants sync effect fired, count:', list.length, 'ids:', list.map((r: any) => r.id), 'at', new Date().toISOString());
 
     setRemoteParticipants((prev) =>
       list.map((r) => {
@@ -3542,6 +3546,8 @@ export function MeetingRoomPage() {
                 // without this guard the remote video/audio would reload and blank out
                 // constantly instead of only when the stream object actually changes.
                 if (el && remote.audioStream && el.srcObject !== remote.audioStream) {
+                  // eslint-disable-next-line no-console
+                  console.log('[TILE-DEBUG] audio ref (always-mounted) srcObject SET, participantId:', remote.id);
                   el.srcObject = remote.audioStream;
                   el.play().catch(() => { });
                 }
@@ -3836,6 +3842,8 @@ export function MeetingRoomPage() {
                           playsInline
                           ref={(el) => {
                             if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
+                              // eslint-disable-next-line no-console
+                              console.log('[TILE-DEBUG] video ref [grid-3841] srcObject SET, participantId:', (remote as any).id);
                               el.srcObject = (remote as any).stream;
                               el.play().catch(() => { });
                             }
@@ -4177,6 +4185,8 @@ export function MeetingRoomPage() {
                           playsInline
                           ref={(el) => {
                             if (el && (pinned as any).stream && el.srcObject !== (pinned as any).stream) {
+                              // eslint-disable-next-line no-console
+                              console.log('[TILE-DEBUG] video ref [pinned-4182] srcObject SET, participantId:', (pinned as any).id);
                               el.srcObject = (pinned as any).stream;
                               el.play().catch(() => { });
                             }
@@ -4372,6 +4382,8 @@ export function MeetingRoomPage() {
                                 playsInline
                                 ref={(el) => {
                                   if (el && (p as any).stream && el.srcObject !== (p as any).stream) {
+                                    // eslint-disable-next-line no-console
+                                    console.log('[TILE-DEBUG] video ref [filmstrip-4377] srcObject SET, participantId:', (p as any).id);
                                     el.srcObject = (p as any).stream;
                                     el.play().catch(() => { });
                                   }
@@ -4618,6 +4630,8 @@ export function MeetingRoomPage() {
                         playsInline
                         ref={(el) => {
                           if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
+                            // eslint-disable-next-line no-console
+                            console.log('[TILE-DEBUG] video ref [grid-4623] srcObject SET, participantId:', (remote as any).id);
                             el.srcObject = (remote as any).stream;
                             el.play().catch(() => { });
                           }

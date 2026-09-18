@@ -649,6 +649,8 @@ export function useJitsiMeeting({
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
               if (type === 'audio') {
+                // eslint-disable-next-line no-console
+                console.log('[TILE-DEBUG] remote AUDIO TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted());
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
               } else if (videoType === 'desktop') {
                 // A desktop track that arrives already muted must not be shown as an active
@@ -662,6 +664,8 @@ export function useJitsiMeeting({
                 }
                 recomputeRemoteScreenShare();
               } else {
+                // eslint-disable-next-line no-console
+                console.log('[TILE-DEBUG] remote CAMERA TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted(), 'nativeReadyState:', track.getTrack?.()?.readyState);
                 patchParticipant(participantId, { stream: trackToStream(track), video: !track.isMuted() });
               }
 
@@ -686,6 +690,8 @@ export function useJitsiMeeting({
                   }
                   recomputeRemoteScreenShare();
                 } else {
+                  // eslint-disable-next-line no-console
+                  console.log('[TILE-DEBUG] remote CAMERA TRACK_MUTE_CHANGED, participantId:', participantId, 'isMuted:', track.isMuted());
                   patchParticipant(participantId, { video: !track.isMuted() });
                 }
               });
@@ -700,6 +706,8 @@ export function useJitsiMeeting({
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
               if (type === 'audio') {
+                // eslint-disable-next-line no-console
+                console.log('[TILE-DEBUG] remote AUDIO TRACK_REMOVED, participantId:', participantId);
                 patchParticipant(participantId, { audioStream: null });
               } else if (videoType === 'desktop') {
                 // Only delete if this is still the SAME track instance stored for this
@@ -713,6 +721,8 @@ export function useJitsiMeeting({
                   recomputeRemoteScreenShare();
                 }
               } else {
+                // eslint-disable-next-line no-console
+                console.log('[TILE-DEBUG] remote CAMERA TRACK_REMOVED, participantId:', participantId);
                 patchParticipant(participantId, { stream: null, video: false });
               }
             });
@@ -736,6 +746,10 @@ export function useJitsiMeeting({
 
               remoteNamesRef.current[id] = name;
               remoteAvatarsRef.current[id] = avatarUrl;
+              // TEMP diagnostic for the "join/leave freezes other tiles" investigation -- remove
+              // once root-caused. Unconditional so it shows up on the production build.
+              // eslint-disable-next-line no-console
+              console.log('[TILE-DEBUG] USER_JOINED', id, name, 'at', new Date().toISOString());
               patchParticipant(id, {
                 name,
                 avatarUrl,
@@ -761,6 +775,8 @@ export function useJitsiMeeting({
             });
 
             room.on(JitsiMeetJS.events.conference.USER_LEFT, (id: string) => {
+              // eslint-disable-next-line no-console
+              console.log('[TILE-DEBUG] USER_LEFT', id, 'at', new Date().toISOString(), 'remainingIds:', Object.keys(remoteNamesRef.current).filter(x => x !== id));
               delete remoteNamesRef.current[id];
               delete remoteAvatarsRef.current[id];
               delete remoteDesktopTracksRef.current[id];
