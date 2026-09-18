@@ -1373,13 +1373,21 @@ export function useJitsiMeeting({
       return;
     }
     const track = localVideoTrackRef.current;
+    const nativeTrack = track?.getTrack?.();
 
-    if (track) {
+    // A browser can leave a JitsiLocalTrack object behind after the underlying camera track
+    // has ended (common after another app briefly takes the camera). Unmuting that stale object
+    // succeeds without producing frames, which is the black self-view bug. Treat it as absent
+    // and acquire a fresh camera track below instead.
+    if (track && nativeTrack?.readyState !== 'ended') {
       if (track.isMuted()) {
-        track.unmute();
+        await Promise.resolve(track.unmute());
+        // Use a new MediaStream wrapper to force every mounted self-view/PiP video element to
+        // rebind and resume playback as soon as the browser emits frames again.
+        setLocalCameraStream(trackToStream(track));
         setLocalVideoMuted(false);
       } else {
-        track.mute();
+        await Promise.resolve(track.mute());
         setLocalVideoMuted(true);
       }
 
@@ -1391,6 +1399,21 @@ export function useJitsiMeeting({
     }
     cameraRetryInFlightRef.current = true;
     try {
+      if (track) {
+        const room = roomRef.current;
+        try {
+          if (room) {
+            await runSerializedRoomOperation(() => room.removeTrack(track));
+          }
+        } catch {
+          // The stale track may already have been removed by lib-jitsi-meet.
+        }
+        track.dispose?.();
+        localVideoTrackRef.current = null;
+        setHasVideoTrack(false);
+        setLocalCameraStream(null);
+      }
+
       const JitsiMeetJS = window.JitsiMeetJS;
 
       if (!JitsiMeetJS) {

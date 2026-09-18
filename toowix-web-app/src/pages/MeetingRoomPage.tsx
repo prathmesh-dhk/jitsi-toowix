@@ -938,6 +938,10 @@ export function MeetingRoomPage() {
   // one large pinned participant with the rest in a filmstrip sidebar. Shortcut 'W' toggles.
   const [tileViewEnabled, setTileViewEnabled] = useState(true);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+  const toggleTileView = useCallback(() => {
+    // Do not wait for an animation or a stale selected tile before changing layout.
+    setTileViewEnabled((enabled) => !enabled);
+  }, []);
 
   // Keyboard shortcuts (Jitsi/Google Meet convention): 'w' tile view, 'm' mic, 'v' camera,
   // 'f' full screen. mic/video/fullscreen go through refs (toggleInCallMicRef etc.) synced
@@ -960,7 +964,7 @@ export function MeetingRoomPage() {
       }
       if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
-        setTileViewEnabled((prev) => !prev);
+        toggleTileView();
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         toggleInCallMicRef.current();
@@ -974,7 +978,7 @@ export function MeetingRoomPage() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [toggleTileView]);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showVideoMenu, setShowVideoMenu] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
@@ -1106,6 +1110,10 @@ export function MeetingRoomPage() {
   const pipTimerRef = useRef<any>(null);
   // Live refs so the PiP draw loop always reads current state
   const pipRemoteParticipantsRef = useRef<typeof remoteParticipants>([]);
+  // Canvas-based Video PiP can only draw HTMLVideoElements, not a MediaStream directly.
+  // Keep one lightweight, hidden video element per remote participant so their live camera
+  // remains available to the PiP compositor even when their main tile is not mounted.
+  const pipRemoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const pipIsScreenSharingRef = useRef(false);
   const pipRemoteScreenStreamRef = useRef<MediaStream | null>(null);
   const pipRemotePresenterNameRef = useRef('');
@@ -1653,6 +1661,7 @@ export function MeetingRoomPage() {
       // ── Normal vertical stack layout (Google Meet PiP style) ──
       const allParticipants = [
         {
+          id: 'local',
           name: localName + ' (You)',
           theme: getParticipantColorTheme(localName || 'You', 0),
           isLocal: true,
@@ -1660,6 +1669,7 @@ export function MeetingRoomPage() {
           raisedHand: localHandRaised,
         },
         ...remotes.map((r, idx) => ({
+          id: r.id,
           name: r.name,
           theme: getParticipantColorTheme(r.name, idx + 1),
           isLocal: false,
@@ -1673,7 +1683,7 @@ export function MeetingRoomPage() {
 
       allParticipants.forEach((p, i) => {
         const cy = HEADER_H + PADDING + i * (cardH + GAP);
-        const videoEl = p.isLocal ? localVid : null;
+        const videoEl = p.isLocal ? localVid : pipRemoteVideoRefs.current.get(p.id) || null;
         drawParticipantCard(ctx, PADDING, cy, W - PADDING * 2, cardH, p.name, p.theme, videoEl, p.muted, p.raisedHand);
       });
     }
@@ -2876,11 +2886,6 @@ export function MeetingRoomPage() {
   // already expects (id, name, muted, video, raisedHand[, stream/audioStream for tiles]).
   useEffect(() => {
     const list = Object.values(jitsiMeeting.remoteParticipants);
-    // TEMP diagnostic for the "join/leave freezes other tiles" investigation -- remove once
-    // root-caused. Unconditional so it shows up on the production build.
-    // eslint-disable-next-line no-console
-    console.log('[TILE-DEBUG] remoteParticipants sync effect fired, count:', list.length, 'ids:', list.map((r: any) => r.id), 'at', new Date().toISOString());
-
     setRemoteParticipants((prev) =>
       list.map((r) => {
         const existing = prev.find((p) => p.id === r.id);
@@ -3058,6 +3063,24 @@ export function MeetingRoomPage() {
   const handleToggleInCallVideo = () => {
     jitsiMeeting.toggleVideo();
   };
+
+  const handleRemoteAudioControl = useCallback((participantId: string, muted: boolean) => {
+    if (!isModerator) return;
+    const room = jitsiMeeting.room.current;
+    if (!room) return;
+
+    try {
+      if (muted) {
+        // Jitsi requires the participant's consent to turn their microphone on.
+        room.askToUnmute?.(participantId, 'audio');
+        setParticipantToast('Unmute request sent.');
+      } else {
+        room.muteParticipant?.(participantId, 'audio');
+      }
+    } catch {
+      setCallError('Could not update this participant’s microphone. Please try again.');
+    }
+  }, [isModerator, jitsiMeeting.room]);
 
   useEffect(() => {
     toggleInCallMicRef.current = handleToggleInCallMic;
@@ -3702,12 +3725,34 @@ export function MeetingRoomPage() {
                 // without this guard the remote video/audio would reload and blank out
                 // constantly instead of only when the stream object actually changes.
                 if (el && remote.audioStream && el.srcObject !== remote.audioStream) {
-                  // eslint-disable-next-line no-console
-                  console.log('[TILE-DEBUG] audio ref (always-mounted) srcObject SET, participantId:', remote.id);
                   el.srcObject = remote.audioStream;
                   el.play().catch(() => { });
                 }
               }}
+            />
+          ))}
+
+          {/* Persistent, visually hidden remote videos for the canvas PiP fallback. The visible
+              tiles below still own the normal meeting UI; these elements only give PiP a live
+              decoded frame when a remote participant has their camera on. */}
+          {remoteParticipants.map((remote: any) => (
+            <video
+              key={`pip-video-${remote.id}`}
+              autoPlay
+              muted
+              playsInline
+              ref={(el) => {
+                if (!el) {
+                  pipRemoteVideoRefs.current.delete(remote.id);
+                  return;
+                }
+                pipRemoteVideoRefs.current.set(remote.id, el);
+                if (remote.stream && el.srcObject !== remote.stream) {
+                  el.srcObject = remote.stream;
+                  el.play().catch(() => { });
+                }
+              }}
+              style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }}
             />
           ))}
 
@@ -3729,7 +3774,6 @@ export function MeetingRoomPage() {
                 gap: '16px',
                 alignItems: 'stretch',
                 justifyContent: 'center',
-                transition: 'max-width 0.25s ease',
               }}
             >
               {/* Primary Presentation Stage (Screen Share): Captures large screen space on the LEFT */}
@@ -3998,8 +4042,6 @@ export function MeetingRoomPage() {
                           playsInline
                           ref={(el) => {
                             if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
-                              // eslint-disable-next-line no-console
-                              console.log('[TILE-DEBUG] video ref [grid-3841] srcObject SET, participantId:', (remote as any).id);
                               el.srcObject = (remote as any).stream;
                               el.play().catch(() => { });
                             }
@@ -4237,7 +4279,6 @@ export function MeetingRoomPage() {
                 maxHeight: 'calc(100vh - 170px)',
                 display: 'flex',
                 gap: '16px',
-                transition: 'max-width 0.25s ease',
               }}
             >
               {(() => {
@@ -4341,8 +4382,6 @@ export function MeetingRoomPage() {
                           playsInline
                           ref={(el) => {
                             if (el && (pinned as any).stream && el.srcObject !== (pinned as any).stream) {
-                              // eslint-disable-next-line no-console
-                              console.log('[TILE-DEBUG] video ref [pinned-4182] srcObject SET, participantId:', (pinned as any).id);
                               el.srcObject = (pinned as any).stream;
                               el.play().catch(() => { });
                             }
@@ -4538,8 +4577,6 @@ export function MeetingRoomPage() {
                                 playsInline
                                 ref={(el) => {
                                   if (el && (p as any).stream && el.srcObject !== (p as any).stream) {
-                                    // eslint-disable-next-line no-console
-                                    console.log('[TILE-DEBUG] video ref [filmstrip-4377] srcObject SET, participantId:', (p as any).id);
                                     el.srcObject = (p as any).stream;
                                     el.play().catch(() => { });
                                   }
@@ -4635,7 +4672,6 @@ export function MeetingRoomPage() {
                 gap: '16px',
                 alignItems: 'stretch',
                 justifyItems: 'stretch',
-                transition: 'max-width 0.25s ease',
               }}
             >
               {/* 1. Local Participant Card */}
@@ -4780,14 +4816,69 @@ export function MeetingRoomPage() {
                       justifyContent: 'center',
                     }}
                   >
+                    {/* Pinning is personal: every participant may choose their own stage. */}
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const isPinned = pinnedParticipantId === remote.id;
+                        setPinnedParticipantId(isPinned ? null : remote.id);
+                        setTileViewEnabled(isPinned);
+                      }}
+                      title={pinnedParticipantId === remote.id ? `Unpin ${remote.name}` : `Pin ${remote.name}`}
+                      style={{
+                        position: 'absolute',
+                        top: '16px',
+                        left: '16px',
+                        zIndex: 12,
+                        width: '32px',
+                        height: '32px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '50%',
+                        border: '1px solid rgba(255,255,255,0.16)',
+                        backgroundColor: 'rgba(32,33,36,0.76)',
+                        color: '#FFFFFF',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Pin size={16} fill={pinnedParticipantId === remote.id ? '#8AB4F8' : 'none'} color="#8AB4F8" />
+                    </button>
+                    {/* Moderators can mute directly; unmuting sends Jitsi's consent-based
+                        request rather than enabling somebody else's microphone remotely. */}
+                    {isModerator && (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleRemoteAudioControl(remote.id, remote.muted);
+                        }}
+                        title={remote.muted ? `Ask ${remote.name} to unmute` : `Mute ${remote.name}`}
+                        style={{
+                          position: 'absolute',
+                          top: '16px',
+                          right: '16px',
+                          zIndex: 12,
+                          width: '32px',
+                          height: '32px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderRadius: '50%',
+                          border: '1px solid rgba(255,255,255,0.16)',
+                          backgroundColor: 'rgba(32,33,36,0.76)',
+                          color: '#FFFFFF',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {remote.muted ? <Mic size={16} color="#8AB4F8" /> : <MicOff size={16} color="#F87171" />}
+                      </button>
+                    )}
                     {(remote as any).video && (remote as any).stream ? (
                       <video
                         autoPlay
                         playsInline
                         ref={(el) => {
                           if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
-                            // eslint-disable-next-line no-console
-                            console.log('[TILE-DEBUG] video ref [grid-4623] srcObject SET, participantId:', (remote as any).id);
                             el.srcObject = (remote as any).stream;
                             el.play().catch(() => { });
                           }
@@ -4846,7 +4937,7 @@ export function MeetingRoomPage() {
                       {remote.name}
                     </div>
                     {/* Remote Mute Indicator in Top-Right */}
-                    {remote.muted && (
+                    {remote.muted && !isModerator && (
                       <div
                         style={{
                           position: 'absolute',
@@ -5564,27 +5655,9 @@ export function MeetingRoomPage() {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Button 1: Microphone with Device Menu (Image 1 order) */}
+          {/* Button 1: Microphone with live input animation. Device selection remains available
+              in Audio & Video Settings, so the toolbar stays uncluttered. */}
           <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <button
-              onClick={() => {
-                setShowAudioMenu(!showAudioMenu);
-                setShowVideoMenu(false);
-              }}
-              title="Select microphone"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#E8EAED',
-                cursor: 'pointer',
-                padding: '4px 2px',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <ChevronUp size={16} />
-            </button>
             <button
               onClick={handleToggleInCallMic}
               title={inCallMuted ? 'Turn on microphone (M)' : 'Turn off microphone (M)'}
@@ -5603,72 +5676,8 @@ export function MeetingRoomPage() {
               }}
             >
               {inCallMuted ? <MicOff size={20} color="#EA4335" /> : <Mic size={20} color="#E8EAED" />}
-              {inCallMuted && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '2px',
-                    right: '2px',
-                    width: '14px',
-                    height: '14px',
-                    borderRadius: '50%',
-                    backgroundColor: '#FBBC04',
-                    color: '#202124',
-                    fontSize: '10px',
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  !
-                </div>
-              )}
+              {!inCallMuted && <span className="mic-activity" aria-hidden="true"><i /><i /><i /></span>}
             </button>
-
-            {/* Audio Device Dropdown Menu */}
-            {showAudioMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '56px',
-                  left: 0,
-                  backgroundColor: '#2D2E30',
-                  borderRadius: '16px',
-                  padding: '8px',
-                  minWidth: '220px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  zIndex: 150,
-                }}
-              >
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
-                  Microphone
-                </div>
-                {media.devices.filter((d) => d.kind === 'audioinput').map((d) => (
-                  <button
-                    key={d.deviceId}
-                    onClick={() => handleSelectAudioDevice(d.deviceId)}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '8px 10px',
-                      background: audioId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
-                      color: '#E8EAED',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {d.label || `Microphone (${d.deviceId.slice(0, 5)})`}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Button 2: Camera with Device Menu */}
@@ -6211,7 +6220,7 @@ export function MeetingRoomPage() {
 
           {/* Button: Toggle Tile View (Jitsi Meet style, shortcut 'W') */}
           <button
-            onClick={() => setTileViewEnabled((v) => !v)}
+            onClick={toggleTileView}
             title={tileViewEnabled ? 'Exit tile view (W)' : 'Toggle tile view (W)'}
             style={{
               width: '48px',
