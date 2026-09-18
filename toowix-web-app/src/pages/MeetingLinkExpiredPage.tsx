@@ -48,7 +48,7 @@ export function MeetingLinkExpiredPage() {
           id="meeting-link-expired-title"
           style={{ margin: '0 0 12px', fontSize: '28px', lineHeight: 1.25, color: isDark ? '#FFFFFF' : '#202124' }}
         >
-          This meeting link has expired
+          This link has expired.
         </h1>
         <p
           style={{
@@ -59,7 +59,7 @@ export function MeetingLinkExpiredPage() {
             lineHeight: 1.55,
           }}
         >
-          This meeting no longer exists or the link is invalid. Please create a new meeting or ask the organizer for a new link.
+          Please create a new meeting or ask the organizer for a new link.
         </p>
 
         <Link
