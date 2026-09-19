@@ -315,6 +315,20 @@ export function useMediaPreview(
     }
   }, [video]);
 
+  // The lobby conditionally unmounts the <video> element while the camera is off. When it
+  // mounts again, React gives us a fresh element with no srcObject; merely re-enabling the
+  // existing camera track leaves that new element black. Rebind the already-owned preview
+  // stream after every off -> on render and explicitly resume playback.
+  useEffect(() => {
+    if (joined || !video || !preview.current || !stream.current) {
+      return;
+    }
+
+    const videoElement = preview.current;
+    videoElement.srcObject = stream.current;
+    void videoElement.play().catch(() => {});
+  }, [joined, video]);
+
   // Full cleanup on unmount or when joining. NOTE: stream.current (and its tracks) is
   // deliberately left alone here when joined -- MeetingRoomPage hands this exact live
   // MediaStream to lib-jitsi-meet (createLocalTracksFromMediaStreams) instead of us stopping it
