@@ -653,6 +653,7 @@ export const rsvpMeetingHandler = async (req: Request, res: Response): Promise<v
     }
 
     const cleanEmail = String(email).trim().toLowerCase();
+    const viewOnly = response === 'view';
     const cleanResponse = response === 'accepted' || response === 'accept' ? 'accepted' : 'declined';
 
     let meeting: any = null;
@@ -681,6 +682,7 @@ export const rsvpMeetingHandler = async (req: Request, res: Response): Promise<v
     }
 
     meeting.rsvps = meeting.rsvps || [];
+    if (!viewOnly) {
     const existingIndex = meeting.rsvps.findIndex((r: any) => r.email?.toLowerCase() === cleanEmail);
     if (existingIndex >= 0) {
       meeting.rsvps[existingIndex].status = cleanResponse;
@@ -694,7 +696,8 @@ export const rsvpMeetingHandler = async (req: Request, res: Response): Promise<v
     }
 
     meeting.markModified('rsvps');
-    await meeting.save();
+    await meeting.save({ validateBeforeSave: false });
+    }
 
     const hostName = typeof meeting.createdBy === 'object' ? (meeting.createdBy as any)?.fullName : 'Organizer';
 
@@ -706,7 +709,7 @@ export const rsvpMeetingHandler = async (req: Request, res: Response): Promise<v
 
     res.json({
       success: true,
-      status: cleanResponse,
+      status: viewOnly ? 'view' : cleanResponse,
       meeting: {
         id: meeting._id,
         name: meeting.name,

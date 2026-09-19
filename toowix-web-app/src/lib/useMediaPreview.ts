@@ -173,10 +173,10 @@ export function useMediaPreview(
         const tick = (now: number) => {
           if (!active || !audioContextRef.current) return;
           // Throttle state update to at most ~20fps (every 50ms) to eliminate React re-render thrashing
-          if (now - lastLevelUpdateRef.current > 50) {
+          if (now - lastLevelUpdateRef.current > 100) {
             lastLevelUpdateRef.current = now;
             if (!newTrack.enabled) {
-              setLevel(0);
+              setLevel((prev) => (prev === 0 ? prev : 0));
             } else {
               analyser.getByteFrequencyData(values);
               let sum = 0;
@@ -185,7 +185,7 @@ export function useMediaPreview(
               }
               const avg = sum / values.length;
               const calculated = Math.min(1, Math.max(0, avg / 80));
-              setLevel(calculated);
+              setLevel((prev) => (Math.abs(prev - calculated) < 0.04 ? prev : calculated));
             }
           }
           animFrameRef.current = requestAnimationFrame(tick);

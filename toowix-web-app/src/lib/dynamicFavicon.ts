@@ -89,9 +89,10 @@ export function applyFavicon(mode: FaviconMode): () => void {
   if (mode === 'default') {
     link.href = DEFAULT_HREF;
   } else if (mode === 'speaker') {
+    const frames = [ 0, 1, 2, 3 ].map((f) => draw('speaker', f));
     let frame = 0;
     const tick = () => {
-      link.href = draw('speaker', frame % 4);
+      link.href = frames[frame % 4];
       frame++;
     };
 

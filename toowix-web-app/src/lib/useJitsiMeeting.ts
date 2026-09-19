@@ -812,8 +812,6 @@ export function useJitsiMeeting({
     // regardless of which event path let them in.
     for (const [ participantId, track ] of Object.entries(remoteDesktopTracksRef.current)) {
       if (!isDesktopTrackUsable(track)) {
-        // eslint-disable-next-line no-console
-        console.log('[SCREEN-SHARE-DEBUG] purging dead desktop track, participantId:', participantId);
         delete remoteDesktopTracksRef.current[participantId];
       }
     }
@@ -822,14 +820,10 @@ export function useJitsiMeeting({
     // TEMP diagnostic for the "viewer's screen-share freezes after presenter stops" investigation
     // -- remove once confirmed fixed. Unconditional (not DEV-gated) so it shows up on the
     // production build being tested against.
-    // eslint-disable-next-line no-console
-    console.log('[SCREEN-SHARE-DEBUG] recomputeRemoteScreenShare, entryCount:', entries.length, 'ids:', entries.map(([ pid ]) => pid));
 
     if (entries.length === 0) {
       screenShareClearTimerRef.current = setTimeout(() => {
         screenShareClearTimerRef.current = null;
-        // eslint-disable-next-line no-console
-        console.log('[SCREEN-SHARE-DEBUG] clear timer fired, setting remoteScreenShare to null');
         setRemoteScreenShare(null);
         setRemoteScreenShares([]);
       }, 600);
@@ -863,8 +857,6 @@ export function useJitsiMeeting({
     ));
     const [ id, track ] = allShares.length ? [ allShares[0].id, remoteDesktopTracksRef.current[allShares[0].id] ] : entries[entries.length - 1];
     const stream = trackToStream(track);
-    // eslint-disable-next-line no-console
-    console.log('[SCREEN-SHARE-DEBUG] keeping remoteScreenShare active, presenterId:', id, 'trackMuted:', track.isMuted(), 'streamActive:', stream?.active, 'streamTracks:', stream?.getTracks().map(t => ({ readyState: t.readyState, muted: t.muted })));
 
     setRemoteScreenShare(stream ? { stream, presenterName: remoteNamesRef.current[id] || 'Participant' } : null);
   }, []);
@@ -964,23 +956,17 @@ export function useJitsiMeeting({
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
               if (type === 'audio') {
-                // eslint-disable-next-line no-console
-                console.log('[TILE-DEBUG] remote AUDIO TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted());
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
               } else if (videoType === 'desktop') {
                 // A desktop track that arrives already muted must not be shown as an active
                 // presentation -- Jitsi can deliver a track in a muted state before the first
                 // real frame, and registering it here would present a black/frozen tile until
                 // (if ever) it unmutes.
-                // eslint-disable-next-line no-console
-                console.log('[SCREEN-SHARE-DEBUG] remote desktop TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted());
                 if (!track.isMuted() && isDesktopTrackUsable(track)) {
                   remoteDesktopTracksRef.current[participantId] = track;
                 }
                 recomputeRemoteScreenShare();
               } else {
-                // eslint-disable-next-line no-console
-                console.log('[TILE-DEBUG] remote CAMERA TRACK_ADDED, participantId:', participantId, 'isMuted:', track.isMuted(), 'nativeReadyState:', track.getTrack?.()?.readyState);
                 patchParticipant(participantId, { stream: trackToStream(track), video: !track.isMuted() });
               }
 
@@ -994,8 +980,6 @@ export function useJitsiMeeting({
                   // remoteDesktopTracksRef (and therefore the remote presentation view) pointing
                   // at a track that had stopped producing frames: the last frame froze on
                   // screen and never cleared.
-                  // eslint-disable-next-line no-console
-                  console.log('[SCREEN-SHARE-DEBUG] remote desktop TRACK_MUTE_CHANGED, participantId:', participantId, 'isMuted:', track.isMuted(), 'isSameTrackInRef:', remoteDesktopTracksRef.current[participantId] === track);
                   if (track.isMuted() || !isDesktopTrackUsable(track)) {
                     if (remoteDesktopTracksRef.current[participantId] === track) {
                       delete remoteDesktopTracksRef.current[participantId];
@@ -1005,8 +989,6 @@ export function useJitsiMeeting({
                   }
                   recomputeRemoteScreenShare();
                 } else {
-                  // eslint-disable-next-line no-console
-                  console.log('[TILE-DEBUG] remote CAMERA TRACK_MUTE_CHANGED, participantId:', participantId, 'isMuted:', track.isMuted());
                   patchParticipant(participantId, { video: !track.isMuted() });
                 }
               });
@@ -1021,23 +1003,17 @@ export function useJitsiMeeting({
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
               if (type === 'audio') {
-                // eslint-disable-next-line no-console
-                console.log('[TILE-DEBUG] remote AUDIO TRACK_REMOVED, participantId:', participantId);
                 patchParticipant(participantId, { audioStream: null });
               } else if (videoType === 'desktop') {
                 // Only delete if this is still the SAME track instance stored for this
                 // participant. A late/stale TRACK_REMOVED for an old share (already superseded
                 // by a newer desktop track added since) must not clear the current one out from
                 // under it.
-                // eslint-disable-next-line no-console
-                console.log('[SCREEN-SHARE-DEBUG] remote desktop TRACK_REMOVED, participantId:', participantId, 'isSameTrackInRef:', remoteDesktopTracksRef.current[participantId] === track);
                 if (remoteDesktopTracksRef.current[participantId] === track) {
                   delete remoteDesktopTracksRef.current[participantId];
                   recomputeRemoteScreenShare();
                 }
               } else {
-                // eslint-disable-next-line no-console
-                console.log('[TILE-DEBUG] remote CAMERA TRACK_REMOVED, participantId:', participantId);
                 patchParticipant(participantId, { stream: null, video: false });
               }
             });
@@ -1063,8 +1039,6 @@ export function useJitsiMeeting({
               remoteAvatarsRef.current[id] = avatarUrl;
               // TEMP diagnostic for the "join/leave freezes other tiles" investigation -- remove
               // once root-caused. Unconditional so it shows up on the production build.
-              // eslint-disable-next-line no-console
-              console.log('[TILE-DEBUG] USER_JOINED', id, name, 'at', new Date().toISOString());
               patchParticipant(id, {
                 name,
                 avatarUrl,
@@ -1090,8 +1064,6 @@ export function useJitsiMeeting({
             });
 
             room.on(JitsiMeetJS.events.conference.USER_LEFT, (id: string) => {
-              // eslint-disable-next-line no-console
-              console.log('[TILE-DEBUG] USER_LEFT', id, 'at', new Date().toISOString(), 'remainingIds:', Object.keys(remoteNamesRef.current).filter(x => x !== id));
               delete remoteNamesRef.current[id];
               delete remoteAvatarsRef.current[id];
               delete remoteDesktopTracksRef.current[id];

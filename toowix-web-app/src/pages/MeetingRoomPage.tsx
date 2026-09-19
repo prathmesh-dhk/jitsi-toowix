@@ -211,6 +211,29 @@ export function getParticipantColorTheme(identifier: string, forceIndex?: number
   return PARTICIPANT_COLOR_THEMES[Math.abs(hash) % PARTICIPANT_COLOR_THEMES.length];
 }
 
+function formatDuration(totalSec: number) {
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+
+  return hrs > 0 ? `${hrs}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`;
+}
+
+// Ticks on its own so a running clock never re-renders the whole meeting page.
+const ElapsedClock = memo(function ElapsedClock({ startedAt }: { startedAt: number | null }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (startedAt == null) return;
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  return <>{formatDuration(startedAt == null ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))}</>;
+});
+
 // Live remote camera inside the Picture-in-Picture window.
 function PipRemoteVideo({ stream }: { stream: MediaStream }) {
   const nodeRef = useRef<HTMLVideoElement | null>(null);
@@ -998,8 +1021,8 @@ export function MeetingRoomPage() {
   const [pendingQueue, setPendingQueue] = useState<IWaitingParticipant[]>([]);
 
   // Duration Timer in meeting
-  const [meetingSeconds, setMeetingSeconds] = useState(0);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const meetingStartedAtRef = useRef<number | null>(null);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
   const [remoteParticipants, setRemoteParticipants] = useState<
@@ -2378,7 +2401,7 @@ export function MeetingRoomPage() {
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-    }, 1000);
+    }, 15000);
     return () => clearInterval(timer);
   }, []);
 
@@ -2739,36 +2762,13 @@ export function MeetingRoomPage() {
 
   // Meeting duration timer
   useEffect(() => {
-    if (!hasJoined) return;
-    const timer = setInterval(() => setMeetingSeconds((s) => s + 1), 1000);
-    return () => clearInterval(timer);
+    meetingStartedAtRef.current = hasJoined ? Date.now() : null;
   }, [hasJoined]);
 
-  // Recording timer. Timestamp-based (not a naive per-tick increment) so background-tab
-  // throttling or missed ticks can't make the displayed duration drift from wall-clock time.
+  // Recording clock: only the small <ElapsedClock> re-renders each second, not this whole page.
   useEffect(() => {
-    if (!recording) {
-      recordingStartTimeRef.current = null;
-      setRecordingSeconds(0);
-      return;
-    }
-    recordingStartTimeRef.current = Date.now();
-    const timer = setInterval(() => {
-      if (recordingStartTimeRef.current == null) return;
-      setRecordingSeconds(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
+    setRecordingStartedAt(recording ? Date.now() : null);
   }, [recording]);
-
-  const formatDuration = (totalSec: number) => {
-    const hrs = Math.floor(totalSec / 3600);
-    const mins = Math.floor((totalSec % 3600) / 60);
-    const secs = totalSec % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-    }
-    return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
 
   // ---------------------------------------------------------------------------
   // Jitsi External API Integration
@@ -2814,10 +2814,10 @@ export function MeetingRoomPage() {
       // explicit hangup/dispose call needed here.
       navigate('/meeting-ended', {
         replace: true,
-        state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round(meetingSeconds / 60), displayName },
+        state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName },
       });
     },
-    [navigate, recordAttendanceLeave, roomId, isModerator, meetingSeconds, displayName]
+    [navigate, recordAttendanceLeave, roomId, isModerator, displayName]
   );
 
   const handleEndMeetingForEveryone = async () => {
@@ -3108,7 +3108,7 @@ export function MeetingRoomPage() {
           leaveMeeting('The host has ended the meeting for everyone.');
         }
       } catch { }
-    }, 1000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [hasJoined, roomId, leaveMeeting]);
 
@@ -3203,8 +3203,6 @@ export function MeetingRoomPage() {
 
   // Synchronize remote presentation stream to remote presentation video element
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[SCREEN-SHARE-DEBUG] remote presentation sync effect fired, remoteScreenStream:', !!remoteScreenStream, 'videoNodeMounted:', !!remotePresentationVideoRef.current);
     if (remotePresentationVideoRef.current) {
       remotePresentationVideoRef.current.srcObject = remoteScreenStream;
       if (remoteScreenStream) {
@@ -3982,7 +3980,7 @@ export function MeetingRoomPage() {
                   }}
                 />
                 <span style={{ fontSize: '11px', fontWeight: 600, color: '#EA4335', letterSpacing: '0.4px' }}>
-                  REC {formatDuration(recordingSeconds)} • Recording: on
+                  REC <ElapsedClock startedAt={recordingStartedAt} /> • Recording: on
                 </span>
               </div>
             )}
@@ -5945,7 +5943,7 @@ export function MeetingRoomPage() {
                             {recording ? 'Recording in progress' : 'Record meeting'}
                           </div>
                           <div style={{ fontSize: '12px', color: '#9AA0A6' }}>
-                            {recording ? `Recording: ${formatDuration(recordingSeconds)}` : 'Save session to your workspace cloud'}
+                            {recording ? `Recording: $<ElapsedClock startedAt={recordingStartedAt} />` : 'Save session to your workspace cloud'}
                           </div>
                         </div>
                       </div>

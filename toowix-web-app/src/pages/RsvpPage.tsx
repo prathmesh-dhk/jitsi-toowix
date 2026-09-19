@@ -26,6 +26,7 @@ export function RsvpPage() {
   const [currentStatus, setCurrentStatus] = useState<'accepted' | 'declined'>(
     initialAction === 'declined' || initialAction === 'reject' ? 'declined' : 'accepted'
   );
+  const [stage, setStage] = useState<'choose' | 'thanks'>('choose');
   const [meeting, setMeeting] = useState<IMeetingRsvpData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,7 @@ export function RsvpPage() {
   const [copiedPasscode, setCopiedPasscode] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
 
-  const submitRsvp = async (responseType: 'accepted' | 'declined') => {
+  const submitRsvp = async (responseType: 'accepted' | 'declined' | 'view') => {
     if (!meetingId || !email) {
       setError('Invalid or incomplete invitation link.');
       setLoading(false);
@@ -50,7 +51,10 @@ export function RsvpPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update RSVP');
       setMeeting(data.meeting);
-      setCurrentStatus(responseType);
+      if (responseType !== 'view') {
+        setCurrentStatus(responseType);
+        setStage('thanks');
+      }
       setError(null);
     } catch (err: any) {
       setError(err?.message || 'Could not record RSVP response.');
@@ -60,7 +64,8 @@ export function RsvpPage() {
   };
 
   useEffect(() => {
-    submitRsvp(currentStatus);
+    // Opening the emailed link only loads the invitation; the guest picks Accept or Decline here.
+    submitRsvp('view');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId, email]);
 
@@ -111,50 +116,42 @@ export function RsvpPage() {
     <div
       style={{
         minHeight: '100vh',
-        backgroundColor: '#0F172A',
+        background: 'var(--color-bg)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '24px 16px',
-        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        padding: '96px 24px 32px',
+        fontFamily: 'var(--font-family)',
       }}
     >
-      {/* Brand Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '28px' }}>
-        <div
-          style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '10px',
-            background: 'linear-gradient(135deg, #2E72B2 0%, #4799E3 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '20px',
-          }}
-        >
-          T
-        </div>
-        <span style={{ fontSize: '24px', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.5px' }}>
+      <button
+        type="button"
+        onClick={() => navigate('/')}
+        aria-label="Go to Toowix Meet home"
+        style={{
+          position: 'fixed', top: '24px', left: '28px', display: 'flex', alignItems: 'center', gap: '10px',
+          padding: 0, background: 'transparent', color: 'var(--color-text-primary)', border: 'none', cursor: 'pointer',
+        }}
+      >
+        <img src="/assets/toowix-logo.svg" alt="" width="34" height="34" style={{ display: 'block' }} />
+        <span style={{ fontSize: '20px', fontWeight: 700, letterSpacing: '-0.35px' }}>
           Toowix <span style={{ color: '#6366F1' }}>Meet</span>
         </span>
-      </div>
+      </button>
 
       {/* Main Card */}
       <div
         style={{
           width: '100%',
-          maxWidth: '520px',
-          backgroundColor: '#1E293B',
-          borderRadius: '18px',
-          border: '1px solid #334155',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
-          padding: '32px',
+          maxWidth: '540px',
+          background: 'var(--color-card)',
+          borderRadius: 'var(--radius-xl)',
+          border: '1px solid var(--color-card-border)',
+          boxShadow: 'var(--shadow-lg)',
+          padding: '36px',
           boxSizing: 'border-box',
-          color: '#F1F5F9',
+          color: 'var(--color-text-primary)',
         }}
       >
         {loading ? (
@@ -163,28 +160,28 @@ export function RsvpPage() {
               style={{
                 width: '36px',
                 height: '36px',
-                border: '3px solid #334155',
-                borderTopColor: '#6366F1',
+                border: '3px solid var(--color-border)',
+                borderTopColor: 'var(--color-primary)',
                 borderRadius: '50%',
                 animation: 'spin 1s linear infinite',
                 margin: '0 auto 16px',
               }}
             />
-            <p style={{ color: '#94A3B8', fontSize: '14px', margin: 0 }}>Processing your invitation response...</p>
+            <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px', margin: 0 }}>Loading invitation...</p>
           </div>
         ) : error ? (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
-            <XCircle size={44} color="#EF4444" style={{ margin: '0 auto 12px' }} />
-            <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px', color: '#F87171' }}>
+            <XCircle size={38} color="var(--color-error)" style={{ margin: '0 auto 14px' }} />
+            <h2 style={{ fontSize: '22px', fontWeight: 700, margin: '0 0 8px', color: 'var(--color-text-primary)' }}>
               Invitation Not Found
             </h2>
-            <p style={{ fontSize: '14px', color: '#94A3B8', margin: '0 0 20px' }}>{error}</p>
+            <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', margin: '0 0 24px' }}>{error}</p>
             <button
               onClick={() => navigate('/')}
               style={{
                 padding: '10px 20px',
-                borderRadius: '8px',
-                backgroundColor: '#334155',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-primary)',
                 color: '#FFFFFF',
                 fontWeight: 600,
                 fontSize: '13px',
@@ -194,54 +191,61 @@ export function RsvpPage() {
               Go to Home
             </button>
           </div>
+        ) : stage === 'choose' ? (
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={{ fontSize: '26px', lineHeight: 1.25, fontWeight: 700, letterSpacing: '-0.03em', margin: '0 0 8px', color: 'var(--color-text-primary)' }}>
+              You&apos;re invited{meeting ? `: ${meeting.name}` : ''}
+            </h1>
+            <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', margin: '0 0 26px' }}>
+              {meeting ? `${meeting.hostName} invited ${email}. Will you attend?` : 'Will you attend?'}
+            </p>
+            {meeting && (
+              <div style={{ background: 'var(--color-bg-subtle)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)', padding: '18px', marginBottom: '24px', textAlign: 'left' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)', marginBottom: '10px' }}>
+                  <Calendar size={16} color="var(--color-primary)" style={{ flexShrink: 0 }} />
+                  <span>{formattedDateTime}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)' }}>
+                  <Video size={16} color="var(--color-primary)" style={{ flexShrink: 0 }} />
+                  <span>Hosted by <strong>{meeting.hostName}</strong></span>
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={() => submitRsvp('accepted')}
+                style={{ flex: 1, height: '46px', borderRadius: 'var(--radius-md)', background: 'var(--color-primary)', color: '#FFFFFF', fontSize: '14px', fontWeight: 650, border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(79, 70, 229, 0.2)' }}
+              >
+                Accept
+              </button>
+              <button
+                type="button"
+                onClick={() => submitRsvp('declined')}
+                style={{ flex: 1, height: '46px', borderRadius: 'var(--radius-md)', background: 'transparent', color: 'var(--color-text-secondary)', fontSize: '14px', fontWeight: 650, border: '1px solid var(--color-border)', cursor: 'pointer' }}
+              >
+                Decline
+              </button>
+            </div>
+          </div>
         ) : (
           <div>
             {/* Status Header */}
             {currentStatus === 'accepted' ? (
               <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-                <div
-                  style={{
-                    width: '54px',
-                    height: '54px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    margin: '0 auto 14px',
-                  }}
-                >
-                  <CheckCircle2 size={32} color="#10B981" />
-                </div>
-                <h1 style={{ fontSize: '22px', fontWeight: 800, margin: '0 0 6px', color: '#FFFFFF' }}>
-                  You&apos;re attending!
+                <h1 style={{ fontSize: '26px', lineHeight: 1.25, fontWeight: 700, letterSpacing: '-0.03em', margin: '0 0 8px', color: 'var(--color-text-primary)' }}>
+                  You&apos;re attending
                 </h1>
-                <p style={{ fontSize: '13.5px', color: '#94A3B8', margin: 0 }}>
+                <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', margin: 0 }}>
                   Your RSVP has been confirmed for <strong>{email}</strong>.
                 </p>
               </div>
             ) : (
               <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-                <div
-                  style={{
-                    width: '54px',
-                    height: '54px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    margin: '0 auto 14px',
-                  }}
-                >
-                  <XCircle size={32} color="#EF4444" />
-                </div>
-                <h1 style={{ fontSize: '22px', fontWeight: 800, margin: '0 0 6px', color: '#FFFFFF' }}>
-                  Invitation Declined
+                <h1 style={{ fontSize: '26px', lineHeight: 1.25, fontWeight: 700, letterSpacing: '-0.03em', margin: '0 0 8px', color: 'var(--color-text-primary)' }}>
+                  Thank you for letting us know
                 </h1>
-                <p style={{ fontSize: '13.5px', color: '#94A3B8', margin: 0 }}>
+                <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', margin: 0 }}>
                   You have declined this meeting invitation.
                 </p>
               </div>
@@ -251,38 +255,38 @@ export function RsvpPage() {
             {meeting && (
               <div
                 style={{
-                  backgroundColor: '#0F172A',
-                  borderRadius: '12px',
-                  border: '1px solid #334155',
-                  padding: '20px',
+                  background: 'var(--color-bg-subtle)',
+                  borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--color-border)',
+                  padding: '18px',
                   marginBottom: '24px',
                 }}
               >
-                <div style={{ fontSize: '18px', fontWeight: 700, color: '#FFFFFF', marginBottom: '14px' }}>
+                <div style={{ fontSize: '17px', fontWeight: 700, color: 'var(--color-text-primary)', marginBottom: '16px', letterSpacing: '-0.01em' }}>
                   {meeting.name}
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#CBD5E1' }}>
-                    <Calendar size={15} color="#818CF8" style={{ flexShrink: 0 }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)' }}>
+                    <Calendar size={16} color="var(--color-primary)" style={{ flexShrink: 0 }} />
                     <span>{formattedDateTime}</span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#CBD5E1' }}>
-                    <Video size={15} color="#818CF8" style={{ flexShrink: 0 }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)' }}>
+                    <Video size={16} color="var(--color-primary)" style={{ flexShrink: 0 }} />
                     <span>Hosted by <strong>{meeting.hostName}</strong></span>
                   </div>
 
                   {meeting.passcode && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#CBD5E1' }}>
-                      <Lock size={15} color="#FBBF24" style={{ flexShrink: 0 }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)' }}>
+                      <Lock size={16} color="var(--color-warning)" style={{ flexShrink: 0 }} />
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>Passcode: <strong style={{ color: '#FDE047' }}>{meeting.passcode}</strong></span>
+                        <span>Passcode: <strong style={{ color: 'var(--color-text-primary)' }}>{meeting.passcode}</strong></span>
                         <button
                           type="button"
                           onClick={handleCopyPasscode}
                           title="Copy passcode"
-                          style={{ background: 'transparent', border: 'none', color: copiedPasscode ? '#34D399' : '#94A3B8', cursor: 'pointer', padding: '1px' }}
+                          style={{ background: 'transparent', border: 'none', color: copiedPasscode ? 'var(--color-success)' : 'var(--color-text-muted)', cursor: 'pointer', padding: '1px' }}
                         >
                           {copiedPasscode ? <Check size={13} /> : <Copy size={13} />}
                         </button>
@@ -290,17 +294,17 @@ export function RsvpPage() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#CBD5E1' }}>
-                    <Clock size={15} color="#818CF8" style={{ flexShrink: 0 }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: 'var(--color-text-secondary)' }}>
+                    <Clock size={16} color="var(--color-primary)" style={{ flexShrink: 0 }} />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: '#93C5FD' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: 'var(--color-text-secondary)' }}>
                         {meeting.meetingUrl}
                       </span>
                       <button
                         type="button"
                         onClick={handleCopyLink}
                         title="Copy meeting link"
-                        style={{ background: 'transparent', border: 'none', color: copiedLink ? '#34D399' : '#94A3B8', cursor: 'pointer', padding: '1px', flexShrink: 0 }}
+                        style={{ background: 'transparent', border: 'none', color: copiedLink ? 'var(--color-success)' : 'var(--color-text-muted)', cursor: 'pointer', padding: '1px', flexShrink: 0 }}
                       >
                         {copiedLink ? <Check size={13} /> : <Copy size={13} />}
                       </button>
@@ -317,21 +321,21 @@ export function RsvpPage() {
                   <>
                     <button
                       type="button"
-                      onClick={() => window.open(meeting.meetingUrl, '_blank')}
+                      onClick={() => navigate(`/meet/${encodeURIComponent(meeting.roomSlug)}`)}
                       style={{
                         height: '46px',
-                        borderRadius: '10px',
-                        backgroundColor: '#4F46E5',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-primary)',
                         color: '#FFFFFF',
                         fontSize: '14px',
-                        fontWeight: 700,
+                        fontWeight: 650,
                         border: 'none',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: '8px',
-                        boxShadow: '0 4px 14px rgba(79, 70, 229, 0.4)',
+                        boxShadow: '0 4px 12px rgba(79, 70, 229, 0.22)',
                       }}
                     >
                       <Video size={16} /> Join Video Meeting <ArrowRight size={15} />
@@ -342,10 +346,10 @@ export function RsvpPage() {
                       onClick={() => setShowShareModal(true)}
                       style={{
                         height: '44px',
-                        borderRadius: '10px',
-                        backgroundColor: '#1E293B',
-                        border: '1px solid #4F46E5',
-                        color: '#A5B4FC',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'transparent',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-primary)',
                         fontSize: '13.5px',
                         fontWeight: 600,
                         cursor: 'pointer',
@@ -356,12 +360,12 @@ export function RsvpPage() {
                         transition: 'all 0.15s ease',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = '#4F46E5';
+                        e.currentTarget.style.background = 'var(--color-primary)';
                         e.currentTarget.style.color = '#FFFFFF';
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = '#1E293B';
-                        e.currentTarget.style.color = '#A5B4FC';
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.color = 'var(--color-text-primary)';
                       }}
                     >
                       <Share2 size={15} /> Share Joining Info
@@ -371,7 +375,7 @@ export function RsvpPage() {
                       <button
                         type="button"
                         onClick={() => submitRsvp('declined')}
-                        style={{ background: 'transparent', border: 'none', color: '#94A3B8', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer' }}
+                        style={{ background: 'transparent', border: 'none', color: 'var(--color-text-muted)', fontSize: '12px', textDecoration: 'underline', cursor: 'pointer' }}
                       >
                         Changed your mind? Click here to decline
                       </button>
@@ -384,11 +388,11 @@ export function RsvpPage() {
                       onClick={() => submitRsvp('accepted')}
                       style={{
                         height: '46px',
-                        borderRadius: '10px',
-                        backgroundColor: '#10B981',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--color-primary)',
                         color: '#FFFFFF',
                         fontSize: '14px',
-                        fontWeight: 700,
+                        fontWeight: 650,
                         border: 'none',
                         cursor: 'pointer',
                         display: 'flex',
@@ -405,10 +409,10 @@ export function RsvpPage() {
                       onClick={() => navigate('/')}
                       style={{
                         height: '44px',
-                        borderRadius: '10px',
-                        backgroundColor: '#334155',
-                        border: 'none',
-                        color: '#F1F5F9',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'transparent',
+                        border: '1px solid var(--color-border)',
+                        color: 'var(--color-text-primary)',
                         fontSize: '13.5px',
                         fontWeight: 600,
                         cursor: 'pointer',
