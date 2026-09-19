@@ -972,6 +972,15 @@ export function useJitsiMeeting({
                 try {
                   track.addEventListener(JitsiMeetJS.events.track.TRACK_AUDIO_LEVEL_CHANGED, (level: number) => {
                     setSpeakingLevel(participantId, track.isMuted() ? 0 : level);
+                    // Someone whose audio is actually coming through is not muted -- correct a
+                    // stale "muted" flag instead of showing a muted mic on a talking person.
+                    if (level > 0.06) {
+                      setRemoteParticipants((prev) => (
+                        prev[participantId]?.muted
+                          ? { ...prev, [participantId]: { ...prev[participantId], muted: false } }
+                          : prev
+                      ));
+                    }
                   });
                 } catch { /* audio levels unavailable */ }
               } else if (videoType === 'desktop') {

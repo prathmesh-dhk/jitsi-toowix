@@ -1182,7 +1182,11 @@ export function MeetingRoomPage() {
   const [recordingToast, setRecordingToast] = useState<string | null>(null);
   const [chatToasts, setChatToasts] = useState<Array<{ id: string; sender: string; text: string }>>([]);
   const activePanelRef = useRef<string | null>(null);
-  useEffect(() => { activePanelRef.current = activePanel; }, [activePanel]);
+  const [unreadChat, setUnreadChat] = useState(0);
+  useEffect(() => {
+    activePanelRef.current = activePanel;
+    if (activePanel === 'chat') setUnreadChat(0);
+  }, [activePanel]);
   const [participantToast, setParticipantToast] = useState<string | null>(null);
   const [timeLimitToast, setTimeLimitToast] = useState<string | null>(null);
   // Tracks who was already in the room so the very first roster population (when I join and see
@@ -3630,6 +3634,7 @@ export function MeetingRoomPage() {
         ]);
         playChatMessageTone();
         if (activePanelRef.current !== 'chat') {
+          setUnreadChat((n) => n + 1);
           setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text } ]);
           setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== chatId)), 5000);
         }
@@ -6436,6 +6441,14 @@ export function MeetingRoomPage() {
               }}
             >
               <MoreVertical size={20} color={showMoreMenu ? '#202124' : '#E8EAED'} />
+              {unreadChat > 0 && (
+                <span
+                  className="tw-mobile-only"
+                  style={{ position: 'absolute', top: '-2px', right: '-2px', minWidth: '18px', height: '18px', padding: '0 5px', borderRadius: '9px', backgroundColor: '#EA4335', color: '#FFFFFF', fontSize: '11px', fontWeight: 700, lineHeight: '18px', justifyContent: 'center', boxSizing: 'border-box', border: '2px solid #202124' }}
+                >
+                  {unreadChat > 9 ? '9+' : unreadChat}
+                </span>
+              )}
             </button>
             {/* More Menu Dropdown */}
             {showMoreMenu && (
@@ -6459,7 +6472,7 @@ export function MeetingRoomPage() {
               >
                 <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'chat' ? null : 'chat'); }} style={menuButtonStyle(activePanel === 'chat')}>
                   <MessageSquare size={16} />
-                  Chat
+                  {unreadChat > 0 ? `Chat (${unreadChat})` : 'Chat'}
                 </button>
                 <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'people' ? null : 'people'); }} style={menuButtonStyle(activePanel === 'people')}>
                   <Users size={16} />
@@ -6917,6 +6930,7 @@ export function MeetingRoomPage() {
             onClick={() => setActivePanel(activePanel === 'chat' ? null : 'chat')}
             title="Chat with everyone"
             style={{
+              position: 'relative',
               width: '38px',
               height: '38px',
               borderRadius: '50%',
@@ -6930,6 +6944,30 @@ export function MeetingRoomPage() {
             }}
           >
             <MessageSquare size={18} color={activePanel === 'chat' ? '#202124' : '#E8EAED'} />
+            {unreadChat > 0 && (
+              <span
+                aria-label={`${unreadChat} unread messages`}
+                style={{
+                  position: 'absolute',
+                  top: '-4px',
+                  right: '-4px',
+                  minWidth: '18px',
+                  height: '18px',
+                  padding: '0 5px',
+                  borderRadius: '9px',
+                  backgroundColor: '#EA4335',
+                  color: '#FFFFFF',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  lineHeight: '18px',
+                  textAlign: 'center',
+                  boxSizing: 'border-box',
+                  border: '2px solid #202124',
+                }}
+              >
+                {unreadChat > 9 ? '9+' : unreadChat}
+              </span>
+            )}
           </button>
 
           {/* Activities Button */}
