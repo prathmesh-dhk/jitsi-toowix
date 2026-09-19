@@ -5655,9 +5655,28 @@ export function MeetingRoomPage() {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Button 1: Microphone with live input animation. Device selection remains available
-              in Audio & Video Settings, so the toolbar stays uncluttered. */}
+          {/* Button 1: Microphone with live input animation, and its own Device Menu (same
+              pattern as the camera button right after it). */}
           <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
+            <button
+              onClick={() => {
+                setShowAudioMenu(!showAudioMenu);
+                setShowVideoMenu(false);
+              }}
+              title="Select microphone"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#E8EAED',
+                cursor: 'pointer',
+                padding: '4px 2px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              <ChevronUp size={16} />
+            </button>
             <button
               onClick={handleToggleInCallMic}
               title={inCallMuted ? 'Turn on microphone (M)' : 'Turn off microphone (M)'}
@@ -5678,6 +5697,50 @@ export function MeetingRoomPage() {
               {inCallMuted ? <MicOff size={20} color="#EA4335" /> : <Mic size={20} color="#E8EAED" />}
               {!inCallMuted && <span className="mic-activity" aria-hidden="true"><i /><i /><i /></span>}
             </button>
+
+            {/* Audio Device Dropdown Menu */}
+            {showAudioMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '56px',
+                  left: 0,
+                  backgroundColor: '#2D2E30',
+                  borderRadius: '16px',
+                  padding: '8px',
+                  minWidth: '220px',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  zIndex: 150,
+                }}
+              >
+                <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
+                  Microphone
+                </div>
+                {media.devices.filter((d) => d.kind === 'audioinput').map((d) => (
+                  <button
+                    key={d.deviceId}
+                    onClick={() => handleSelectAudioDevice(d.deviceId)}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '8px 10px',
+                      background: audioId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
+                      color: '#E8EAED',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {d.label || `Microphone (${d.deviceId.slice(0, 5)})`}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Button 2: Camera with Device Menu */}
