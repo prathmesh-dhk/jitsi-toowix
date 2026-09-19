@@ -2794,7 +2794,12 @@ export function MeetingRoomPage() {
     existingStream: mediaStreamRef.current,
     audioDeviceId: audioId,
     videoDeviceId: videoId,
-    onKicked: () => leaveMeeting('You were removed from the meeting by a moderator.')
+    onKicked: () => leaveMeeting('You were removed from the meeting by a moderator.'),
+    onForceMuted: () => {
+      playTimeWarningTone();
+      setParticipantToast('You have been muted by the host');
+      setTimeout(() => setParticipantToast((t) => (t === 'You have been muted by the host' ? null : t)), 5000);
+    }
   });
 
   // Reconcile the custom mic/video buttons and self-view with the real conference state.

@@ -70,6 +70,9 @@ interface IUseJitsiMeetingOptions {
   audioDeviceId?: string;
   videoDeviceId?: string;
   onKicked?: () => void;
+  // Fired when the local mic gets muted by something other than this app's own toggleAudio()
+  // call -- in practice, a moderator's muteParticipant(). Never fires for a self-click.
+  onForceMuted?: () => void;
   // An already-open MediaStream (e.g. from a prejoin lobby preview) whose live audio/video
   // tracks should be adopted directly instead of requesting fresh ones from the browser. Read
   // once, at the moment local track acquisition starts -- not reactive, since re-adopting on
@@ -358,6 +361,7 @@ export function useJitsiMeeting({
   audioDeviceId,
   videoDeviceId,
   onKicked,
+  onForceMuted,
   existingStream
 }: IUseJitsiMeetingOptions) {
   const [ connected, setConnected ] = useState(false);
@@ -460,6 +464,8 @@ export function useJitsiMeeting({
   const remoteNamesRef = useRef<Record<string, string>>({});
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
   const onKickedRef = useRef(onKicked);
+  const onForceMutedRef = useRef(onForceMuted);
+  const selfInitiatedMuteRef = useRef(false);
   const existingStreamRef = useRef(existingStream);
   const cameraRetryInFlightRef = useRef(false);
   const deviceIdsRef = useRef({ audioDeviceId, videoDeviceId });
@@ -510,6 +516,7 @@ export function useJitsiMeeting({
   // demonstrably changing value across many subsequent renders -- the direct assignment below
   // fixes that by construction, since it runs on every render with no dependency array to miss).
   onKickedRef.current = onKicked;
+  onForceMutedRef.current = onForceMuted;
   existingStreamRef.current = existingStream;
   deviceIdsRef.current = { audioDeviceId, videoDeviceId };
 
@@ -1217,6 +1224,24 @@ export function useJitsiMeeting({
             audioTrack.mute();
             setLocalAudioMuted(true);
           }
+          // The ONLY place localAudioMuted used to update was this hook's own toggleAudio() --
+          // purely optimistic local state, never synced back from the track's real mute status.
+          // That's correct for a self-click, but a moderator's muteParticipant() call mutes this
+          // track from OUTSIDE this app entirely (lib-jitsi-meet applies it internally on
+          // receiving the server-relayed request) -- the actual audio goes silent immediately,
+          // but nothing ever told React, so the toolbar mic button kept showing "unmuted"
+          // indefinitely. Listening to the track's own event is the single source of truth
+          // regardless of who/what caused the change; selfInitiatedMuteRef (set in toggleAudio)
+          // is only used to decide whether to also fire onForceMuted for a toast.
+          audioTrack.addEventListener(JitsiMeetJS.events.track.TRACK_MUTE_CHANGED, () => {
+            const muted = audioTrack.isMuted();
+
+            setLocalAudioMuted(muted);
+            if (muted && !selfInitiatedMuteRef.current) {
+              onForceMutedRef.current?.();
+            }
+            selfInitiatedMuteRef.current = false;
+          });
         }
         if (videoTrack) {
           myVideoTrack = videoTrack;
@@ -1365,6 +1390,10 @@ export function useJitsiMeeting({
       track.unmute();
       setLocalAudioMuted(false);
     } else {
+      // Marks this specific mute as self-initiated so the TRACK_MUTE_CHANGED listener (set up
+      // where the track was created) doesn't fire onForceMuted for a click the user made
+      // themselves -- that toast/sound is only for a moderator muting them from outside.
+      selfInitiatedMuteRef.current = true;
       track.mute();
       setLocalAudioMuted(true);
     }
