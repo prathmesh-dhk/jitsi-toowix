@@ -3064,24 +3064,6 @@ export function MeetingRoomPage() {
     jitsiMeeting.toggleVideo();
   };
 
-  const handleRemoteAudioControl = useCallback((participantId: string, muted: boolean) => {
-    if (!isModerator) return;
-    const room = jitsiMeeting.room.current;
-    if (!room) return;
-
-    try {
-      if (muted) {
-        // Jitsi requires the participant's consent to turn their microphone on.
-        room.askToUnmute?.(participantId, 'audio');
-        setParticipantToast('Unmute request sent.');
-      } else {
-        room.muteParticipant?.(participantId, 'audio');
-      }
-    } catch {
-      setCallError('Could not update this participant’s microphone. Please try again.');
-    }
-  }, [isModerator, jitsiMeeting.room]);
-
   useEffect(() => {
     toggleInCallMicRef.current = handleToggleInCallMic;
     toggleInCallVideoRef.current = handleToggleInCallVideo;
@@ -3213,6 +3195,29 @@ export function MeetingRoomPage() {
     [roomId, displayName]
   );
 
+  const handleRemoteAudioControl = useCallback((participantId: string, muted: boolean) => {
+    if (!isModerator) return;
+    const room = jitsiMeeting.room.current;
+    if (!room) return;
+
+    if (muted) {
+      // lib-jitsi-meet's installed version has no remote-unmute API at all (verified directly
+      // against the library -- no askToUnmute, and muteParticipant only ever mutes, it can't be
+      // called the other way). A host can never force someone else's mic on anyway -- that's a
+      // privacy boundary, not a missing feature -- so this sends the SAME kind of custom signal
+      // already used for hand-raise/chat/reactions, targeted at that one participant by their
+      // real Jitsi id; the receiving client shows a prompt and unmutes only if they act on it.
+      postRoomSignal('UNMUTE_REQUESTED', { targetParticipantId: participantId, requesterName: displayName || 'The host' });
+      setParticipantToast('Unmute request sent.');
+      return;
+    }
+    try {
+      room.muteParticipant?.(participantId, 'audio');
+    } catch {
+      setCallError('Could not update this participant’s microphone. Please try again.');
+    }
+  }, [isModerator, jitsiMeeting.room, postRoomSignal, displayName]);
+
   const handleToggleRaiseHand = () => {
     const nextRaised = !isHandRaised;
     setIsHandRaised(nextRaised);
@@ -3296,6 +3301,15 @@ export function MeetingRoomPage() {
             text,
           },
         ]);
+      } else if (type === 'UNMUTE_REQUESTED') {
+        // Consent-based unmute (see handleRemoteAudioControl): only the person actually being
+        // asked reacts to this -- everyone else's client just ignores it.
+        if (payload?.targetParticipantId !== jitsiMeeting.localParticipantId) return;
+        const requesterName = typeof payload?.requesterName === 'string' ? payload.requesterName : 'The host';
+
+        playTimeWarningTone();
+        setParticipantToast(`${requesterName} is asking you to unmute`);
+        setTimeout(() => setParticipantToast((t) => (t === `${requesterName} is asking you to unmute` ? null : t)), 6000);
       } else if (type === 'REACTION') {
         const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
 
@@ -3333,7 +3347,7 @@ export function MeetingRoomPage() {
       clearInterval(interval);
       handleIncomingSignalRef.current = null;
     };
-  }, [hasJoined, roomId, isScreenSharing, postRoomSignal]);
+  }, [hasJoined, roomId, isScreenSharing, postRoomSignal, jitsiMeeting.localParticipantId]);
 
   // Apply a device change to the live conference via lib-jitsi-meet's own replaceTrack --
   // updating only React state here would leave the UI showing one device while the conference
