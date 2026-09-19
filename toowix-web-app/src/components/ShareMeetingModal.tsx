@@ -6,6 +6,9 @@ import {
   Lock,
 } from 'lucide-react';
 import { useTheme } from '../lib/theme';
+import { auth } from '../lib/firebase';
+import { ContactPicker } from './ContactPicker';
+import { inviteByEmail } from '../lib/contactsApi';
 
 export interface IShareMeetingData {
   name: string;
@@ -27,6 +30,11 @@ export function ShareMeetingModal({ isOpen, onClose, meeting }: IShareMeetingMod
   const { isDark } = useTheme();
   const [copiedPasscode, setCopiedPasscode] = useState(false);
   const [copiedPreview, setCopiedPreview] = useState(false);
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -41,6 +49,38 @@ export function ShareMeetingModal({ isOpen, onClose, meeting }: IShareMeetingMod
   }, [isOpen, onClose]);
 
   if (!isOpen || !meeting) return null;
+
+  const roomSlug = meeting.roomSlug || (meeting.meetingUrl.match(/\/meet\/([^/?#]+)/)?.[1] ?? '');
+  const canInvite = Boolean(auth.currentUser && roomSlug);
+
+  const addTypedEmails = () => {
+    const emails = inviteInput
+      .split(/[,;\s]+/)
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+
+    if (emails.length === 0) {
+      return;
+    }
+    setInviteEmails((prev) => Array.from(new Set([...prev, ...emails])));
+    setInviteInput('');
+    setInviteMessage(null);
+  };
+
+  const sendInvites = async () => {
+    setSending(true);
+    setInviteMessage(null);
+    try {
+      const sent = await inviteByEmail(roomSlug, inviteEmails);
+
+      setInviteMessage({ ok: true, text: `Invitation sent to ${sent} ${sent === 1 ? 'person' : 'people'}.` });
+      setInviteEmails([]);
+    } catch (err: any) {
+      setInviteMessage({ ok: false, text: err.message || 'Could not send the invitations.' });
+    } finally {
+      setSending(false);
+    }
+  };
 
   const formattedDate = meeting.scheduledAt
     ? new Date(meeting.scheduledAt).toLocaleString(undefined, {
@@ -235,6 +275,52 @@ export function ShareMeetingModal({ isOpen, onClose, meeting }: IShareMeetingMod
                 {copiedPasscode ? <Check size={13} /> : <Copy size={13} />}
                 <span>{copiedPasscode ? 'Copied' : 'Copy'}</span>
               </button>
+            </div>
+          )}
+
+          {/* Invite people by email, typed or picked from the contact book */}
+          {canInvite && (
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: isDark ? '#D1D5DB' : '#374151', marginBottom: '6px' }}>
+                Invite by email
+              </div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <input
+                  type="email"
+                  value={inviteInput}
+                  onChange={(e) => setInviteInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTypedEmails(); } }}
+                  placeholder="Enter email address"
+                  style={{ flex: 1, minWidth: 0, height: '38px', padding: '0 12px', borderRadius: '8px', border: isDark ? '1px solid #3A3D45' : '1px solid #D1D5DB', backgroundColor: isDark ? '#111215' : '#FFFFFF', color: isDark ? '#F3F4F6' : '#111827', fontSize: '13px', outline: 'none' }}
+                />
+                <button type="button" onClick={addTypedEmails} disabled={!inviteInput.trim()} style={{ padding: '0 12px', borderRadius: '8px', border: 'none', backgroundColor: inviteInput.trim() ? '#4F46E5' : '#E5E7EB', color: inviteInput.trim() ? '#FFFFFF' : '#9CA3AF', fontSize: '12.5px', fontWeight: 700, cursor: inviteInput.trim() ? 'pointer' : 'not-allowed' }}>
+                  Add
+                </button>
+                <button type="button" onClick={() => setShowPicker(true)} style={{ padding: '0 12px', borderRadius: '8px', border: '1px solid #C7D2FE', backgroundColor: 'transparent', color: '#818CF8', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  Contacts
+                </button>
+              </div>
+              {inviteEmails.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+                  {inviteEmails.map((email) => (
+                    <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '12px', backgroundColor: isDark ? '#1F2340' : '#EEF2FF', color: isDark ? '#A5B4FC' : '#4338CA', fontSize: '12px' }}>
+                      {email}
+                      <button type="button" aria-label={`Remove ${email}`} onClick={() => setInviteEmails((prev) => prev.filter((x) => x !== email))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, display: 'flex' }}>
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {inviteEmails.length > 0 && (
+                <button type="button" onClick={sendInvites} disabled={sending} style={{ marginTop: '10px', width: '100%', padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: sending ? '#A5B4FC' : '#4F46E5', color: '#FFFFFF', fontWeight: 700, fontSize: '13px', cursor: sending ? 'not-allowed' : 'pointer' }}>
+                  {sending ? 'Sending...' : `Send invitation to ${inviteEmails.length} ${inviteEmails.length === 1 ? 'person' : 'people'}`}
+                </button>
+              )}
+              {inviteMessage && (
+                <p role="status" style={{ margin: '8px 0 0', fontSize: '12.5px', color: inviteMessage.ok ? '#10B981' : '#EF4444' }}>{inviteMessage.text}</p>
+              )}
+              <ContactPicker isOpen={showPicker} onClose={() => setShowPicker(false)} alreadyAdded={inviteEmails} onAdd={(emails) => setInviteEmails((prev) => Array.from(new Set([...prev, ...emails])))} />
             </div>
           )}
 

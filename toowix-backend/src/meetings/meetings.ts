@@ -638,6 +638,77 @@ export const deleteMeetingHandler = async (req: AuthenticatedRequest, res: Respo
 };
 
 /**
+ * POST /api/meetings/room/:roomSlug/invite  { emails: string[] }
+ * Emails the meeting invitation (with Accept / Decline links) to more people, from the in-call
+ * "Add others" dialog or the share dialog. For a saved meeting the caller must be its host and
+ * the people are added to the invite list; a quick instant room just gets the link emailed.
+ */
+export const inviteToMeetingHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const room = String(req.params.roomSlug).toLowerCase();
+    if (!/^[a-z0-9-]{3,100}$/.test(room)) { res.status(400).json({ error: 'Invalid room code' }); return; }
+    const raw = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const emails: string[] = Array.from(new Set<string>(
+      raw.map((e: any) => String(e).trim().toLowerCase()).filter((e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && e.length <= 254)
+    ));
+    if (emails.length === 0) { res.status(400).json({ error: 'Add at least one valid email address.' }); return; }
+    if (emails.length > 20) { res.status(400).json({ error: 'You can invite up to 20 people at a time.' }); return; }
+
+    const account: any = req.accountUser;
+    const user = account?.id ? await User.findById(account.id) : null;
+    if (!user) { res.status(401).json({ error: 'Sign in to invite people.' }); return; }
+
+    const meeting: any = await Meeting.findOne({ roomSlug: room });
+    if (meeting && !mayManageResource(user, meeting)) {
+      res.status(403).json({ error: 'Only the meeting host can invite people.' });
+      return;
+    }
+
+    const roomUrl = `${emailConfig.appUrl}/meet/${room}`;
+    let topic = 'Toowix meeting';
+    let dateTime = 'Starting now';
+    let passcode = 'Not required';
+    if (meeting) {
+      topic = meeting.name;
+      if (meeting.scheduledAt) {
+        dateTime = new Date(meeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      }
+      passcode = meeting.passcode || 'Not required';
+      const known = new Set<string>((meeting.rsvps || []).map((r: any) => String(r.email).toLowerCase()));
+      const newRsvps = emails.filter((e) => !known.has(e)).map((e) => ({ email: e, status: 'pending' as const }));
+      await Meeting.updateOne(
+        { _id: meeting._id },
+        { $addToSet: { invitees: { $each: emails } }, ...(newRsvps.length ? { $push: { rsvps: { $each: newRsvps } } } : {}) }
+      );
+    }
+
+    emails.forEach((to) => {
+      const enc = encodeURIComponent(to);
+      sendEmailAsync({
+        to,
+        templateName: 'E9_MEETING_INVITE',
+        subject: `${user.fullName} invited you to "${topic}" - Toowix Meet`,
+        templateVariables: {
+          meeting_topic: topic,
+          host_name: user.fullName,
+          date_time: dateTime,
+          room_url: roomUrl,
+          passcode,
+          accept_url: meeting ? `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${enc}&response=accepted` : roomUrl,
+          reject_url: meeting ? `${emailConfig.appUrl}/rsvp?meetingId=${meeting._id}&email=${enc}&response=declined` : roomUrl,
+        },
+        metadata: { companyId: String(user.companyId || ''), userId: String(user._id) },
+      });
+    });
+
+    res.json({ success: true, sent: emails.length });
+  } catch (error: any) {
+    console.error('[Meetings] Error inviting people:', error.message);
+    res.status(500).json({ error: 'Could not send the invitations' });
+  }
+};
+
+/**
  * POST /api/meetings/rsvp or GET /api/meetings/rsvp
  * Public endpoint for accepting or declining a meeting invitation.
  */

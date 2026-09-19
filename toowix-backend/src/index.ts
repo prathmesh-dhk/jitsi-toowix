@@ -72,6 +72,7 @@ import { startMeetingReminderScheduler } from './notifications/meetingReminders'
 import { startMeetingRetentionScheduler } from './meetings/retention';
 import { startRecordingRetentionScheduler } from './recordings/retention';
 import settingsRoutes from './routes/settings.routes';
+import contactRoutes from './routes/contact.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
@@ -80,6 +81,7 @@ app.use('/api/recordings', recordingRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/contacts', contactRoutes);
 // Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));

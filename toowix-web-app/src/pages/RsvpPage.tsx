@@ -234,7 +234,7 @@ export function RsvpPage() {
             {currentStatus === 'accepted' ? (
               <div style={{ textAlign: 'center', marginBottom: '24px' }}>
                 <h1 style={{ fontSize: '26px', lineHeight: 1.25, fontWeight: 700, letterSpacing: '-0.03em', margin: '0 0 8px', color: 'var(--color-text-primary)' }}>
-                  You&apos;re attending
+                  Thank you! You&apos;re attending.
                 </h1>
                 <p style={{ fontSize: '14px', color: 'var(--color-text-secondary)', margin: 0 }}>
                   Your RSVP has been confirmed for <strong>{email}</strong>.

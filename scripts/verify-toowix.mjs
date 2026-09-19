@@ -136,7 +136,7 @@ group('5. Private-meeting rules (static)');
 const ADM = 'toowix-backend/src/meetings/admission.ts';
 const WAIT = 'toowix-backend/src/meetings/waitingRoom.ts';
 await check('Private join = password + waiting room (mayJoin)', () => has(ADM, 'export function mayJoin') && has(ADM, "meeting.type === 'Private'"));
-await check('non-creator cannot bypass lobby on Private', () => has(ADM, "meeting?.type === 'Private' && !isCreator") && has(WAIT, "meeting?.type !== 'Private'"));
+await check('non-creator cannot bypass lobby on Private', () => has(ADM, "(meeting?.type === 'Private' || isLocked) && !isCreator") && has(WAIT, "meeting?.type !== 'Private' && !meeting?.lockedPassword"));
 await check('client sends Private joins to lobby knock', () => has(PAGE, "meetingInfo?.type === 'Private'"));
 await check('waiting-room saves tolerate legacy "Host" role', () => (read(WAIT).match(/validateBeforeSave: false/g) || []).length >= 4 && has(ADM, "'Organizer' : 'Participant'"));
 await check('password is mandatory for Private meetings', () => has('toowix-backend/src/meetings/meetings.ts', 'A password is required for private meetings.'));

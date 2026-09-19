@@ -15,6 +15,7 @@ import {
   X as XIcon,
 } from 'lucide-react';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
+import { ContactPicker } from './ContactPicker';
 import { ScheduledMeetingCardModal, IScheduledMeetingDetails } from './ScheduledMeetingCardModal';
 import { ShareMeetingModal, IShareMeetingData } from './ShareMeetingModal';
 
@@ -86,6 +87,7 @@ export function ScheduleCalendar({
   const [passcode, setPasscode] = useState('');
   const [attendeeInput, setAttendeeInput] = useState('');
   const [inviteesList, setInviteesList] = useState<string[]>([]);
+  const [showContactPicker, setShowContactPicker] = useState(false);
   const [recurrence, setRecurrence] = useState<'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY'>('NONE');
   const [recurrenceUntil, setRecurrenceUntil] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -706,7 +708,7 @@ export function ScheduleCalendar({
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: '#4B5563', marginBottom: '4px' }}>
                   <Users size={12} /> Add Attendees / Invitees
                 </label>
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                   <input
                     type="email"
                     value={attendeeInput}
@@ -719,7 +721,9 @@ export function ScheduleCalendar({
                     }}
                     placeholder="Enter email (e.g. piyush@dhkinnovations.com)..."
                     style={{
-                      flex: 1,
+                      flex: '1 1 100%',
+                      minWidth: 0,
+                      width: '100%',
                       height: '40px',
                       padding: '0 11px',
                       borderRadius: '8px',
@@ -733,6 +737,8 @@ export function ScheduleCalendar({
                     type="button"
                     onClick={handleAddAttendee}
                     style={{
+                      flex: 1,
+                      justifyContent: 'center',
                       padding: '0 14px',
                       height: '40px',
                       borderRadius: '8px',
@@ -749,7 +755,37 @@ export function ScheduleCalendar({
                   >
                     <Plus size={14} /> Add
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowContactPicker(true)}
+                    title="Choose from your contact book"
+                    style={{
+                      flex: 1,
+                      justifyContent: 'center',
+                      padding: '0 12px',
+                      height: '40px',
+                      borderRadius: '8px',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #C7D2FE',
+                      color: '#4F46E5',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <Users size={14} /> Contacts
+                  </button>
                 </div>
+                <ContactPicker
+                  isOpen={showContactPicker}
+                  onClose={() => setShowContactPicker(false)}
+                  alreadyAdded={inviteesList}
+                  onAdd={(emails) => setInviteesList((prev) => Array.from(new Set([...prev, ...emails])))}
+                />
                 <p style={{ fontSize: '11px', color: '#9CA3AF', margin: '4px 0 0' }}>
                   Invitation email with Accept & Decline options will be sent to added attendees.
                 </p>

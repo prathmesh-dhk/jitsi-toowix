@@ -25,6 +25,7 @@ import {
   Sun,
   Moon,
   Share2,
+  Contact as ContactIcon,
 } from 'lucide-react';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { auth } from '../lib/firebase';
@@ -33,6 +34,7 @@ import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting
 import { useTheme } from '../lib/theme';
 import { ScheduleCalendar } from '../components/ScheduleCalendar';
 import { RecordingsPanel } from '../components/RecordingsPanel';
+import { ContactBookPanel } from '../components/ContactBookPanel';
 import { PastMeetingsPanel } from '../components/PastMeetingsPanel';
 import { UpcomingMeetingsPanel } from '../components/UpcomingMeetingsPanel';
 import { PeoplePanel } from '../components/PeoplePanel';
@@ -42,8 +44,8 @@ import { NotificationToasts } from '../components/NotificationToasts';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'people' | 'teams';
-const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'people', 'teams'];
+type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams';
+const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams'];
 
 interface IMeeting {
   id: string;
@@ -542,6 +544,7 @@ export function DashboardPage() {
             { key: 'upcoming', label: 'Upcoming', icon: <Clock size={18} />, action: () => { setActiveTab('upcoming'); setSidebarOpen(false); } },
             { key: 'past', label: 'Past Meetings', icon: <History size={18} />, action: () => { setActiveTab('past'); setSidebarOpen(false); } },
             { key: 'recordings', label: 'Recordings', icon: <Video size={18} />, action: () => { setActiveTab('recordings'); setSidebarOpen(false); } },
+            { key: 'contacts', label: 'Contact book', icon: <ContactIcon size={18} />, action: () => { setActiveTab('contacts'); setSidebarOpen(false); } },
           ].map((item) => (
             <button
               key={item.key}
@@ -928,6 +931,8 @@ export function DashboardPage() {
               currentUser={currentUser}
               onSchedule={handleScheduleMeeting}
             />
+          ) : activeTab === 'contacts' ? (
+            <ContactBookPanel />
           ) : activeTab === 'recordings' ? (
             <RecordingsPanel />
           ) : activeTab === 'past' ? (

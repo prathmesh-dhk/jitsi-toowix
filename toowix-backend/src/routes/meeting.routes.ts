@@ -10,6 +10,7 @@ import {
   cancelMeetingHandler,
   deleteMeetingHandler,
   rsvpMeetingHandler,
+  inviteToMeetingHandler,
 } from '../meetings/meetings';
 import {
   knockLobbyHandler,
@@ -41,6 +42,7 @@ router.post('/room/:roomSlug/signal', optionalAccount, postSignalHandler);
 router.get('/room/:roomSlug/signal', optionalAccount, getSignalsHandler);
 
 // Google Meet Waiting Room & Host Admission routes
+router.post('/room/:roomSlug/invite', meetingAccessRateLimiter, verifyFirebaseToken, inviteToMeetingHandler);
 router.post('/room/:roomSlug/lock', meetingAccessRateLimiter, optionalAccount, lockMeetingHandler);
 router.post('/room/:roomSlug/unlock', meetingAccessRateLimiter, optionalAccount, unlockMeetingHandler);
 router.post('/room/:roomSlug/lobby/knock', meetingAccessRateLimiter, optionalAccount, knockLobbyHandler);
