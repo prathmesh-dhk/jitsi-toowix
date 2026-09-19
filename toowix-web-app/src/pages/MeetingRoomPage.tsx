@@ -2478,9 +2478,13 @@ export function MeetingRoomPage() {
   const meetingInfoRef = useRef(meetingInfo);
 
   const accountHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    if (participation === 'guest') return {};
     await auth.authStateReady();
-    if (!auth.currentUser) throw new Error('Sign in before choosing account joining.');
+    // Someone who is signed in always joins as themselves. Joining as an anonymous guest while signed
+    // in dropped host rights (no moderator token), which is what made "Record" fail with not-allowed.
+    if (!auth.currentUser) {
+      if (participation === 'guest') return {};
+      throw new Error('Sign in before choosing account joining.');
+    }
     return {
       Authorization: `Bearer ${await auth.currentUser.getIdToken()}`,
       'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
@@ -3330,9 +3334,15 @@ export function MeetingRoomPage() {
       setTimeout(() => setRecordingToast((t) => (t === 'Requesting recording…' ? null : t)), 3500);
       try {
         await jitsiMeeting.startRecording();
-      } catch {
+      } catch (err: any) {
         setRecordingToast(null);
-        setCallError('Could not start recording. Please try again.');
+        const detail = `${err?.message || ''} ${JSON.stringify(err || '')}`.toLowerCase();
+
+        setCallError(
+          detail.includes('not-allowed') || detail.includes('forbidden')
+            ? 'Only the meeting host can record. Sign in with the host account and start or join this meeting from your dashboard, then try again.'
+            : 'Could not start recording. Please try again.'
+        );
       }
     }
   };
