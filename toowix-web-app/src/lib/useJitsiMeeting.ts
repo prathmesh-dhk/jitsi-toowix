@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { setSpeakingLevel, clearSpeaking } from './speakingStore';
 
 // Type-only -- the runtime implementations (TensorFlow/MediaPipe segmentation model, RNNoise
 // WASM module) are heavy and only actually needed if a participant turns these features on, so
@@ -309,6 +310,15 @@ async function acquireLocalTracks(
   }
 
   return result;
+}
+
+// Feeds the local mic level into the speaking store (id 'local') for the tile animation.
+function attachLocalSpeaking(track: any) {
+  try {
+    track?.addEventListener?.('track.audioLevelsChanged', (level: number) => {
+      setSpeakingLevel('local', track.isMuted?.() ? 0 : level);
+    });
+  } catch { /* audio levels unavailable */ }
 }
 
 function trackToStream(track: any): MediaStream | null {
@@ -959,6 +969,11 @@ export function useJitsiMeeting({
 
               if (type === 'audio') {
                 patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
+                try {
+                  track.addEventListener(JitsiMeetJS.events.track.TRACK_AUDIO_LEVEL_CHANGED, (level: number) => {
+                    setSpeakingLevel(participantId, track.isMuted() ? 0 : level);
+                  });
+                } catch { /* audio levels unavailable */ }
               } else if (videoType === 'desktop') {
                 // A desktop track that arrives already muted must not be shown as an active
                 // presentation -- Jitsi can deliver a track in a muted state before the first
@@ -1066,6 +1081,7 @@ export function useJitsiMeeting({
             });
 
             room.on(JitsiMeetJS.events.conference.USER_LEFT, (id: string) => {
+              clearSpeaking(id);
               delete remoteNamesRef.current[id];
               delete remoteAvatarsRef.current[id];
               delete remoteDesktopTracksRef.current[id];
@@ -1096,6 +1112,9 @@ export function useJitsiMeeting({
                 return;
               }
               setDominantSpeakerId(id);
+              // Fallback cue when per-track audio levels aren't delivered: hold ~2.5s.
+              setSpeakingLevel(id, 1);
+              setSpeakingLevel(id, 0, 2500);
             });
 
             // Real Jibri recording status -- rides XMPP presence, so every participant (not
@@ -1254,6 +1273,7 @@ export function useJitsiMeeting({
         if (audioTrack) {
           myAudioTrack = audioTrack;
           localAudioTrackRef.current = audioTrack;
+          attachLocalSpeaking(audioTrack);
           if (startWithAudioMuted) {
             audioTrack.mute();
             setLocalAudioMuted(true);
@@ -1810,6 +1830,7 @@ export function useJitsiMeeting({
 
       if (isAudio) {
         localAudioTrackRef.current = newTrack;
+        attachLocalSpeaking(newTrack);
         void applyNoiseSuppressionToTrack(newTrack);
       } else {
         localVideoTrackRef.current = newTrack;

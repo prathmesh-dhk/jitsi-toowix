@@ -77,6 +77,7 @@ import { MeetingSettingsDialog } from '../components/MeetingSettingsDialog';
 import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
 import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
+import { SpeakingOverlay } from '../components/SpeakingOverlay';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
@@ -4300,6 +4301,7 @@ export function MeetingRoomPage() {
                       )}
                     </div>
                   )}
+                  <SpeakingOverlay id="local" compact />
                   {/* Name tag */}
                   <div
                     style={{
@@ -4428,6 +4430,7 @@ export function MeetingRoomPage() {
                       >
                         {remote.name}
                       </div>
+                      <SpeakingOverlay id={remote.id} compact />
                       {/* Remote Hand raised indicator */}
                       {remote.raisedHand && (
                         <div
@@ -4495,6 +4498,7 @@ export function MeetingRoomPage() {
                 justifyContent: 'center',
               }}
             >
+              <SpeakingOverlay id="local" />
               {/* Camera-ON State */}
               {inCallVideo ? (
                 <video
@@ -4653,6 +4657,7 @@ export function MeetingRoomPage() {
                         justifyContent: 'center',
                       }}
                     >
+                      <SpeakingOverlay id={isLocalPinned ? 'local' : pinned?.id} />
                       {isLocalPinned ? (
                         inCallVideo ? (
                           <video
@@ -4882,6 +4887,7 @@ export function MeetingRoomPage() {
                               cursor: 'pointer',
                             }}
                           >
+                            <SpeakingOverlay id={p.id} compact />
                             {(p as any).video && (p as any).stream ? (
                               <video
                                 autoPlay
@@ -5089,6 +5095,7 @@ export function MeetingRoomPage() {
                     <MicOff size={16} color="#F87171" />
                   </div>
                 )}
+                <SpeakingOverlay id="local" />
                 <button
                   onClick={(event) => {
                     event.stopPropagation();
@@ -5156,6 +5163,7 @@ export function MeetingRoomPage() {
                       justifyContent: 'center',
                     }}
                   >
+                    <SpeakingOverlay id={remote.id} />
                     {/* Pinning is personal: every participant may choose their own stage. */}
                     <button
                       onClick={(event) => {
