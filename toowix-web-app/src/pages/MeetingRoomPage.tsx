@@ -73,6 +73,7 @@ import { ShareVideoDialog } from '../components/ShareVideoDialog';
 const SharedVideoManager = lazy(() =>
   import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
 );
+import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
 import { EmbedMeetingModal } from '../components/EmbedMeetingModal';
 import { SecurityOptionsModal } from '../components/SecurityOptionsModal';
@@ -2853,6 +2854,13 @@ export function MeetingRoomPage() {
   useEffect(() => {
     setInCallVideo(!jitsiMeeting.localVideoMuted);
   }, [jitsiMeeting.localVideoMuted]);
+  const faviconMode: FaviconMode = !hasJoined
+    ? 'default'
+    : recording
+      ? 'recording'
+      : inCallVideo && !jitsiMeeting.localVideoMuted ? 'camera' : 'speaker';
+
+  useEffect(() => applyFavicon(faviconMode), [faviconMode]);
   useEffect(() => {
     inCallStreamRef.current = jitsiMeeting.localCameraStream;
     setInCallStream(jitsiMeeting.localCameraStream);
