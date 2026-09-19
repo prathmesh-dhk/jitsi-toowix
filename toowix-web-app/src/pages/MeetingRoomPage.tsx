@@ -83,6 +83,13 @@ import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal
 import { PollsModal, type IPoll } from '../components/PollsModal';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
+// These responses mean that the URL cannot be used to enter a meeting. Keep access-policy
+// failures (for example, a valid private meeting that requires sign-in) in the lobby so the
+// user can act on them; only unavailable links belong on the expired-link page.
+function isUnavailableMeetingResponse(status: number, message?: string): boolean {
+  return status === 400 || status === 404 || status === 410
+    || (status === 403 && /\b(cancelled|ended|not found)\b/i.test(message || ''));
+}
 
 // Shared style for the "More options" dropdown's menu buttons -- avoids repeating this object
 // literal at every one of the (now dozen-plus) menu items.
@@ -2437,12 +2444,18 @@ export function MeetingRoomPage() {
           headers: await accountHeaders(),
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Meeting lookup failed');
+        if (!response.ok) {
+          if (active && isUnavailableMeetingResponse(response.status, data.error)) {
+            navigate('/meeting-link-expired', { replace: true });
+            return;
+          }
+          throw new Error(data.error || 'Meeting lookup failed');
+        }
         if (active) {
           setMeetingInfo(data.meeting);
           meetingInfoRef.current = data.meeting;
-          if (data.meeting?.expired) {
-            setAdmissionError('This meeting link has expired -- its scheduled time is over.');
+          if (data.meeting?.cancelled || data.meeting?.expired) {
+            navigate('/meeting-link-expired', { replace: true });
           }
         }
       } catch (error) {
@@ -2452,7 +2465,7 @@ export function MeetingRoomPage() {
     return () => {
       active = false;
     };
-  }, [roomId, accountHeaders]);
+  }, [roomId, accountHeaders, navigate]);
 
   // Toggle video track
   const handleToggleVideo = () => {
@@ -2517,7 +2530,13 @@ export function MeetingRoomPage() {
         }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Join request failed');
+      if (!response.ok) {
+        if (isUnavailableMeetingResponse(response.status, data.error)) {
+          navigate('/meeting-link-expired', { replace: true });
+          return;
+        }
+        throw new Error(data.error || 'Join request failed');
+      }
 
       if ((data.status === 'ADMITTED' || !data.status) && data.jitsiToken) {
         // Admitted directly
