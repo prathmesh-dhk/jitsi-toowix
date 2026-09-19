@@ -79,6 +79,7 @@ import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
 import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
+import { MicLevelIcon } from '../components/MicLevelIcon';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
@@ -6185,8 +6186,7 @@ export function MeetingRoomPage() {
                 transition: 'background-color 0.15s ease',
               }}
             >
-              {inCallMuted ? <MicOff size={20} color="#EA4335" /> : <Mic size={20} color="#E8EAED" />}
-              {!inCallMuted && <span className="mic-activity" aria-hidden="true"><i /><i /><i /></span>}
+              {inCallMuted ? <MicOff size={20} color="#EA4335" /> : <MicLevelIcon size={22} color="#E8EAED" />}
             </button>
 
             {/* Audio Device Dropdown Menu */}

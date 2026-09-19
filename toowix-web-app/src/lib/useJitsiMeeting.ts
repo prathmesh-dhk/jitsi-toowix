@@ -312,8 +312,60 @@ async function acquireLocalTracks(
   return result;
 }
 
+let localLevelMonitor: { stop: () => void } | null = null;
+
+function stopLocalLevelMonitor() {
+  localLevelMonitor?.stop();
+  localLevelMonitor = null;
+  setSpeakingLevel('local', 0);
+}
+
+// Reads the live microphone level ten times a second for the green fill in the mic button and the
+// speaking animation. Independent of the meeting library's own level reports, which are not always
+// delivered for a locally adopted microphone.
+function startLocalLevelMonitor(track: any) {
+  stopLocalLevelMonitor();
+  const stream = trackToStream(track);
+
+  if (!stream) {
+    return;
+  }
+  try {
+    const ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    const buffer = new Float32Array(1024);
+
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const timer = window.setInterval(() => {
+      if (track.isMuted?.()) {
+        setSpeakingLevel('local', 0);
+
+        return;
+      }
+      analyser.getFloatTimeDomainData(buffer);
+      let sum = 0;
+
+      for (let i = 0; i < buffer.length; i++) {
+        sum += buffer[i] * buffer[i];
+      }
+      setSpeakingLevel('local', Math.min(1, Math.max(0, Math.sqrt(sum / buffer.length) * 4 - 0.06)));
+    }, 100);
+
+    localLevelMonitor = {
+      stop: () => {
+        window.clearInterval(timer);
+        try { source.disconnect(); } catch { /* ignore */ }
+        void ctx.close().catch(() => { });
+      }
+    };
+  } catch { /* no Web Audio */ }
+}
+
 // Feeds the local mic level into the speaking store (id 'local') for the tile animation.
 function attachLocalSpeaking(track: any) {
+  startLocalLevelMonitor(track);
   try {
     track?.addEventListener?.('track.audioLevelsChanged', (level: number) => {
       setSpeakingLevel('local', track.isMuted?.() ? 0 : level);
@@ -1381,6 +1433,7 @@ export function useJitsiMeeting({
       // generation may already have overwritten them with its own, and this cleanup must not
       // clobber live state that belongs to it.
       if (localAudioTrackRef.current === myAudioTrack) {
+        stopLocalLevelMonitor();
         localAudioTrackRef.current = null;
       }
       if (localVideoTrackRef.current === myVideoTrack) {
