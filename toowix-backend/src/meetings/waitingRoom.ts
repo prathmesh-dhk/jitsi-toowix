@@ -91,7 +91,7 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
     if (isHost) {
       if (meeting) {
         meeting.hostJoined = true;
-        await meeting.save();
+        await meeting.save({ validateBeforeSave: false });
       }
       const creds = generateCredentials(room, identity, true, meeting?.companyId ? String(meeting.companyId) : null);
       res.json({
@@ -106,7 +106,7 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
     // Check if waiting room is bypassed:
     // When company policy doesn't enforce lobby, quick access is enabled, and meeting exists
     const requireLobbyPolicy = company?.meetingPolicy?.requireLobby === true;
-    const canAutoAdmit = !requireLobbyPolicy && (meeting?.quickAccessEnabled !== false) && (meeting?.hostJoined === true || !meeting);
+    const canAutoAdmit = !requireLobbyPolicy && meeting?.type !== 'Private' && (meeting?.quickAccessEnabled !== false) && (meeting?.hostJoined === true || !meeting);
 
     if (canAutoAdmit) {
       const creds = generateCredentials(room, identity, false, meeting?.companyId ? String(meeting.companyId) : null);
@@ -142,7 +142,7 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
         meeting.waitingQueue = meeting.waitingQueue || [];
         meeting.waitingQueue.push(queueItem);
       }
-      await meeting.save();
+      await meeting.save({ validateBeforeSave: false });
 
       // Notify host if present
       if (meeting.createdBy) {
@@ -303,7 +303,7 @@ export async function admitLobbyHandler(req: AuthenticatedRequest, res: Response
       }
     }
 
-    await meeting.save();
+    await meeting.save({ validateBeforeSave: false });
     res.json({ success: true, admittedCount });
   } catch (err: any) {
     console.error('[WaitingRoom] Admit error:', err.message);
@@ -333,7 +333,7 @@ export async function denyLobbyHandler(req: AuthenticatedRequest, res: Response)
     if (item) {
       item.status = 'DENIED';
       item.deniedAt = new Date();
-      await meeting.save();
+      await meeting.save({ validateBeforeSave: false });
     }
     res.json({ success: true, message: 'Participant denied entry' });
   } catch (err: any) {
@@ -361,7 +361,7 @@ export async function announceLobbyHandler(req: AuthenticatedRequest, res: Respo
     }
 
     meeting.hostAnnouncement = String(message || '').slice(0, 300);
-    await meeting.save();
+    await meeting.save({ validateBeforeSave: false });
     res.json({ success: true, hostAnnouncement: meeting.hostAnnouncement });
   } catch (err: any) {
     console.error('[WaitingRoom] Announce error:', err.message);
@@ -405,7 +405,7 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
     if (isInstantMeeting) {
       await meeting.deleteOne();
     } else {
-      await meeting.save();
+      await meeting.save({ validateBeforeSave: false });
     }
 
     res.json({ success: true, message: 'Meeting ended for everyone', endedAt: meeting.endedAt });

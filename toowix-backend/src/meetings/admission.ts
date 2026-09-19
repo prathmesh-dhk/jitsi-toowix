@@ -21,6 +21,16 @@ export function mayAttend(meeting: any, user: any, company: any): boolean {
   return !!user || company?.meetingPolicy?.allowGuestAccess !== false;
 }
 
+// Joining a Private meeting is gated by its password plus the host admitting the person from the
+// waiting room -- not by workspace membership or the invitee list (mayAttend, which still governs
+// who is shown the password in listings).
+export function mayJoin(meeting: any, user: any, company: any): boolean {
+  if (meeting.type === 'Private') {
+    return !meeting.cancelledAt && !(meeting.companyId && (!company || company.status !== 'ACTIVE'));
+  }
+  return mayAttend(meeting, user, company);
+}
+
 export async function roomAdmission(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
@@ -31,7 +41,7 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     // Allow instant-* and twx-* room slugs for ad-hoc and shared links even if not pre-persisted
     if (!meeting && !room.startsWith('instant-') && !room.startsWith('twx-')) { res.status(404).json({ error: 'Meeting not found. Create a public instant room from the homepage.' }); return; }
     // Check attendance eligibility
-    if (meeting && !mayAttend(meeting, user, company)) {
+    if (meeting && !mayJoin(meeting, user, company)) {
       res.status(403).json({ error: meeting.cancelledAt ? 'Meeting cancelled' : 'Sign in with an invited or workspace account to join.' }); return;
     }
     // A scheduled meeting's link expires once its scheduled window (start + chosen duration)
@@ -69,6 +79,10 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     };
     if (req.method === 'GET') { res.json({ meeting: info }); return; }
     if (expired) { res.status(410).json({ error: 'This meeting link has expired.' }); return; }
+    // Private meetings always go through the host-controlled waiting room; only the host may enter directly.
+    if (meeting?.type === 'Private' && !isCreator) {
+      res.status(403).json({ error: 'Ask to join from the waiting room.', useLobby: true }); return;
+    }
     if (passwordRequired) {
       const submitted = typeof req.body.passcode === 'string' ? req.body.passcode.trim() : '';
       if (!submitted || submitted !== meeting!.passcode) {
@@ -105,7 +119,7 @@ export async function attendance(req: AuthenticatedRequest, res: Response): Prom
       const meeting = await Meeting.findOne({ roomSlug: room });
       if (meeting?.cancelledAt) { res.status(403).json({ error: 'Meeting cancelled' }); return; }
       await Meeting.updateOne({ roomSlug: room, 'participants._id': { $ne: claim.participantEntryId } },
-        { $push: { participants: { _id: claim.participantEntryId, name: claim.identity.name, email: claim.identity.email, avatarUrl: claim.identity.avatar || null, role: claim.moderator ? 'Host' : 'Participant', joinedAt: new Date() } } });
+        { $push: { participants: { _id: claim.participantEntryId, name: claim.identity.name, email: claim.identity.email, avatarUrl: claim.identity.avatar || null, role: claim.moderator ? 'Organizer' : 'Participant', joinedAt: new Date() } } });
     }
     res.sendStatus(200);
   } catch { res.sendStatus(403); }

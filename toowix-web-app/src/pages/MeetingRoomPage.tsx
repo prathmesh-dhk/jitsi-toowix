@@ -2408,6 +2408,23 @@ export function MeetingRoomPage() {
     };
   }, [participation]);
 
+  // Opening a meeting link directly (not via the dashboard) used to always join as a guest, so
+  // the host of a Private/Internal meeting was rejected. A signed-in user joins as themselves.
+  useEffect(() => {
+    if (location.state?.participation) return;
+    let active = true;
+    (async () => {
+      try {
+        await auth.authStateReady();
+        if (active && auth.currentUser && localStorage.getItem('toowix_session_token')) {
+          setParticipation('account');
+        }
+      } catch { /* stay a guest */ }
+    })();
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch meeting metadata
   useEffect(() => {
     if (window.location.search) window.history.replaceState(window.history.state, '', window.location.pathname);
@@ -2487,7 +2504,7 @@ export function MeetingRoomPage() {
 
     try {
       const headers = await accountHeaders();
-      const endpoint = meetingInfo?.requireLobbyPolicy
+      const endpoint = (meetingInfo?.requireLobbyPolicy || meetingInfo?.type === 'Private')
         ? `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/knock`
         : `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/admission`;
       const response = await fetch(endpoint, {
