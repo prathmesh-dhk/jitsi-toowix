@@ -73,6 +73,7 @@ import { ShareVideoDialog } from '../components/ShareVideoDialog';
 const SharedVideoManager = lazy(() =>
   import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
 );
+import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
 import { EmbedMeetingModal } from '../components/EmbedMeetingModal';
@@ -3089,6 +3090,31 @@ export function MeetingRoomPage() {
     }
   }, [inCallVideo, inCallStream]);
 
+  // Screen shares, newest first: the most recent share gets the stage / first tile.
+  const [localShareStartedAt, setLocalShareStartedAt] = useState(0);
+  useEffect(() => {
+    setLocalShareStartedAt(isScreenSharing ? Date.now() : 0);
+  }, [isScreenSharing]);
+  const allShares: Array<{ key: string; kind: 'local' | 'remote'; stream: MediaStream | null; name: string; startedAt: number }> = [
+    ...(isScreenSharing ? [ { key: 'local-share', kind: 'local' as const, stream: screenStream, name: `${displayName || 'You'} (You)`, startedAt: localShareStartedAt } ] : []),
+    ...jitsiMeeting.remoteScreenShares.map((r) => ({ key: `share-${r.id}`, kind: 'remote' as const, stream: r.stream, name: r.presenterName, startedAt: r.startedAt }))
+  ].sort((a, b) => b.startedAt - a.startedAt);
+  const primaryShare = allShares[0];
+  const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
+  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || (anyScreenShare && !tileViewEnabled);
+  const tileBeforeShareRef = useRef(true);
+  const wasSharingRef = useRef(false);
+  useEffect(() => {
+    if (anyScreenShare && !wasSharingRef.current) {
+      tileBeforeShareRef.current = tileViewEnabled;
+      setTileViewEnabled(false);
+    } else if (!anyScreenShare && wasSharingRef.current) {
+      setTileViewEnabled(tileBeforeShareRef.current);
+    }
+    wasSharingRef.current = anyScreenShare;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyScreenShare]);
+
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
     if (presentationVideoRef.current) {
@@ -3099,7 +3125,7 @@ export function MeetingRoomPage() {
         presentationVideoRef.current.srcObject = null;
       }
     }
-  }, [isScreenSharing]);
+  }, [isScreenSharing, showShareStage, primaryShare?.kind]);
 
   // Synchronize remote presentation stream to remote presentation video element
   useEffect(() => {
@@ -3111,7 +3137,7 @@ export function MeetingRoomPage() {
         remotePresentationVideoRef.current.play().catch(() => { });
       }
     }
-  }, [remoteScreenStream]);
+  }, [remoteScreenStream, showShareStage, primaryShare?.kind]);
 
   const handleToggleInCallMic = () => {
     jitsiMeeting.toggleAudio();
@@ -3856,7 +3882,7 @@ export function MeetingRoomPage() {
               the original bug (avatar cards with no video ever attached to them) and must never
               be re-enabled without giving it real tracks. Safe to delete entirely in a follow-up
               cleanup once the real surface has been visually verified in production. */}
-          {(isScreenSharing || remoteScreenStream || jitsiMeeting.sharedVideo ? (
+          {(showShareStage ? (
             /* Presentation Mode: Main Stage Screen Share (or Shared Video) + Filmstrip of Attendees (Google Meet style) */
             <div
               style={{
@@ -3886,7 +3912,7 @@ export function MeetingRoomPage() {
                   justifyContent: 'center',
                 }}
               >
-                {isScreenSharing ? (
+                {primaryShare?.kind === 'local' ? (
                   <video
                     ref={presentationVideoRef}
                     autoPlay
@@ -3894,7 +3920,7 @@ export function MeetingRoomPage() {
                     muted
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
-                ) : remoteScreenStream ? (
+                ) : primaryShare?.kind === 'remote' ? (
                   <video
                     ref={remotePresentationVideoRef}
                     autoPlay
@@ -3945,7 +3971,7 @@ export function MeetingRoomPage() {
                         ? (jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId
                           ? 'You are sharing a video'
                           : 'Watching a shared video')
-                        : isScreenSharing
+                        : primaryShare?.kind === 'local'
                           ? 'You are presenting your screen'
                           : `${remotePresenterName || 'Participant'} is presenting their screen`}
                     </span>
@@ -4006,6 +4032,10 @@ export function MeetingRoomPage() {
                   paddingRight: '2px',
                 }}
               >
+                {/* Other active screen shares (older than the one on stage) */}
+                {allShares.slice(1).map((share) => (
+                  <ScreenShareTile key={share.key} stream={share.stream} label={share.name} compact />
+                ))}
                 {/* Local user card */}
                 <div
                   style={{
@@ -4721,22 +4751,26 @@ export function MeetingRoomPage() {
                 maxHeight: 'calc(100vh - 170px)',
                 display: 'grid',
                 gridTemplateColumns:
-                  remoteParticipants.length === 1
-                    ? 'repeat(2, 1fr)'
-                    : remoteParticipants.length <= 3
+                  remoteParticipants.length + allShares.length + 1 > 6
+                    ? `repeat(${Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6)))}, minmax(0, 1fr))`
+                    : remoteParticipants.length + allShares.length <= 3
                       ? 'repeat(2, 1fr)'
                       : 'repeat(3, 1fr)',
                 gridTemplateRows:
-                  remoteParticipants.length === 1
-                    ? '1fr'
-                    : remoteParticipants.length <= 3
-                      ? 'repeat(2, 1fr)'
+                  remoteParticipants.length + allShares.length + 1 > 6
+                    ? `repeat(${Math.ceil((remoteParticipants.length + allShares.length + 1) / Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6))))}, minmax(0, 1fr))`
+                    : remoteParticipants.length + allShares.length === 1
+                      ? '1fr'
                       : 'repeat(2, 1fr)',
                 gap: '16px',
                 alignItems: 'stretch',
                 justifyItems: 'stretch',
               }}
             >
+              {/* Screen shares appear as tiles, newest first */}
+              {allShares.map((share) => (
+                <ScreenShareTile key={share.key} stream={share.stream} label={share.name} />
+              ))}
               {/* 1. Local Participant Card */}
               <div
                 key="local-participant"
@@ -4837,12 +4871,37 @@ export function MeetingRoomPage() {
                     <MicOff size={16} color="#F87171" />
                   </div>
                 )}
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setPinnedParticipantId('local');
+                    setTileViewEnabled(false);
+                  }}
+                  title="Pin yourself"
+                  style={{
+                    position: 'absolute',
+                    top: '16px',
+                    left: '16px',
+                    zIndex: 12,
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '50%',
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    backgroundColor: 'rgba(32,33,36,0.76)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Pin size={16} fill="none" color="#8AB4F8" />
+                </button>
                 {isHandRaised && (
                   <div
                     style={{
                       position: 'absolute',
                       top: '16px',
-                      left: '16px',
+                      left: '56px',
                       width: '32px',
                       height: '32px',
                       borderRadius: '50%',

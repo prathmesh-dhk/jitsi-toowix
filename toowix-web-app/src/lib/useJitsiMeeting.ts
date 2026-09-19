@@ -393,6 +393,9 @@ export function useJitsiMeeting({
   // without having to leave and rejoin.
   const [ isModerator, setIsModerator ] = useState(false);
   const [ remoteScreenShare, setRemoteScreenShare ] = useState<{ stream: MediaStream; presenterName: string } | null>(null);
+  // Every active remote screen share, newest first (last-in-first-out priority).
+  const [ remoteScreenShares, setRemoteScreenShares ] = useState<Array<{ id: string; stream: MediaStream; presenterName: string; startedAt: number }>>([]);
+  const remoteDesktopStartedAtRef = useRef<Record<string, number>>({});
   // Native Jitsi/JVB-computed dominant speaker (real audio-level based detection, not a
   // client-side guess) -- 'local' when the local user is currently the loudest, a remote
   // participant id otherwise, or null before anyone has spoken. Drives speaker-view auto-follow.
@@ -827,11 +830,37 @@ export function useJitsiMeeting({
         // eslint-disable-next-line no-console
         console.log('[SCREEN-SHARE-DEBUG] clear timer fired, setting remoteScreenShare to null');
         setRemoteScreenShare(null);
+        setRemoteScreenShares([]);
       }, 600);
 
       return;
     }
-    const [ id, track ] = entries[entries.length - 1];
+    for (const [ pid ] of entries) {
+      if (!remoteDesktopStartedAtRef.current[pid]) {
+        remoteDesktopStartedAtRef.current[pid] = Date.now();
+      }
+    }
+    for (const pid of Object.keys(remoteDesktopStartedAtRef.current)) {
+      if (!remoteDesktopTracksRef.current[pid]) {
+        delete remoteDesktopStartedAtRef.current[pid];
+      }
+    }
+    const allShares = entries
+      .map(([ pid, t ]) => ({
+        id: pid,
+        stream: trackToStream(t),
+        presenterName: remoteNamesRef.current[pid] || 'Participant',
+        startedAt: remoteDesktopStartedAtRef.current[pid] || 0
+      }))
+      .filter((x): x is { id: string; stream: MediaStream; presenterName: string; startedAt: number } => Boolean(x.stream))
+      .sort((a, b) => b.startedAt - a.startedAt);
+
+    setRemoteScreenShares((prev) => (
+      prev.length === allShares.length && prev.every((p, i) => p.id === allShares[i].id && p.stream === allShares[i].stream)
+        ? prev
+        : allShares
+    ));
+    const [ id, track ] = allShares.length ? [ allShares[0].id, remoteDesktopTracksRef.current[allShares[0].id] ] : entries[entries.length - 1];
     const stream = trackToStream(track);
     // eslint-disable-next-line no-console
     console.log('[SCREEN-SHARE-DEBUG] keeping remoteScreenShare active, presenterId:', id, 'trackMuted:', track.isMuted(), 'streamActive:', stream?.active, 'streamTracks:', stream?.getTracks().map(t => ({ readyState: t.readyState, muted: t.muted })));
@@ -1394,6 +1423,8 @@ export function useJitsiMeeting({
       setLocalCameraStream(null);
       setLocalScreenStream(null);
       setRemoteScreenShare(null);
+      setRemoteScreenShares([]);
+      remoteDesktopStartedAtRef.current = {};
       setIsScreenSharing(false);
       setError(null);
       setCameraError(null);
@@ -2075,6 +2106,7 @@ export function useJitsiMeeting({
     networkState,
     lowDataMode,
     remoteScreenShare,
+    remoteScreenShares,
     dominantSpeakerId,
     localParticipantId,
     recording,
