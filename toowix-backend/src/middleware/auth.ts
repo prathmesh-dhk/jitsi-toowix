@@ -73,7 +73,38 @@ export const verifyFirebaseToken = async (req: AuthenticatedRequest, res: Respon
   });
 };
 
+// For routes where guests are welcome: a valid, authorised login is honoured, but a login that cannot be
+// used here (email not verified, account pending/suspended, workspace inactive, expired app session) must
+// not block the person from joining as a guest -- they simply carry no account privileges. Host-only actions
+// re-check identity themselves, so this cannot grant anything.
 export const optionalAccount = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-  if (req.headers.authorization) void verifyFirebaseToken(req, res, next);
-  else next();
+  if (!req.headers.authorization) {
+    next();
+    return;
+  }
+  let statusCode = 200;
+  const shim: any = {
+    status(code: number) {
+      statusCode = code;
+      return shim;
+    },
+    json(body: unknown) {
+      if (statusCode === 401 || statusCode === 403) {
+        delete req.firebaseUid;
+        delete req.firebaseEmail;
+        delete req.firebaseEmailVerified;
+        delete req.accountUser;
+        next();
+      } else {
+        res.status(statusCode).json(body);
+      }
+      return shim;
+    },
+    sendStatus(code: number) {
+      res.sendStatus(code);
+      return shim;
+    }
+  };
+
+  void verifyFirebaseToken(req, shim as Response, next);
 };
