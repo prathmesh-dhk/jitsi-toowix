@@ -47,6 +47,12 @@ import {
   Wind,
   Wifi,
   Youtube,
+  Gauge,
+  BarChart3,
+  Activity,
+  Keyboard,
+  Code2,
+  Volume2,
 } from 'lucide-react';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import {
@@ -67,8 +73,33 @@ import { ShareVideoDialog } from '../components/ShareVideoDialog';
 const SharedVideoManager = lazy(() =>
   import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
 );
+import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
+import { EmbedMeetingModal } from '../components/EmbedMeetingModal';
+import { SecurityOptionsModal } from '../components/SecurityOptionsModal';
+import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
+import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
+import { PollsModal, type IPoll } from '../components/PollsModal';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
+// Shared style for the "More options" dropdown's menu buttons -- avoids repeating this object
+// literal at every one of the (now dozen-plus) menu items.
+function menuButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '8px 12px',
+    background: active ? 'rgba(138, 180, 248, 0.15)' : 'transparent',
+    border: 'none',
+    borderRadius: '8px',
+    color: active ? '#8AB4F8' : '#E8EAED',
+    fontSize: '13px',
+    cursor: 'pointer',
+    textAlign: 'left',
+    width: '100%',
+  };
+}
 
 interface IWaitingParticipant {
   id: string;
@@ -1057,6 +1088,14 @@ export function MeetingRoomPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showVirtualBackgroundModal, setShowVirtualBackgroundModal] = useState(false);
   const [showShareVideoDialog, setShowShareVideoDialog] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showEmbedModal, setShowEmbedModal] = useState(false);
+  const [showSecurityModal, setShowSecurityModal] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [showPerformanceModal, setShowPerformanceModal] = useState(false);
+  const [showPollsModal, setShowPollsModal] = useState(false);
+  const [performanceMaxHeight, setPerformanceMaxHeight] = useState(720);
+  const [polls, setPolls] = useState<IPoll[]>([]);
   const localParticipantIdRef = useRef<string>('local');
   const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
@@ -3153,6 +3192,37 @@ export function MeetingRoomPage() {
     postRoomSignal('REACTION', { emoji, name: displayName || 'Participant' });
   };
 
+  // Polls reuse the same HTTP signal broadcast chat/reactions/raise-hand already use -- no new
+  // backend endpoint, no separate realtime infra. A poll's full state (question + options)
+  // broadcasts once on creation; each vote broadcasts independently and is merged by voter id,
+  // so re-voting just overwrites your own entry rather than double-counting.
+  const handleCreatePoll = (question: string, options: string[]) => {
+    const poll: IPoll = {
+      id: `${sessionIdRef.current}_${Date.now()}`,
+      question,
+      options,
+      votes: {},
+      createdBy: displayName || 'Participant',
+    };
+
+    setPolls((prev) => [ ...prev, poll ]);
+    postRoomSignal('POLL_CREATED', { poll });
+  };
+
+  const handleVotePoll = (pollId: string, optionIndex: number) => {
+    setPolls((prev) =>
+        prev.map((p) => (p.id === pollId ? { ...p, votes: { ...p.votes, [sessionIdRef.current]: optionIndex } } : p))
+    );
+    postRoomSignal('POLL_VOTE', { pollId, optionIndex, voterId: sessionIdRef.current });
+  };
+
+  const handlePerformanceSelect = (maxHeight: number) => {
+    setPerformanceMaxHeight(maxHeight);
+    // "Audio only" (0) still needs a real (very low) height passed to the bridge -- 0 isn't a
+    // valid constraint value, just our own UI's way of labeling "as low as it goes".
+    void jitsiMeeting.setVideoQuality(maxHeight || 1);
+  };
+
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim()) return;
@@ -3310,6 +3380,18 @@ export function MeetingRoomPage() {
         setTimeout(() => {
           setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
         }, 2400);
+      } else if (type === 'POLL_CREATED') {
+        const poll = payload?.poll;
+
+        if (!poll || typeof poll.id !== 'string') return;
+        setPolls((prev) => (prev.some((p) => p.id === poll.id) ? prev : [ ...prev, poll ]));
+      } else if (type === 'POLL_VOTE') {
+        const { pollId, optionIndex, voterId } = payload || {};
+
+        if (typeof pollId !== 'string' || typeof optionIndex !== 'number' || typeof voterId !== 'string') return;
+        setPolls((prev) =>
+            prev.map((p) => (p.id === pollId ? { ...p, votes: { ...p.votes, [voterId]: optionIndex } } : p))
+        );
       }
     };
 
@@ -6281,6 +6363,63 @@ export function MeetingRoomPage() {
                   <Youtube size={16} />
                   {jitsiMeeting.sharedVideo ? 'Stop sharing video' : 'Share video'}
                 </button>
+
+                <div style={{ height: '1px', backgroundColor: 'rgba(255,255,255,0.08)', margin: '4px 0' }} />
+
+                {isModerator && (
+                  <button
+                    onClick={() => { setShowMoreMenu(false); setShowSecurityModal(true); }}
+                    style={menuButtonStyle(false)}
+                  >
+                    <ShieldCheck size={16} />
+                    Security options
+                  </button>
+                )}
+                <button
+                  onClick={() => { setShowMoreMenu(false); setShowPollsModal(true); }}
+                  style={menuButtonStyle(false)}
+                >
+                  <BarChart3 size={16} />
+                  Polls
+                </button>
+                <button
+                  onClick={() => {
+                    setShowMoreMenu(false);
+                    jitsiMeeting.toggleShareAudio();
+                  }}
+                  style={menuButtonStyle(jitsiMeeting.shareAudioActive)}
+                >
+                  <Volume2 size={16} />
+                  {jitsiMeeting.shareAudioActive ? 'Stop sharing audio' : 'Share audio'}
+                </button>
+                <button
+                  onClick={() => { setShowMoreMenu(false); setShowPerformanceModal(true); }}
+                  style={menuButtonStyle(false)}
+                >
+                  <Gauge size={16} />
+                  Performance settings
+                </button>
+                <button
+                  onClick={() => { setShowMoreMenu(false); setShowStatsModal(true); }}
+                  style={menuButtonStyle(false)}
+                >
+                  <Activity size={16} />
+                  Participants stats
+                </button>
+                <button
+                  onClick={() => { setShowMoreMenu(false); setShowShortcutsModal(true); }}
+                  style={menuButtonStyle(false)}
+                >
+                  <Keyboard size={16} />
+                  View shortcuts
+                </button>
+                <button
+                  onClick={() => { setShowMoreMenu(false); setShowEmbedModal(true); }}
+                  style={menuButtonStyle(false)}
+                >
+                  <Code2 size={16} />
+                  Embed meeting
+                </button>
               </div>
             )}
           </div>
@@ -6627,6 +6766,46 @@ export function MeetingRoomPage() {
             </div>
           </div>
         )}
+        <KeyboardShortcutsModal isOpen={showShortcutsModal} onClose={() => setShowShortcutsModal(false)} />
+
+        <EmbedMeetingModal
+          isOpen={showEmbedModal}
+          onClose={() => setShowEmbedModal(false)}
+          meetingUrl={`${window.location.origin}/meet/${encodeURIComponent(roomId)}`}
+        />
+
+        <SecurityOptionsModal
+          isOpen={showSecurityModal}
+          onClose={() => setShowSecurityModal(false)}
+          isLocked={jitsiMeeting.isLocked}
+          isModerator={isModerator}
+          onLock={jitsiMeeting.lockRoom}
+          onUnlock={jitsiMeeting.unlockRoom}
+        />
+
+        <ParticipantStatsModal
+          isOpen={showStatsModal}
+          onClose={() => setShowStatsModal(false)}
+          localName={displayName || 'You'}
+          connectionStats={jitsiMeeting.connectionStats}
+          participantNames={Object.fromEntries(remoteParticipants.map((p) => [ p.id, p.name ]))}
+        />
+
+        <PerformanceSettingsModal
+          isOpen={showPerformanceModal}
+          onClose={() => setShowPerformanceModal(false)}
+          currentMaxHeight={performanceMaxHeight}
+          onSelect={handlePerformanceSelect}
+        />
+
+        <PollsModal
+          isOpen={showPollsModal}
+          onClose={() => setShowPollsModal(false)}
+          polls={polls}
+          mySessionId={sessionIdRef.current}
+          onCreate={handleCreatePoll}
+          onVote={handleVotePoll}
+        />
 
         {/* Moderator Broadcast Announcement Dialog */}
         {showAnnounceDialog && (

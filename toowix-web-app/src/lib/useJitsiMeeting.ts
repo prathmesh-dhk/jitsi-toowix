@@ -413,6 +413,12 @@ export function useJitsiMeeting({
   // otherwise -- same reasoning as the other refs in this hook.
   const [ sharedVideo, setSharedVideo ] = useState<ISharedVideoState | null>(null);
   const sharedVideoRef = useRef<ISharedVideoState | null>(null);
+  // Per-participant connection quality (resolution/framerate/bitrate/packet loss/quality %) --
+  // 'local' key is our own stats. Backs the "Participants stats" panel.
+  const [ connectionStats, setConnectionStats ] = useState<Record<string, any>>({});
+  const [ isLocked, setIsLocked ] = useState(false);
+  const [ shareAudioActive, setShareAudioActive ] = useState(false);
+  const shareAudioTrackRef = useRef<any>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
   // one exists. Read by toggleAudio/toggleVideo/switchDevice/toggleScreenShare, which are
@@ -1152,6 +1158,30 @@ export function useJitsiMeeting({
               }
             });
 
+            // Real per-participant network quality -- lib-jitsi-meet computes this internally
+            // (resolution/framerate/bitrate/packet loss/a 0-100 quality score) from actual RTP
+            // stats, not something we compute ourselves. Raw string event names since these
+            // aren't exposed on the public JitsiMeetJS.events namespace.
+            room.on('cq.local_stats_updated', (stats: any) => {
+              if (isStale()) {
+                return;
+              }
+              setConnectionStats(prev => ({ ...prev, local: stats }));
+            });
+            room.on('cq.remote_stats_updated', (id: string, stats: any) => {
+              if (isStale()) {
+                return;
+              }
+              setConnectionStats(prev => ({ ...prev, [id]: stats }));
+            });
+
+            room.on(JitsiMeetJS.events.conference.LOCK_STATE_CHANGED, (locked: boolean) => {
+              if (isStale()) {
+                return;
+              }
+              setIsLocked(locked);
+            });
+
             room.on(JitsiMeetJS.events.conference.CONFERENCE_FAILED, (errorType: string) => {
               if (isStale()) {
                 return;
@@ -1376,6 +1406,10 @@ export function useJitsiMeeting({
       setNoiseSuppressionEnabled(false);
       sharedVideoRef.current = null;
       setSharedVideo(null);
+      setConnectionStats({});
+      setIsLocked(false);
+      setShareAudioActive(false);
+      shareAudioTrackRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
@@ -1910,6 +1944,121 @@ export function useJitsiMeeting({
     await Promise.resolve(room.grantOwner(participantId));
   }, []);
 
+  // Security options: room.lock(password) rejects if the caller isn't the moderator (server-
+  // enforced, not just a UI restriction) -- errors are left for the caller to catch and show.
+  const lockRoom = useCallback(async (password: string) => {
+    const room = roomRef.current;
+
+    if (!room) {
+      return;
+    }
+    await room.lock(password);
+  }, []);
+
+  const unlockRoom = useCallback(async () => {
+    const room = roomRef.current;
+
+    if (!room) {
+      return;
+    }
+    await room.unlock();
+  }, []);
+
+  // Performance settings: asks the JVB to actually send lower-quality simulcast layers for
+  // remote video instead of always requesting the top layer -- this is the real lever for
+  // slow-network performance (simulcast is already enabled server-side; we just never asked for
+  // anything but the highest layer before). `constraints` maps participant id -> desired
+  // {maxHeight}; a single default applies to every id not explicitly listed. Also caps what our
+  // OWN camera uploads via setSenderVideoConstraint, since upload is often the real bottleneck.
+  const setVideoQuality = useCallback(async (maxHeight: number, perParticipant?: Record<string, number>) => {
+    const room = roomRef.current;
+
+    if (!room) {
+      return;
+    }
+    try {
+      const constraints: Record<string, any> = {
+        defaultConstraints: { maxHeight }
+      };
+
+      if (perParticipant) {
+        constraints.constraints = Object.fromEntries(
+            Object.entries(perParticipant).map(([ id, h ]) => [ id, { maxHeight: h } ])
+        );
+      }
+      await room.setReceiverConstraints(constraints);
+    } catch {
+      // setReceiverConstraints isn't universally supported by every bridge version; degrade
+      // silently rather than surface an error for a pure bandwidth-saving hint.
+    }
+    try {
+      await room.setSenderVideoConstraint(maxHeight);
+    } catch {
+      // best-effort
+    }
+  }, []);
+
+  // Share audio (stock Jitsi's "Share audio"): captures ONLY a tab/system audio source (the
+  // video track from getDisplayMedia is immediately stopped, never published) and adds it as an
+  // extra audio track alongside the mic -- distinct from screen share, which publishes video.
+  const toggleShareAudio = useCallback(async () => {
+    const JitsiMeetJS = window.JitsiMeetJS;
+    const room = roomRef.current;
+
+    if (!JitsiMeetJS || !room) {
+      return;
+    }
+
+    if (shareAudioTrackRef.current) {
+      const track = shareAudioTrackRef.current;
+
+      shareAudioTrackRef.current = null;
+      setShareAudioActive(false);
+      try {
+        await room.removeTrack(track);
+      } catch {
+        // best-effort
+      }
+      track.dispose();
+
+      return;
+    }
+
+    try {
+      const display: MediaStream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: true,
+        audio: true
+      });
+      const audioTrack = display.getAudioTracks()[0];
+
+      display.getVideoTracks().forEach(t => t.stop());
+
+      if (!audioTrack) {
+        throw new Error('The selected source has no audio to share.');
+      }
+
+      const [ jitsiTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+        { stream: new MediaStream([ audioTrack ]), mediaType: 'audio' }
+      ]);
+
+      shareAudioTrackRef.current = jitsiTrack;
+      audioTrack.addEventListener('ended', () => {
+        // User stopped sharing via the browser's own picker/bar, not our button.
+        if (shareAudioTrackRef.current === jitsiTrack) {
+          shareAudioTrackRef.current = null;
+          setShareAudioActive(false);
+          room.removeTrack(jitsiTrack).catch(() => {});
+          jitsiTrack.dispose();
+        }
+      });
+      await room.addTrack(jitsiTrack);
+      setShareAudioActive(true);
+    } catch {
+      // user cancelled the picker, or the source had no audio -- no-op, matches screen share's
+      // own silent-cancel behavior.
+    }
+  }, []);
+
   return {
     connected,
     joined,
@@ -1944,6 +2093,13 @@ export function useJitsiMeeting({
     updateSharedVideoStatus,
     stopSharedVideo,
     grantModerator,
+    connectionStats,
+    isLocked,
+    lockRoom,
+    unlockRoom,
+    setVideoQuality,
+    shareAudioActive,
+    toggleShareAudio,
     room: roomRef
   };
 }
