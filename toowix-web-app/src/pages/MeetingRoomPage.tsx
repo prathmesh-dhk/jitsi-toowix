@@ -2468,6 +2468,7 @@ export function MeetingRoomPage() {
     expired: boolean;
     expiresAt: string | null;
     passwordRequired: boolean;
+    locked?: boolean;
     requireLobbyPolicy: boolean;
     allowScreenShare: boolean;
     micLockEnabled: boolean;
@@ -2537,6 +2538,41 @@ export function MeetingRoomPage() {
     };
   }, [roomId, accountHeaders, navigate]);
 
+  // Mid-meeting lock: for dashboard meetings the backend enforces password + waiting room (like a
+  // Private meeting); rooms with no saved meeting fall back to Jitsi's own room password.
+  const [serverLocked, setServerLocked] = useState(false);
+  useEffect(() => {
+    if (meetingInfo?.locked) setServerLocked(true);
+  }, [meetingInfo?.locked]);
+  const handleLockRoom = async (password: string) => {
+    if (!meetingInfo?.organizerId) {
+      await jitsiMeeting.lockRoom(password);
+      return;
+    }
+    const headers = await accountHeaders();
+    const res = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not lock the meeting.');
+    setServerLocked(true);
+  };
+  const handleUnlockRoom = async () => {
+    if (meetingInfo?.organizerId) {
+      const headers = await accountHeaders();
+      const res = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not unlock the meeting.');
+      setServerLocked(false);
+    }
+    if (jitsiMeeting.isLocked) await jitsiMeeting.unlockRoom();
+  };
+
   // Toggle video track
   const handleToggleVideo = () => {
     const next = !videoEnabled;
@@ -2587,7 +2623,7 @@ export function MeetingRoomPage() {
 
     try {
       const headers = await accountHeaders();
-      const endpoint = (meetingInfo?.requireLobbyPolicy || meetingInfo?.type === 'Private')
+      const endpoint = (meetingInfo?.requireLobbyPolicy || meetingInfo?.type === 'Private' || meetingInfo?.locked)
         ? `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/knock`
         : `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/admission`;
       const response = await fetch(endpoint, {
@@ -2605,7 +2641,12 @@ export function MeetingRoomPage() {
           navigate('/meeting-link-expired', { replace: true });
           return;
         }
-        throw new Error(data.error || 'Join request failed');
+        // The host may have locked the meeting after this page loaded: pick up the new rules so the
+        // password box appears and the next attempt goes through the waiting room.
+        if (data.passwordRequired || data.useLobby) {
+          setMeetingInfo((info) => (info ? { ...info, passwordRequired: true, locked: true } : info));
+        }
+        throw new Error(data.useLobby ? 'This meeting is locked. Enter the password and join again.' : (data.error || 'Join request failed'));
       }
 
       if ((data.status === 'ADMITTED' || !data.status) && data.jitsiToken) {
@@ -7209,10 +7250,10 @@ export function MeetingRoomPage() {
         <SecurityOptionsModal
           isOpen={showSecurityModal}
           onClose={() => setShowSecurityModal(false)}
-          isLocked={jitsiMeeting.isLocked}
+          isLocked={jitsiMeeting.isLocked || serverLocked}
           isModerator={isModerator}
-          onLock={jitsiMeeting.lockRoom}
-          onUnlock={jitsiMeeting.unlockRoom}
+          onLock={handleLockRoom}
+          onUnlock={handleUnlockRoom}
         />
 
         <ParticipantStatsModal

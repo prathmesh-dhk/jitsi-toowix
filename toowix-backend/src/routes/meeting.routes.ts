@@ -23,6 +23,8 @@ import {
   getLiveMeetingStatusHandler,
   postSignalHandler,
   getSignalsHandler,
+  lockMeetingHandler,
+  unlockMeetingHandler,
 } from '../meetings/waitingRoom';
 
 const router = Router();
@@ -39,6 +41,8 @@ router.post('/room/:roomSlug/signal', optionalAccount, postSignalHandler);
 router.get('/room/:roomSlug/signal', optionalAccount, getSignalsHandler);
 
 // Google Meet Waiting Room & Host Admission routes
+router.post('/room/:roomSlug/lock', meetingAccessRateLimiter, optionalAccount, lockMeetingHandler);
+router.post('/room/:roomSlug/unlock', meetingAccessRateLimiter, optionalAccount, unlockMeetingHandler);
 router.post('/room/:roomSlug/lobby/knock', meetingAccessRateLimiter, optionalAccount, knockLobbyHandler);
 router.get('/room/:roomSlug/lobby/status', optionalAccount, getLobbyStatusHandler);
 router.post('/room/:roomSlug/lobby/cancel', optionalAccount, cancelLobbyHandler);

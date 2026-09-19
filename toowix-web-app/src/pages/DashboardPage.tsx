@@ -218,6 +218,11 @@ export function DashboardPage() {
 
   const [copiedLink, setCopiedLink] = useState(false);
   const [createdRoomLink, setCreatedRoomLink] = useState<string | null>(null);
+  const [showLaterOptions, setShowLaterOptions] = useState(false);
+  const [laterType, setLaterType] = useState<'public' | 'private'>('public');
+  const [laterPassword, setLaterPassword] = useState('');
+  const [laterCreating, setLaterCreating] = useState(false);
+  const [createdPassword, setCreatedPassword] = useState<string | null>(null);
   const [showDashboardShareModal, setShowDashboardShareModal] = useState(false);
 
   const [allMeetings, setAllMeetings] = useState<IMeeting[]>([]);
@@ -351,12 +356,39 @@ export function DashboardPage() {
   };
 
   const handleCreateMeetingForLater = async () => {
+    const isPrivate = laterType === 'private';
+    const password = laterPassword.trim();
+    if (isPrivate && !password) return;
     const roomId = generateUniqueMeetingId();
     const url = `${window.location.origin}/meet/${roomId}`;
-    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Internal'); }
-    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
+    setLaterCreating(true);
+    try {
+      await persistMeeting(
+        `${displayName}'s Meeting`,
+        roomId,
+        isPrivate ? 'Private' : 'Guest',
+        undefined,
+        undefined,
+        isPrivate ? { passcode: password } : undefined
+      );
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Could not create meeting');
+      return;
+    } finally {
+      setLaterCreating(false);
+    }
+    setCreatedPassword(isPrivate ? password : null);
     setCreatedRoomLink(url);
   };
+
+  useEffect(() => {
+    if (!showNewMeetingModal) {
+      setShowLaterOptions(false);
+      setLaterType('public');
+      setLaterPassword('');
+      setCreatedPassword(null);
+    }
+  }, [showNewMeetingModal]);
 
   const handleCopyCreatedLink = () => {
     if (createdRoomLink) {
@@ -1448,7 +1480,74 @@ export function DashboardPage() {
               </button>
             </div>
 
-            {!createdRoomLink ? (
+            {!createdRoomLink && showLaterOptions ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {([
+                  { key: 'public', title: 'Public', desc: 'Anyone with the link can join by entering their name.' },
+                  { key: 'private', title: 'Private', desc: 'Guests need the password, then you admit them from the waiting room.' },
+                ] as const).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setLaterType(opt.key)}
+                    style={{
+                      textAlign: 'left',
+                      padding: '14px',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      border: `2px solid ${laterType === opt.key ? '#4F46E5' : (isDark ? '#1E293B' : '#E5E7EB')}`,
+                      backgroundColor: laterType === opt.key ? (isDark ? 'rgba(79, 70, 229, 0.15)' : '#EEF2FF') : (isDark ? '#0F172A' : '#FFFFFF'),
+                    }}
+                  >
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>{opt.title}</div>
+                    <div style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', marginTop: '2px' }}>{opt.desc}</div>
+                  </button>
+                ))}
+                {laterType === 'private' && (
+                  <input
+                    type="text"
+                    value={laterPassword}
+                    onChange={(e) => setLaterPassword(e.target.value)}
+                    placeholder="Meeting password (required)"
+                    style={{
+                      padding: '11px 12px',
+                      borderRadius: '8px',
+                      border: `1px solid ${!laterPassword.trim() ? '#DC2626' : (isDark ? '#334155' : '#D1D5DB')}`,
+                      backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
+                      color: isDark ? '#F9FAFB' : '#141B2B',
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  />
+                )}
+                <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowLaterOptions(false)}
+                    style={{ flex: 1, padding: '11px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: 'transparent', color: isDark ? '#E5E7EB' : '#374151', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    disabled={laterCreating || (laterType === 'private' && !laterPassword.trim())}
+                    onClick={handleCreateMeetingForLater}
+                    style={{
+                      flex: 2,
+                      padding: '11px',
+                      borderRadius: '8px',
+                      border: 'none',
+                      fontWeight: 700,
+                      color: '#FFFFFF',
+                      cursor: laterCreating || (laterType === 'private' && !laterPassword.trim()) ? 'not-allowed' : 'pointer',
+                      backgroundColor: laterCreating || (laterType === 'private' && !laterPassword.trim()) ? '#A5B4FC' : '#4F46E5',
+                    }}
+                  >
+                    {laterCreating ? 'Creating...' : 'Create meeting link'}
+                  </button>
+                </div>
+              </div>
+            ) : !createdRoomLink ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {/* Option 1: Instant Meeting */}
                 <button
@@ -1479,7 +1578,7 @@ export function DashboardPage() {
 
                 {/* Option 2: Create link for later */}
                 <button
-                  onClick={handleCreateMeetingForLater}
+                  onClick={() => setShowLaterOptions(true)}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1538,6 +1637,11 @@ export function DashboardPage() {
                 <p style={{ fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 14px 0' }}>
                   Here is your meeting link. Copy and send it to people you want to meet with:
                 </p>
+                {createdPassword && (
+                  <p style={{ fontSize: '13px', margin: '0 0 12px 0', color: isDark ? '#FDE047' : '#92400E' }}>
+                    Private meeting password: <strong>{createdPassword}</strong>. Share it along with the link.
+                  </p>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: isDark ? '#0F172A' : '#F3F4F6', border: `1px solid ${isDark ? '#1E293B' : 'transparent'}`, padding: '10px 14px', borderRadius: '8px', marginBottom: '20px' }}>
                   <span style={{ fontSize: '13px', color: isDark ? '#F9FAFB' : '#141B2B', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {createdRoomLink}
@@ -1643,6 +1747,7 @@ export function DashboardPage() {
             ? {
                 name: `${currentUser?.name || 'My'}'s Meeting`,
                 meetingUrl: createdRoomLink,
+                passcode: createdPassword || undefined,
                 hostName: currentUser?.name || 'Organizer',
               }
             : null

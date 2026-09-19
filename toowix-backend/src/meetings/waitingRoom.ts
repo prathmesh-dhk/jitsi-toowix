@@ -73,10 +73,12 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
     const company = meeting?.companyId ? await Company.findById(meeting.companyId) : null;
     const isHost = !!meeting && !!user && String(meeting.createdBy) === String(user._id);
 
-    // Password gate -- the host bypasses their own meeting's password.
-    if (meeting?.passcode && !isHost) {
+    // Password gate -- the host bypasses their own meeting's password. A mid-meeting lock
+    // password takes precedence over the original passcode.
+    const activePassword = meeting?.lockedPassword || meeting?.passcode || null;
+    if (activePassword && !isHost) {
       const submitted = typeof passcode === 'string' ? passcode.trim() : '';
-      if (!submitted || submitted !== meeting.passcode) {
+      if (!submitted || submitted !== activePassword) {
         res.status(401).json({ error: 'Incorrect meeting password.', passwordRequired: true });
         return;
       }
@@ -106,7 +108,7 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
     // Check if waiting room is bypassed:
     // When company policy doesn't enforce lobby, quick access is enabled, and meeting exists
     const requireLobbyPolicy = company?.meetingPolicy?.requireLobby === true;
-    const canAutoAdmit = !requireLobbyPolicy && meeting?.type !== 'Private' && (meeting?.quickAccessEnabled !== false) && (meeting?.hostJoined === true || !meeting);
+    const canAutoAdmit = !requireLobbyPolicy && meeting?.type !== 'Private' && !meeting?.lockedPassword && (meeting?.quickAccessEnabled !== false) && (meeting?.hostJoined === true || !meeting);
 
     if (canAutoAdmit) {
       const creds = generateCredentials(room, identity, false, meeting?.companyId ? String(meeting.companyId) : null);
@@ -445,6 +447,57 @@ export async function getLiveMeetingStatusHandler(req: AuthenticatedRequest, res
   } catch (err: any) {
     console.error('[WaitingRoom] Live status error:', err.message);
     res.status(500).json({ error: 'Failed to fetch live meeting status' });
+  }
+}
+
+/**
+ * POST /api/meetings/room/:roomSlug/lock  { password }
+ * POST /api/meetings/room/:roomSlug/unlock
+ * Host-only. While locked, everyone who is not already in the call must enter the password and
+ * then be admitted from the waiting room -- the same rules as a Private meeting.
+ */
+export async function lockMeetingHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const room = String(req.params.roomSlug).toLowerCase();
+    const password = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+    if (!password || password.length > 100) {
+      res.status(400).json({ error: 'Enter a password to lock the meeting.' });
+      return;
+    }
+    const meeting = await Meeting.findOne({ roomSlug: room });
+    if (!meeting) {
+      res.status(404).json({ error: 'Locking is available for meetings created from the dashboard.' });
+      return;
+    }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can lock the meeting.' });
+      return;
+    }
+    await Meeting.updateOne({ _id: meeting._id }, { $set: { lockedPassword: password } });
+    res.json({ success: true, locked: true });
+  } catch (err: any) {
+    console.error('[WaitingRoom] Lock error:', err.message);
+    res.status(500).json({ error: 'Failed to lock the meeting' });
+  }
+}
+
+export async function unlockMeetingHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const room = String(req.params.roomSlug).toLowerCase();
+    const meeting = await Meeting.findOne({ roomSlug: room });
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+    if (!(await requireHost(req, meeting))) {
+      res.status(403).json({ error: 'Only the meeting host can unlock the meeting.' });
+      return;
+    }
+    await Meeting.updateOne({ _id: meeting._id }, { $set: { lockedPassword: null } });
+    res.json({ success: true, locked: false });
+  } catch (err: any) {
+    console.error('[WaitingRoom] Unlock error:', err.message);
+    res.status(500).json({ error: 'Failed to unlock the meeting' });
   }
 }
 

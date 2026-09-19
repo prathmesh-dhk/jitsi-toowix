@@ -53,7 +53,9 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     const expired = !!expiresAt && Date.now() > expiresAt.getTime();
     const creatorId = meeting ? String(meeting.createdBy) : '';
     const isCreator = !!user && creatorId === String(user._id);
-    const passwordRequired = !!meeting?.passcode && !isCreator;
+    const activePassword = meeting?.lockedPassword || meeting?.passcode || null;
+    const isLocked = !!meeting?.lockedPassword;
+    const passwordRequired = !!activePassword && !isCreator;
     const policy = company?.meetingPolicy;
     const moderator = !!meeting && !!user && String(meeting.createdBy) === String(user._id)
       && (user.role === 'SUPER_ADMIN' || !policy?.whoCanHost || policy.whoCanHost.includes(user.role));
@@ -72,7 +74,7 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
       type: meeting?.type || 'Guest', organizerId: meeting ? String(meeting.createdBy) : '',
       organizerName: '', description: meeting?.description || null,
       accessAllowed: true, cancelled: false, expired, expiresAt: expiresAt ? expiresAt.toISOString() : null,
-      passwordRequired, inviteRestricted: meeting?.type === 'Private',
+      passwordRequired, inviteRestricted: meeting?.type === 'Private', locked: isLocked,
       recordingEnabled, autoRecording: recordingEnabled && !!policy?.autoRecording,
       requireLobbyPolicy, allowScreenShare: policy?.allowScreenShare !== false,
       micLockEnabled: !!policy?.micLockEnabled,
@@ -80,12 +82,12 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     if (req.method === 'GET') { res.json({ meeting: info }); return; }
     if (expired) { res.status(410).json({ error: 'This meeting link has expired.' }); return; }
     // Private meetings always go through the host-controlled waiting room; only the host may enter directly.
-    if (meeting?.type === 'Private' && !isCreator) {
+    if ((meeting?.type === 'Private' || isLocked) && !isCreator) {
       res.status(403).json({ error: 'Ask to join from the waiting room.', useLobby: true }); return;
     }
     if (passwordRequired) {
       const submitted = typeof req.body.passcode === 'string' ? req.body.passcode.trim() : '';
-      if (!submitted || submitted !== meeting!.passcode) {
+      if (!submitted || submitted !== activePassword) {
         res.status(401).json({ error: 'Incorrect meeting password.', passwordRequired: true }); return;
       }
     }

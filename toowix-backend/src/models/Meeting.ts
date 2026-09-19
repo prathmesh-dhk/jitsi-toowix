@@ -30,6 +30,7 @@ export interface IMeeting {
   description?: string | null;
   invitees?: string[];
   passcode?: string | null;
+  lockedPassword?: string | null;
   rsvps?: Array<{
     email: string;
     status: 'accepted' | 'declined' | 'pending';
@@ -134,6 +135,8 @@ const MeetingSchema = new Schema<IMeetingDocument>(
     description: { type: String, default: null, trim: true, maxlength: 2000 },
     invitees: { type: [String], default: undefined }, // undefined (not []) means "no invitee restriction" for non-Private types
     passcode: { type: String, default: null, trim: true },
+    // Set by the host mid-meeting ("Lock meeting"); overrides passcode and forces the waiting room.
+    lockedPassword: { type: String, default: null, trim: true },
     rsvps: {
       type: [{
         email: { type: String, required: true },
