@@ -57,7 +57,8 @@ export function classifyNetwork(metrics: INetworkMetrics): Exclude<NetworkState,
 export function getMediaQualityPolicy(
   mode: LowDataMode,
   state: NetworkState,
-  participantCount: number
+  participantCount: number,
+  screenShareActive = false
 ): IMediaQualityPolicy {
   const normalLastN = participantCount >= 8 ? 4 : 6;
 
@@ -83,6 +84,8 @@ export function getMediaQualityPolicy(
       sendMaxHeight: state === 'POOR' ? 180 : 360
     };
   }
+  // Text on a shared screen is unreadable at camera-sized limits, so while a screen is being
+  // shared the receive/send caps stay at 720p (degraded) or 1080p (good) instead of 360/720.
   if (state === 'DEGRADED' || state === 'RECOVERING') {
     return {
       audioOnly: false,
@@ -90,8 +93,8 @@ export function getMediaQualityPolicy(
       desktopMaxHeight: 720,
       desktopMaxWidth: 1280,
       lastN: 2,
-      receiveMaxHeight: 360,
-      sendMaxHeight: 360
+      receiveMaxHeight: screenShareActive ? 720 : 360,
+      sendMaxHeight: screenShareActive ? 720 : 360
     };
   }
 
@@ -101,8 +104,8 @@ export function getMediaQualityPolicy(
     desktopMaxHeight: 1080,
     desktopMaxWidth: 1920,
     lastN: normalLastN,
-    receiveMaxHeight: 720,
-    sendMaxHeight: 720
+    receiveMaxHeight: screenShareActive ? 1080 : 720,
+    sendMaxHeight: screenShareActive ? 1080 : 720
   };
 }
 

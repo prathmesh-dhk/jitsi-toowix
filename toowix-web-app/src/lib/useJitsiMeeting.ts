@@ -573,8 +573,9 @@ export function useJitsiMeeting({
       return;
     }
     const participantCount = room.getParticipants?.().length || 0;
-    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount);
-    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal' ].join(':');
+    const screenShareActive = Boolean(localDesktopTrackRef.current) || Object.keys(remoteDesktopTracksRef.current).length > 0;
+    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount, screenShareActive);
+    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare' ].join(':');
 
     if (lastAppliedQualityKeyRef.current === key) {
       return;
@@ -817,6 +818,7 @@ export function useJitsiMeeting({
     }
 
     const entries = Object.entries(remoteDesktopTracksRef.current);
+    void applyMediaQualityPolicy();
     // TEMP diagnostic for the "viewer's screen-share freezes after presenter stops" investigation
     // -- remove once confirmed fixed. Unconditional (not DEV-gated) so it shows up on the
     // production build being tested against.
@@ -1563,6 +1565,7 @@ export function useJitsiMeeting({
       }
       setIsScreenSharing(false);
       setLocalScreenStream(null);
+      void applyMediaQualityPolicy();
 
       // Dispose only after the conference-level removal has been attempted (success or not --
       // the local capture is ending either way), never before, so a slow removeTrack can't race
@@ -1682,8 +1685,17 @@ export function useJitsiMeeting({
       // distinct videoTypes/source-names at the JVB level), and it's what makes the dedicated
       // stop path above valid: removeTrack only ever has to undo exactly this addTrack, with the
       // camera never touched on either side.
+      try {
+        // Ask the encoder to keep the screen sharp (drop frame rate before resolution).
+        const nativeDesktopTrack = desktopTrack.getTrack?.();
+
+        if (nativeDesktopTrack && 'contentHint' in nativeDesktopTrack) {
+          nativeDesktopTrack.contentHint = 'detail';
+        }
+      } catch { /* hint is best-effort */ }
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       room.setDesktopSharingFrameRate?.(desktopPolicy.desktopFps);
+      void applyMediaQualityPolicy();
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
     } catch (err: any) {
