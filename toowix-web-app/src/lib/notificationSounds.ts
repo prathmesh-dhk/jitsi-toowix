@@ -99,6 +99,15 @@ export function playRecordingStoppedTone() {
   ]);
 }
 
+// A short, soft "ting" for an incoming chat message: a clean bell-like sine with a quiet
+// overtone that decays quickly, deliberately gentler than the join/leave cues.
+export function playChatMessageTone() {
+  playTone([
+    { freq: 1319, startMs: 0, durationMs: 380, gain: 0.07 },
+    { freq: 1976, startMs: 0, durationMs: 220, gain: 0.025 }
+  ]);
+}
+
 // A soft, low double-beep -- a gentle heads-up (time remaining), not an alert.
 export function playTimeWarningTone() {
   playTone([

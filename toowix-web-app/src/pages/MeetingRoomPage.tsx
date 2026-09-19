@@ -56,6 +56,7 @@ import {
 } from 'lucide-react';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import {
+  playChatMessageTone,
   playMeetingEndedTone,
   playMeetingStartedTone,
   playParticipantJoinedTone,
@@ -1179,6 +1180,9 @@ export function MeetingRoomPage() {
   const inCallVideoRef = useRef<HTMLVideoElement | null>(null);
   const presentationVideoRef = useRef<HTMLVideoElement | null>(null);
   const [recordingToast, setRecordingToast] = useState<string | null>(null);
+  const [chatToasts, setChatToasts] = useState<Array<{ id: string; sender: string; text: string }>>([]);
+  const activePanelRef = useRef<string | null>(null);
+  useEffect(() => { activePanelRef.current = activePanel; }, [activePanel]);
   const [participantToast, setParticipantToast] = useState<string | null>(null);
   const [timeLimitToast, setTimeLimitToast] = useState<string | null>(null);
   // Tracks who was already in the room so the very first roster population (when I join and see
@@ -3614,15 +3618,21 @@ export function MeetingRoomPage() {
         // rare chance both this and a working datachannel send arrive.
         const text = typeof payload?.text === 'string' ? payload.text : '';
         if (!text) return;
+        const chatId = msgId || String(Date.now());
         setChatMessages((prev) => [
           ...prev,
           {
-            id: msgId || String(Date.now()),
+            id: chatId,
             sender: sender || 'Participant',
             time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             text,
           },
         ]);
+        playChatMessageTone();
+        if (activePanelRef.current !== 'chat') {
+          setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text } ]);
+          setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== chatId)), 5000);
+        }
       } else if (type === 'REACTION') {
         const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
 
@@ -3760,6 +3770,7 @@ export function MeetingRoomPage() {
 
     return (
       <div
+        className="tw-root"
         style={{
           height: '100vh',
           width: '100vw',
@@ -3779,6 +3790,44 @@ export function MeetingRoomPage() {
         }}
       >
         <style>{`
+          .tw-mobile-only { display: none !important; }
+          @media (max-width: 768px) {
+            .tw-mobile-only { display: flex !important; }
+            .tw-root { height: 100dvh !important; width: 100% !important; }
+            .tw-topbar { height: 44px !important; padding: 6px 10px !important; }
+            .tw-topbar > div:first-child { gap: 8px !important; min-width: 0; }
+            .tw-topbar > div:first-child > span:nth-of-type(n+2),
+            .tw-topbar > div:first-child > button,
+            .tw-topbar > div:first-child > div[title] { display: none !important; }
+            .tw-main { padding: 2px 6px 84px !important; }
+            .tw-stage-row { flex-direction: column !important; max-width: 100% !important; gap: 8px !important; }
+            [style*="min-width: 240px"] { width: 100% !important; min-width: 0 !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; max-height: 96px !important; flex: none !important; }
+            [style*="min-width: 240px"] > div { width: 140px !important; flex: 0 0 140px !important; height: 88px !important; aspect-ratio: auto !important; }
+            [style*="calc(100% - 380px)"] { max-width: 100% !important; }
+            [style*="calc(100vh - 170px)"] { max-height: calc(100dvh - 140px) !important; }
+            .tw-solo { aspect-ratio: auto !important; max-width: 100% !important; width: 100% !important; border-radius: 16px !important; }
+            .tw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-template-rows: none !important; grid-auto-rows: minmax(120px, 1fr) !important; gap: 8px !important; overflow-y: auto !important; }
+            .tw-grid[data-count="1"] { grid-template-columns: minmax(0, 1fr) !important; }
+            .tw-grid[data-count="2"] { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
+            .tw-grid > div { border-radius: 14px !important; }
+            .tw-toolbar { left: 8px !important; right: 8px !important; transform: none !important; bottom: calc(8px + env(safe-area-inset-bottom)) !important; height: 60px !important; padding: 0 10px !important; gap: 4px !important; justify-content: space-between !important; border-radius: 30px !important; }
+            .tw-toolbar button[title="Select microphone"],
+            .tw-toolbar button[title="Select camera"],
+            .tw-toolbar button[data-testid="screen-share-toggle"],
+            .tw-toolbar button[title*="captions"],
+            .tw-toolbar button[title*="tile view"],
+            .tw-toolbar button[title="Invite people to meeting"] { display: none !important; }
+            .tw-toolbar > button, .tw-toolbar > div > button:not([title^="Select"]) { width: 44px !important; height: 44px !important; }
+            .tw-toolbar > button[title="Leave call"] { width: 60px !important; }
+            .tw-toolbar [style*="bottom: 56px"][style*="left: 50%"] { position: fixed !important; left: 50% !important; bottom: calc(76px + env(safe-area-inset-bottom)) !important; }
+            .tw-more-menu { position: fixed !important; left: 8px !important; right: 8px !important; top: auto !important; bottom: calc(76px + env(safe-area-inset-bottom)) !important; min-width: 0 !important; max-height: 65dvh !important; overflow-y: auto !important; border-radius: 20px !important; }
+            .tw-more-menu button { padding: 12px 14px !important; font-size: 15px !important; }
+            .tw-brgroup { display: none !important; }
+            .tw-pip-cta { display: none !important; }
+            .tw-chat-toasts { top: 52px !important; right: 8px !important; left: 8px !important; align-items: flex-end; }
+            .tw-panel { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100dvh !important; max-height: none !important; margin: 0 !important; border-radius: 0 !important; z-index: 300 !important; }
+            [aria-label="Your meeting's ready"], [role="alertdialog"] { left: 8px !important; right: 8px !important; width: auto !important; bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
+          }
           @keyframes floatUp {
             0% { transform: translateY(0) scale(0.8); opacity: 1; }
             100% { transform: translateY(-240px) scale(1.4); opacity: 0; }
@@ -3841,6 +3890,45 @@ export function MeetingRoomPage() {
         )}
 
         {/* Active Recording Toast Notification */}
+        {/* Incoming chat message: slides in from the right, click to open the chat */}
+        <div
+          className="tw-chat-toasts"
+          style={{ position: 'fixed', top: '64px', right: '16px', zIndex: 350, display: 'flex', flexDirection: 'column', gap: '8px', pointerEvents: 'none' }}
+        >
+          {chatToasts.map((toast) => (
+            <div
+              key={toast.id}
+              role="status"
+              onClick={() => {
+                setActivePanel('chat');
+                setChatToasts((prev) => prev.filter((t) => t.id !== toast.id));
+              }}
+              style={{
+                width: '300px',
+                maxWidth: 'calc(100vw - 32px)',
+                backgroundColor: '#2D2E30',
+                color: '#E8EAED',
+                borderRadius: '14px',
+                padding: '12px 14px',
+                border: '1px solid rgba(255,255,255,0.12)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                display: 'flex',
+                gap: '10px',
+                alignItems: 'flex-start',
+                cursor: 'pointer',
+                pointerEvents: 'auto',
+                animation: 'slideInRight 0.25s ease',
+              }}
+            >
+              <MessageSquare size={18} color="#8AB4F8" style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#8AB4F8', marginBottom: '2px' }}>{toast.sender}</div>
+                <div style={{ fontSize: '13px', lineHeight: 1.35, wordBreak: 'break-word', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{toast.text}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
         {recordingToast && (
           <div
             style={{
@@ -3883,6 +3971,7 @@ export function MeetingRoomPage() {
 
         {/* 1. SLIM TOP INFORMATION AREA (Left: Logo + Time + Room Code + Info / Right: Participant Pill) */}
         <div
+          className="tw-topbar"
           style={{
             height: '48px',
             padding: '10px 24px',
@@ -4038,6 +4127,7 @@ export function MeetingRoomPage() {
 
         {/* 2. MAIN PARTICIPANT STAGE CONTAINER (Clear margins, 24px radius, 16:9 ratio, responsive) */}
         <div
+          className="tw-main"
           style={{
             flex: 1,
             width: '100%',
@@ -4104,6 +4194,7 @@ export function MeetingRoomPage() {
           {(showShareStage ? (
             /* Presentation Mode: Main Stage Screen Share (or Shared Video) + Filmstrip of Attendees (Google Meet style) */
             <div
+              className="tw-stage-row"
               style={{
                 width: '100%',
                 maxWidth: activePanel ? 'calc(100% - 380px)' : '100%',
@@ -4479,6 +4570,7 @@ export function MeetingRoomPage() {
           ) : remoteParticipants.length === 0 ? (
             /* Single Participant Stage Card (24px radius, 16:9 ratio, matched to avatar icon color) */
             <div
+              className="tw-solo"
               style={{
                 flex: 1,
                 maxWidth: activePanel ? 'calc(100% - 380px)' : '1368px',
@@ -4618,6 +4710,7 @@ export function MeetingRoomPage() {
           ) : !tileViewEnabled ? (
             /* Speaker View (Jitsi tile-view OFF): one large pinned participant + filmstrip sidebar */
             <div
+              className="tw-stage-row"
               style={{
                 width: '100%',
                 maxWidth: activePanel ? 'calc(100% - 380px)' : '100%',
@@ -4967,6 +5060,8 @@ export function MeetingRoomPage() {
           ) : (
             /* Multi-Participant Responsive Grid: Every participant has card background matching their avatar icon color */
             <div
+              className="tw-grid"
+              data-count={remoteParticipants.length + allShares.length + 1}
               style={{
                 width: '100%',
                 flex: 1,
@@ -5380,6 +5475,7 @@ export function MeetingRoomPage() {
           {/* Smooth Side Panels (Resizes main participant stage without covering controls) */}
           {activePanel && (
             <div
+              className="tw-panel"
               style={{
                 width: '360px',
                 height: '100%',
@@ -5985,6 +6081,7 @@ export function MeetingRoomPage() {
 
         {/* 3. CENTERED FLOATING BOTTOM TOOLBAR (72px height, pill container near #202124) */}
         <div
+          className="tw-toolbar"
           style={{
             position: 'absolute',
             bottom: '16px',
@@ -6343,6 +6440,7 @@ export function MeetingRoomPage() {
             {/* More Menu Dropdown */}
             {showMoreMenu && (
               <div
+                className="tw-more-menu"
                 style={{
                   position: 'absolute',
                   bottom: '56px',
@@ -6359,6 +6457,39 @@ export function MeetingRoomPage() {
                   gap: '4px',
                 }}
               >
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'chat' ? null : 'chat'); }} style={menuButtonStyle(activePanel === 'chat')}>
+                  <MessageSquare size={16} />
+                  Chat
+                </button>
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'people' ? null : 'people'); }} style={menuButtonStyle(activePanel === 'people')}>
+                  <Users size={16} />
+                  People
+                </button>
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setShowShareModal(true); }} style={menuButtonStyle(false)}>
+                  <UserPlus size={16} />
+                  Invite people
+                </button>
+                {typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia) && (
+                  <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); handleToggleScreenShare(); }} style={menuButtonStyle(isScreenSharing)}>
+                    <ScreenShare size={16} />
+                    {isScreenSharing ? 'Stop presenting' : 'Present screen'}
+                  </button>
+                )}
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setCaptionsEnabled(!captionsEnabled); }} style={menuButtonStyle(captionsEnabled)}>
+                  <Subtitles size={16} />
+                  {captionsEnabled ? 'Turn off captions' : 'Turn on captions'}
+                </button>
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); toggleTileView(); }} style={menuButtonStyle(tileViewEnabled)}>
+                  <LayoutGrid size={16} />
+                  {tileViewEnabled ? 'Exit tile view' : 'Tile view'}
+                </button>
+                {isModerator && (
+                  <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'host' ? null : 'host'); }} style={menuButtonStyle(activePanel === 'host')}>
+                    <ShieldCheck size={16} />
+                    Host controls
+                  </button>
+                )}
+                <div className="tw-mobile-only" style={{ height: '1px', backgroundColor: 'rgba(255,255,255,0.08)', margin: '4px 0' }} />
                 {isModerator && (
                   <button
                     onClick={() => {
@@ -6763,6 +6894,7 @@ export function MeetingRoomPage() {
 
         {/* 4. SEPARATE ROUNDED BOTTOM-RIGHT CONTROLS GROUP (Chat + Activities + Host Controls) */}
         <div
+          className="tw-brgroup"
           style={{
             position: 'absolute',
             bottom: '16px',
@@ -7086,7 +7218,7 @@ export function MeetingRoomPage() {
         />
 
         <MeetingReadyDialog
-          isOpen={Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0)}
+          isOpen={Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0 && !showMoreMenu && !showSettingsModal && !activePanel)}
           onClose={() => setShowMeetingReady(false)}
           onAddOthers={() => setShowShareModal(true)}
           meetingUrl={`${window.location.origin}/meet/${encodeURIComponent(roomId)}`}
@@ -7322,6 +7454,7 @@ export function MeetingRoomPage() {
         {/* One-time Auto Picture-in-Picture opt-in banner */}
         {showPipEnableCTA && (
           <div
+            className="tw-pip-cta"
             style={{
               position: 'fixed',
               top: '16px',

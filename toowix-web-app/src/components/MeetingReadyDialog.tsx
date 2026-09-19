@@ -37,7 +37,7 @@ export function MeetingReadyDialog({ isOpen, onClose, onAddOthers, meetingUrl, j
         position: 'fixed',
         left: '24px',
         bottom: '104px',
-        zIndex: 240,
+        zIndex: 90,
         width: '380px',
         maxWidth: 'calc(100vw - 48px)',
         backgroundColor: isDark ? '#2D2E30' : '#FFFFFF',

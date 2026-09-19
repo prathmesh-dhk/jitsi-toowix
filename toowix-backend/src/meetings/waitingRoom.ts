@@ -450,6 +450,9 @@ export async function getLiveMeetingStatusHandler(req: AuthenticatedRequest, res
 
 interface IRoomSignal {
   id: string;
+  msgId?: string;
+  senderSessionId?: string;
+  targetSessionId?: string | null;
   sender: string;
   type: string;
   payload: any;
@@ -464,13 +467,18 @@ const roomSignalsMap = new Map<string, IRoomSignal[]>();
  */
 export async function postSignalHandler(req: any, res: Response): Promise<void> {
   const room = String(req.params.roomSlug).toLowerCase();
-  const { sender, type, payload } = req.body;
+  const { sender, type, payload, msgId, senderSessionId, targetSessionId } = req.body;
   if (!roomSignalsMap.has(room)) {
     roomSignalsMap.set(room, []);
   }
   const signals = roomSignalsMap.get(room)!;
   const signal: IRoomSignal = {
     id: crypto.randomUUID(),
+    // Kept so receivers can recognise (and ignore) their own broadcast coming back, and so
+    // targeted signals still reach only their intended session.
+    msgId: typeof msgId === 'string' ? msgId.slice(0, 120) : undefined,
+    senderSessionId: typeof senderSessionId === 'string' ? senderSessionId.slice(0, 120) : undefined,
+    targetSessionId: typeof targetSessionId === 'string' ? targetSessionId.slice(0, 120) : null,
     sender: String(sender || 'Anonymous'),
     type: String(type || ''),
     payload: payload || null,

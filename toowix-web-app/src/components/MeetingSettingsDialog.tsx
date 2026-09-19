@@ -139,7 +139,16 @@ export function MeetingSettingsDialog(props: IProps) {
         padding: '20px'
       }}
     >
+      <style>{`
+        @media (max-width: 768px) {
+          .tw-settings { flex-direction: column !important; height: min(640px, 92dvh) !important; }
+          .tw-settings-nav { width: 100% !important; display: flex !important; flex-direction: row !important; gap: 4px; padding: 8px !important; border-right: none !important; border-bottom: 1px solid rgba(128,134,139,0.4) !important; overflow-x: auto; }
+          .tw-settings-nav > div { display: none !important; }
+          .tw-settings-nav button { width: auto !important; flex: 1; justify-content: center; margin-bottom: 0 !important; }
+        }
+      `}</style>
       <div
+        className="tw-settings"
         role="dialog"
         aria-modal="true"
         aria-label="Settings"
@@ -156,7 +165,7 @@ export function MeetingSettingsDialog(props: IProps) {
           color: fg
         }}
       >
-        <div style={{ width: '200px', flexShrink: 0, padding: '20px 10px', borderRight: `1px solid ${border}` }}>
+        <div className="tw-settings-nav" style={{ width: '200px', flexShrink: 0, padding: '20px 10px', borderRight: `1px solid ${border}` }}>
           <div style={{ fontSize: '22px', fontWeight: 500, padding: '0 12px 20px' }}>Settings</div>
           {tabs.map((t) => (
             <button
@@ -236,7 +245,7 @@ export function MeetingSettingsDialog(props: IProps) {
 
           {tab === 'video' && (
             <div style={{ paddingRight: '24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', backgroundColor: isDark ? 'rgba(138,180,248,0.12)' : '#D3E3FD', borderRadius: '8px', padding: '14px 16px', marginBottom: '24px', fontSize: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', backgroundColor: isDark ? 'rgba(138,180,248,0.12)' : '#D3E3FD', borderRadius: '8px', padding: '14px 16px', marginBottom: '24px', fontSize: '14px' }}>
                 <span>Video enhancement has moved</span>
                 <button
                   onClick={() => { onClose(); props.onOpenBackgrounds(); }}
