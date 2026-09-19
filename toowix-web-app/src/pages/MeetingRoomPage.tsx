@@ -3205,28 +3205,17 @@ export function MeetingRoomPage() {
     [roomId, displayName]
   );
 
-  const handleRemoteAudioControl = useCallback((participantId: string, muted: boolean) => {
+  const handleRemoteAudioControl = useCallback((participantId: string) => {
     if (!isModerator) return;
     const room = jitsiMeeting.room.current;
     if (!room) return;
 
-    if (muted) {
-      // lib-jitsi-meet's installed version has no remote-unmute API at all (verified directly
-      // against the library -- no askToUnmute, and muteParticipant only ever mutes, it can't be
-      // called the other way). A host can never force someone else's mic on anyway -- that's a
-      // privacy boundary, not a missing feature -- so this sends the SAME kind of custom signal
-      // already used for hand-raise/chat/reactions, targeted at that one participant by their
-      // real Jitsi id; the receiving client shows a prompt and unmutes only if they act on it.
-      postRoomSignal('UNMUTE_REQUESTED', { targetParticipantId: participantId, requesterName: displayName || 'The host' });
-      setParticipantToast('Unmute request sent.');
-      return;
-    }
     try {
       room.muteParticipant?.(participantId, 'audio');
     } catch {
       setCallError('Could not update this participant’s microphone. Please try again.');
     }
-  }, [isModerator, jitsiMeeting.room, postRoomSignal, displayName]);
+  }, [isModerator, jitsiMeeting.room]);
 
   const handleToggleRaiseHand = () => {
     const nextRaised = !isHandRaised;
@@ -3311,15 +3300,6 @@ export function MeetingRoomPage() {
             text,
           },
         ]);
-      } else if (type === 'UNMUTE_REQUESTED') {
-        // Consent-based unmute (see handleRemoteAudioControl): only the person actually being
-        // asked reacts to this -- everyone else's client just ignores it.
-        if (payload?.targetParticipantId !== jitsiMeeting.localParticipantId) return;
-        const requesterName = typeof payload?.requesterName === 'string' ? payload.requesterName : 'The host';
-
-        playTimeWarningTone();
-        setParticipantToast(`${requesterName} is asking you to unmute`);
-        setTimeout(() => setParticipantToast((t) => (t === `${requesterName} is asking you to unmute` ? null : t)), 6000);
       } else if (type === 'REACTION') {
         const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
 
@@ -4868,15 +4848,15 @@ export function MeetingRoomPage() {
                     >
                       <Pin size={16} fill={pinnedParticipantId === remote.id ? '#8AB4F8' : 'none'} color="#8AB4F8" />
                     </button>
-                    {/* Moderators can mute directly; unmuting sends Jitsi's consent-based
-                        request rather than enabling somebody else's microphone remotely. */}
-                    {isModerator && (
+                    {/* Moderators can directly mute an active participant. Once muted, the
+                        microphone icon becomes a non-interactive status indicator. */}
+                    {isModerator && !remote.muted && (
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
-                          handleRemoteAudioControl(remote.id, remote.muted);
+                          handleRemoteAudioControl(remote.id);
                         }}
-                        title={remote.muted ? `Ask ${remote.name} to unmute` : `Mute ${remote.name}`}
+                        title={`Mute ${remote.name}`}
                         style={{
                           position: 'absolute',
                           top: '16px',
@@ -4894,7 +4874,7 @@ export function MeetingRoomPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        {remote.muted ? <MicOff size={16} color="#F87171" /> : <Mic size={16} color="#8AB4F8" />}
+                        <MicOff size={16} color="#F87171" />
                       </button>
                     )}
                     {(remote as any).video && (remote as any).stream ? (
@@ -4961,7 +4941,7 @@ export function MeetingRoomPage() {
                       {remote.name}
                     </div>
                     {/* Remote Mute Indicator in Top-Right */}
-                    {remote.muted && !isModerator && (
+                    {remote.muted && (
                       <div
                         style={{
                           position: 'absolute',
