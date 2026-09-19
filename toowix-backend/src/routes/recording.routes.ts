@@ -4,6 +4,7 @@ import {
   deleteRecordingHandler,
   getRecordingHandler,
   ingestRecordingHandler,
+  recordingSessionHandler,
   listRecordingsHandler,
   renameRecordingHandler,
   streamRecordingHandler,
@@ -14,6 +15,7 @@ const router = Router();
 router.get('/', verifyFirebaseToken, listRecordingsHandler);
 router.get('/:id', getRecordingHandler); // public/shared viewing
 router.get('/:id/stream', streamRecordingHandler); // public/shared viewing, same access model as above
+router.post('/session', verifyFirebaseToken, recordingSessionHandler);
 router.post('/ingest', ingestRecordingHandler); // shared-secret auth, not Firebase -- see handler
 router.patch('/:id', verifyFirebaseToken, renameRecordingHandler);
 router.delete('/:id', verifyFirebaseToken, deleteRecordingHandler);

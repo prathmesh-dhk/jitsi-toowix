@@ -31,6 +31,7 @@ export interface IMeeting {
   invitees?: string[];
   passcode?: string | null;
   lockedPassword?: string | null;
+  recordingHoldUntil?: Date | null;
   rsvps?: Array<{
     email: string;
     status: 'accepted' | 'declined' | 'pending';
@@ -137,6 +138,8 @@ const MeetingSchema = new Schema<IMeetingDocument>(
     passcode: { type: String, default: null, trim: true },
     // Set by the host mid-meeting ("Lock meeting"); overrides passcode and forces the waiting room.
     lockedPassword: { type: String, default: null, trim: true },
+    // While in the future the meeting must not be deleted: a recording is running or still being processed.
+    recordingHoldUntil: { type: Date, default: null },
     rsvps: {
       type: [{
         email: { type: String, required: true },

@@ -6,6 +6,7 @@ import { getFirebaseAuth } from '../config/firebase';
 import { User } from '../models/User';
 import { Meeting } from '../models/Meeting';
 import { Recording } from '../models/Recording';
+import { RecordingHold } from '../models/RecordingHold';
 import { Company } from '../models/Company';
 import { notifyCompany, notifyUser } from '../notifications/createNotification';
 import fs from 'fs';
@@ -115,6 +116,38 @@ export const listRecordingsHandler = async (req: AuthenticatedRequest, res: Resp
 const isAdminRole = (role?: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN';
 
 /**
+ * POST /api/recordings/session  { roomSlug, action: 'start' | 'stop' }
+ * Sent by the host's browser when a recording starts and stops. It (1) snapshots who owns the recording
+ * and (2) keeps the meeting record alive until the recorder has finished, so a finished recording can
+ * always be attached to its owner even if the host ended the meeting straight away.
+ */
+export const recordingSessionHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const roomSlug = typeof req.body?.roomSlug === 'string' ? req.body.roomSlug.trim().toLowerCase() : '';
+    const action = req.body?.action === 'stop' ? 'stop' : 'start';
+    if (!/^[a-z0-9-]{3,100}$/.test(roomSlug)) { res.status(400).json({ error: 'Invalid room code' }); return; }
+    const account: any = req.accountUser;
+    const user = account?.id ? await User.findById(account.id) : null;
+    if (!user) { res.status(401).json({ error: 'Sign in required' }); return; }
+    const meeting: any = await Meeting.findOne({ roomSlug });
+    if (!meeting) { res.status(404).json({ error: 'Recording is available for meetings created from the dashboard.' }); return; }
+    if (!mayManageResource(user, meeting)) { res.status(403).json({ error: 'Only the meeting host can record.' }); return; }
+
+    const holdMs = action === 'start' ? 6 * 60 * 60 * 1000 : 3 * 60 * 60 * 1000;
+    await Meeting.updateOne({ _id: meeting._id }, { $set: { recordingHoldUntil: new Date(Date.now() + holdMs) } });
+    await RecordingHold.findOneAndUpdate(
+      { roomSlug, meetingId: meeting._id },
+      { $set: { companyId: meeting.companyId || null, createdBy: meeting.createdBy, name: meeting.name, expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[Recordings] Session hold error:', error.message);
+    res.status(500).json({ error: 'Could not register the recording session' });
+  }
+};
+
+/**
  * POST /api/recordings/ingest
  * Called by the Jibri finalize worker as it processes a local recording. Not user-authenticated --
  * Jibri isn't a logged-in user -- instead it's gated by a shared secret in the
@@ -147,7 +180,16 @@ export const ingestRecordingHandler = async (req: Request, res: Response): Promi
       res.status(400).json({ error: 'Completed recording must reference the session final.mp4 in the recording mount' }); return;
     }
 
-    const meeting = await Meeting.findOne({ roomSlug: roomSlug.trim().toLowerCase() });
+    const slug = roomSlug.trim().toLowerCase();
+    let meeting: any = await Meeting.findOne({ roomSlug: slug });
+    if (!meeting) {
+      // The meeting record may already be gone (ended/expired) while the recorder was still
+      // processing -- use the owner snapshot taken when recording started.
+      const hold: any = await RecordingHold.findOne({ roomSlug: slug }).sort({ createdAt: -1 });
+      if (hold) {
+        meeting = { _id: hold.meetingId || hold._id, companyId: hold.companyId || null, createdBy: hold.createdBy, name: hold.name };
+      }
+    }
     if (!meeting) {
       res.status(404).json({ error: `No meeting found with roomSlug "${roomSlug}"` });
       return;

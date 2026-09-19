@@ -352,11 +352,14 @@ def read_ingest_key() -> str:
     return key
 
 
-def post_status(payload: Dict[str, Any], status: str, log: pathlib.Path, retries: int = 4) -> None:
+def post_status(payload: Dict[str, Any], status: str, log: pathlib.Path, retries: int = 9) -> None:
     url = os.environ.get("RECORDING_BACKEND_URL", "http://toowix-backend:4000").rstrip("/") + "/api/recordings/ingest"
     body = json.dumps(dict(payload, status=status)).encode("utf-8")
     key = read_ingest_key()
     last_error: Optional[Exception] = None
+    # Retry for several minutes (2, 4, 8, ... capped at 60 seconds) so a backend restart or a deploy in
+    # the middle of finalizing never loses a recording. A definite "no" from the backend (a 4xx other
+    # than timeout/rate-limit) is not retried -- retrying cannot change it -- and is reported clearly.
     for attempt in range(retries):
         try:
             request = urllib.request.Request(
@@ -369,11 +372,16 @@ def post_status(payload: Dict[str, Any], status: str, log: pathlib.Path, retries
             with log.open("a", encoding="utf-8") as stream:
                 stream.write(f"{utc_now()} {status}\n")
             return
-        except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+        except urllib.error.HTTPError as exc:
             last_error = exc
-            if attempt + 1 < retries:
-                time.sleep(2 ** attempt)
-    raise FinalizationError(f"Backend status update failed after {retries} attempts") from last_error
+            if 400 <= exc.code < 500 and exc.code not in (408, 425, 429):
+                detail = exc.read()[:300].decode("utf-8", "replace")
+                raise FinalizationError(f"Backend rejected the status update (HTTP {exc.code}): {detail}") from exc
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = exc
+        if attempt + 1 < retries:
+            time.sleep(min(2 ** (attempt + 1), 60))
+    raise FinalizationError(f"Backend status update failed after {retries} attempts ({last_error})") from last_error
 
 
 def locate_inputs(root: pathlib.Path, configured_output_root: pathlib.Path, args: list[str]) -> Tuple[str, str, pathlib.Path]:

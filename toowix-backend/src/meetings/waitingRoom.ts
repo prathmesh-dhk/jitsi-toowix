@@ -403,8 +403,11 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
     // the in-memory endedMeetingSlugs set, so deleting the document here doesn't break polling
     // clients that check live-status after this point.
     const isInstantMeeting = !meeting.scheduledAt && !meeting.recurrence;
+    // Keep the record while a recording is running or still being processed; the retention sweep
+    // removes it afterwards.
+    const recordingPending = !!meeting.recordingHoldUntil && new Date(meeting.recordingHoldUntil).getTime() > Date.now();
 
-    if (isInstantMeeting) {
+    if (isInstantMeeting && !recordingPending) {
       await meeting.deleteOne();
     } else {
       await meeting.save({ validateBeforeSave: false });

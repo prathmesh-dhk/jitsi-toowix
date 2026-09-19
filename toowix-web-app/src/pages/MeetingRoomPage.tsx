@@ -3296,6 +3296,25 @@ export function MeetingRoomPage() {
   // visible to every participant -- see the sync effect near the other jitsiMeeting.* effects
   // below) -- this just requests the start/stop and shows a transient toast for the request
   // itself, distinct from the real confirmation.
+  // Tell the server when a recording starts/stops so it keeps the meeting record (and the owner
+  // details) until the recorder has finished processing -- otherwise ending the meeting right after
+  // recording could leave the finished recording with nobody to attach it to.
+  const lastRecordingSyncRef = useRef(false);
+  useEffect(() => {
+    if (!hasJoined || !isModerator || !meetingInfo?.organizerId || recording === lastRecordingSyncRef.current) return;
+    lastRecordingSyncRef.current = recording;
+    void (async () => {
+      try {
+        const headers = await accountHeaders();
+        await fetch(`${BACKEND_URL}/api/recordings/session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({ roomSlug: roomId, action: recording ? 'start' : 'stop' }),
+        });
+      } catch { /* best effort; the recorder retries on its own */ }
+    })();
+  }, [recording, hasJoined, isModerator, meetingInfo?.organizerId, roomId, accountHeaders]);
+
   const handleToggleRecording = async () => {
     // Recording control is host/moderator-only -- both entry points (Activities panel and the
     // More-options menu) are already hidden for non-moderators, this is just the backstop.

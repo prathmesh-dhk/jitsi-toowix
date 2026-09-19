@@ -10,6 +10,8 @@ import { Meeting } from '../models/Meeting';
 import { User } from '../models/User';
 import { Session } from '../models/Session';
 import { Contact } from '../models/Contact';
+import { Recording } from '../models/Recording';
+import { RecordingHold } from '../models/RecordingHold';
 import { getFirebaseAuth } from '../config/firebase';
 
 const SLUG_PREFIX = 'twx-e2e-';
@@ -54,11 +56,13 @@ async function setup(email: string) {
   const privateSlug = `${SLUG_PREFIX}prv-${rand()}`;
   const rsvpSlug = `${SLUG_PREFIX}rsv-${rand()}`;
   const lockSlug = `${SLUG_PREFIX}lck-${rand()}`;
-  const [ pub, prv, rsv, lck ]: any[] = await Meeting.create([
+  const instantSlug = `${SLUG_PREFIX}ins-${rand()}`;
+  const [ pub, prv, rsv, lck, ins ]: any[] = await Meeting.create([
     { ...base, name: 'E2E public', roomSlug: publicSlug, type: 'Guest' },
     { ...base, name: 'E2E private', roomSlug: privateSlug, type: 'Private', passcode: 'pw-e2e' },
     { ...base, name: 'E2E rsvp', roomSlug: rsvpSlug, type: 'Guest', invitees: [ 'invitee@e2e.invalid' ], rsvps: [ { email: 'invitee@e2e.invalid', status: 'pending' } ] },
-    { ...base, name: 'E2E lock', roomSlug: lockSlug, type: 'Guest', hostJoined: true }
+    { ...base, name: 'E2E lock', roomSlug: lockSlug, type: 'Guest', hostJoined: true },
+    { companyId: user.companyId || null, createdBy: user._id, name: 'E2E instant', roomSlug: instantSlug, type: 'Guest', scheduledAt: null }
   ]);
 
   out({
@@ -70,7 +74,8 @@ async function setup(email: string) {
       public: { id: String(pub._id), slug: publicSlug },
       private: { id: String(prv._id), slug: privateSlug, password: 'pw-e2e' },
       rsvp: { id: String(rsv._id), slug: rsvpSlug, invitee: 'invitee@e2e.invalid' },
-      lock: { id: String(lck._id), slug: lockSlug }
+      lock: { id: String(lck._id), slug: lockSlug },
+      instant: { id: String(ins._id), slug: instantSlug }
     }
   });
 }
@@ -80,6 +85,8 @@ async function teardown() {
   const sessions = await Session.deleteMany({ sessionToken: { $regex: `^${SESSION_PREFIX}` } });
   const contacts = await Contact.deleteMany({ email: { $regex: '@e2e\\.invalid$' } });
 
+  await Recording.deleteMany({ recordingSessionId: { $regex: '^e2e-rec-' } });
+  await RecordingHold.deleteMany({ roomSlug: { $regex: `^${SLUG_PREFIX}` } });
   out({ meetings: meetings.deletedCount, sessions: sessions.deletedCount, contacts: contacts.deletedCount });
 }
 
@@ -90,6 +97,13 @@ async function teardown() {
   try {
     if (cmd === 'setup') {
       await setup(process.argv[3] || 'jayeshchaudhary45454@gmail.com');
+    } else if (cmd === 'delete-meeting') {
+      const r = await Meeting.deleteOne({ roomSlug: process.argv[3] });
+      out({ deleted: r.deletedCount });
+    } else if (cmd === 'inspect') {
+      const rec: any = await Recording.findOne({ recordingSessionId: process.argv[3] }).lean();
+      const m: any = await Meeting.findOne({ roomSlug: process.argv[4] }).lean();
+      out({ recording: rec ? { status: rec.status, name: rec.name, createdBy: String(rec.createdBy) } : null, meetingExists: !!m, hold: m?.recordingHoldUntil || null });
     } else if (cmd === 'teardown') {
       await teardown();
     } else {

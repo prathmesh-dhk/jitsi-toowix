@@ -12,6 +12,9 @@ const SCHEDULED_GRACE_MS = 30 * 60 * 1000;
 const RECURRING_SERIES_GRACE_MS = 24 * 60 * 60 * 1000;
 const ABANDONED_INSTANT_GRACE_MS = 24 * 60 * 60 * 1000;
 
+// Meetings with a recording running or still being processed are never deleted.
+const notHeld = (now: number) => ({ $or: [ { recordingHoldUntil: null }, { recordingHoldUntil: { $lt: new Date(now) } } ] });
+
 const scheduledEndOf = (meeting: { scheduledAt?: Date | null; durationMinutes?: number | null }) =>
   (meeting.scheduledAt?.getTime() || 0) + (meeting.durationMinutes || 0) * 60 * 1000;
 
@@ -30,6 +33,7 @@ const sweepScheduledMeetings = async (now: number): Promise<number> => {
     scheduledAt: { $ne: null },
     recurrence: null,
     cancelledAt: null,
+    ...notHeld(now),
   });
 
   let deleted = 0;
@@ -58,7 +62,7 @@ const sweepRecurringSeries = async (now: number): Promise<number> => {
     const finalOccurrenceEnd = Math.max(...occurrences.map(scheduledEndOf));
 
     if (now >= finalOccurrenceEnd + RECURRING_SERIES_GRACE_MS) {
-      const result = await Meeting.deleteMany({ 'recurrence.seriesId': seriesId });
+      const result = await Meeting.deleteMany({ 'recurrence.seriesId': seriesId, ...notHeld(now) });
 
       deleted += result.deletedCount || 0;
     }
@@ -76,6 +80,7 @@ const sweepAbandonedInstantMeetings = async (now: number): Promise<number> => {
     scheduledAt: null,
     recurrence: null,
     createdAt: { $lt: cutoff },
+    ...notHeld(now),
   });
 
   return result.deletedCount || 0;
