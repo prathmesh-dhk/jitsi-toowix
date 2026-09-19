@@ -577,6 +577,13 @@ export function useJitsiMeeting({
         await cameraTrack.unmute();
         audioOnlyMutedVideoRef.current = false;
         setLocalVideoMuted(false);
+        // Same reason toggleVideo() does this on its own unmute path: the underlying track
+        // resumes producing frames immediately, but nothing tells the already-mounted self-view/
+        // PiP <video> elements to actually rebind to it -- without a fresh MediaStream wrapper,
+        // they can sit stalled on whatever they last had (black, or a frozen old frame) until
+        // some unrelated re-render happens to touch them. This is what showed up as switching
+        // off Audio-only mode not turning the camera back on "directly."
+        setLocalCameraStream(trackToStream(cameraTrack));
       }
       lastAppliedQualityKeyRef.current = key;
       if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
