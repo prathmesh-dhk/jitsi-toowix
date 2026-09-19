@@ -4894,7 +4894,7 @@ export function MeetingRoomPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        {remote.muted ? <Mic size={16} color="#8AB4F8" /> : <MicOff size={16} color="#F87171" />}
+                        {remote.muted ? <MicOff size={16} color="#F87171" /> : <Mic size={16} color="#8AB4F8" />}
                       </button>
                     )}
                     {(remote as any).video && (remote as any).stream ? (
