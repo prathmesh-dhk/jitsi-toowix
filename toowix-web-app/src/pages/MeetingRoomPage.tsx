@@ -2518,6 +2518,11 @@ export function MeetingRoomPage() {
           setWaitingDenied(true);
         } else if (data.status === 'ENDED') {
           clearInterval(interval);
+          // This person never actually joined the conference (still in the waiting room), so
+          // this bypasses leaveMeeting() entirely and is a separate exit path -- must fire the
+          // same end-of-call tone itself, or "meeting ended" would silently have no sound for
+          // anyone who happened to be waiting when the host ended it.
+          playMeetingEndedTone();
           navigate('/meeting-ended', {
             replace: true,
             state: { roomId, reason: 'This meeting has ended.' },
