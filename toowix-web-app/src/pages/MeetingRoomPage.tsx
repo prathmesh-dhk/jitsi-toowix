@@ -4405,37 +4405,6 @@ export function MeetingRoomPage() {
                         justifyContent: 'center',
                       }}
                     >
-                      {/* Unpin button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPinnedParticipantId(null);
-                          setTileViewEnabled(true);
-                        }}
-                        title="Unpin (return to tile view)"
-                        style={{
-                          position: 'absolute',
-                          top: '16px',
-                          left: '16px',
-                          padding: '6px 12px',
-                          borderRadius: '20px',
-                          backgroundColor: 'rgba(32, 33, 36, 0.8)',
-                          backdropFilter: 'blur(6px)',
-                          border: '1px solid rgba(255, 255, 255, 0.15)',
-                          color: '#FFFFFF',
-                          fontSize: '12px',
-                          fontWeight: 500,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          zIndex: 10,
-                        }}
-                      >
-                        <Pin size={13} color="#8AB4F8" style={{ transform: 'rotate(45deg)' }} />
-                        <span>Unpin</span>
-                      </button>
-
                       {isLocalPinned ? (
                         inCallVideo ? (
                           <video
