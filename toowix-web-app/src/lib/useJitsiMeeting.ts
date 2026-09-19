@@ -491,6 +491,7 @@ export function useJitsiMeeting({
     }
     try {
       await track.setEffect(virtualBackgroundRef.current.effect);
+      setLocalCameraStream(trackToStream(track));
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[useJitsiMeeting] failed to re-apply virtual background to new track:', err);
@@ -1853,6 +1854,7 @@ export function useJitsiMeeting({
       virtualBackgroundRef.current = null;
       if (track) {
         await track.setEffect(undefined);
+        setLocalCameraStream(trackToStream(track));
       }
 
       return;
@@ -1863,6 +1865,7 @@ export function useJitsiMeeting({
 
     if (track) {
       await track.setEffect(effect);
+      setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };
   }, []);

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Sparkles, Ban, Loader2 } from 'lucide-react';
 
+import { getSavedBackground, saveBackground } from '../lib/meetingPrefs';
 import { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 
 export interface IVirtualBackgroundModalProps {
@@ -19,7 +20,18 @@ const PRESET_IMAGES = Array.from({ length: 7 }, (_, i) => `/images/virtual-backg
 type SelectionKey = 'none' | `blur-${number}` | `image-${number}`;
 
 export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBackgroundModalProps) {
-  const [ selected, setSelected ] = useState<SelectionKey>('none');
+  const [ selected, setSelected ] = useState<SelectionKey>(() => {
+    const saved = getSavedBackground();
+
+    if (saved?.backgroundType === 'blur') {
+      return `blur-${BLUR_OPTIONS.findIndex((o) => o.blurValue === saved.blurValue)}` as SelectionKey;
+    }
+    if (saved?.backgroundType === 'image') {
+      return `image-${PRESET_IMAGES.indexOf(saved.virtualSource || '')}` as SelectionKey;
+    }
+
+    return 'none';
+  });
   const [ busyKey, setBusyKey ] = useState<SelectionKey | null>(null);
   const [ error, setError ] = useState<string | null>(null);
 
@@ -32,6 +44,7 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
     setError(null);
     try {
       await onSelect(config);
+      saveBackground(config);
       setSelected(key);
     } catch (err: any) {
       setError(

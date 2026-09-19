@@ -2,6 +2,8 @@
 // sampled/copied from Jitsi's or any other product's stock sound files, so each cue here is a
 // distinct, small waveform generated at runtime rather than a shipped audio asset.
 
+import { getPref } from './meetingPrefs';
+
 type ToneStep = { freq: number; startMs: number; durationMs: number; gain?: number; type?: OscillatorType };
 
 let sharedContext: AudioContext | null = null;
@@ -66,11 +68,17 @@ function playTone(steps: ToneStep[]) {
 
 // User-provided soft two-tone cue -- someone arriving.
 export function playParticipantJoinedTone() {
+  if (!getPref('joinLeaveSounds')) {
+    return;
+  }
   playAsset('/sounds/participant-joined.wav');
 }
 
 // User-provided soft logout cue -- someone leaving.
 export function playParticipantLeftTone() {
+  if (!getPref('joinLeaveSounds')) {
+    return;
+  }
   playAsset('/sounds/participant-left.wav');
 }
 

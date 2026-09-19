@@ -73,6 +73,10 @@ import { ShareVideoDialog } from '../components/ShareVideoDialog';
 const SharedVideoManager = lazy(() =>
   import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
 );
+import { MeetingSettingsDialog } from '../components/MeetingSettingsDialog';
+import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
+import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
+import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
@@ -83,6 +87,7 @@ import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal
 import { PollsModal, type IPoll } from '../components/PollsModal';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
 // These responses mean that the URL cannot be used to enter a meeting. Keep access-policy
 // failures (for example, a valid private meeting that requires sign-in) in the lobby so the
 // user can act on them; only unavailable links belong on the expired-link page.
@@ -206,6 +211,30 @@ export function getParticipantColorTheme(identifier: string, forceIndex?: number
   return PARTICIPANT_COLOR_THEMES[Math.abs(hash) % PARTICIPANT_COLOR_THEMES.length];
 }
 
+// Live remote camera inside the Picture-in-Picture window.
+function PipRemoteVideo({ stream }: { stream: MediaStream }) {
+  const nodeRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const node = nodeRef.current;
+
+    if (node) {
+      node.srcObject = stream;
+      node.play().catch(() => { });
+    }
+  }, [stream]);
+
+  return (
+    <video
+      ref={nodeRef}
+      autoPlay
+      playsInline
+      muted
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+    />
+  );
+}
+
 // Interactive Document Picture-in-Picture window content (Google Meet experience)
 const DocumentPipContent = memo(function DocumentPipContent({
   isScreenSharing,
@@ -235,7 +264,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
   inCallMuted: boolean | null;
   displayName: string;
   isHandRaised: boolean;
-  remoteParticipants: Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean }>;
+  remoteParticipants: Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null }>;
   roomTitle: string;
   avatarUrl?: string | null;
   onToggleMic: () => void;
@@ -582,7 +611,8 @@ const DocumentPipContent = memo(function DocumentPipContent({
               width: '100%',
               height: '100%',
               display: 'grid',
-              gridTemplateColumns: remoteParticipants.length === 1 ? '1fr 1fr' : 'repeat(2, 1fr)',
+              gridTemplateColumns: remoteParticipants.length === 1 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
+              gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
               gap: '6px',
               padding: '6px',
               boxSizing: 'border-box',
@@ -679,6 +709,9 @@ const DocumentPipContent = memo(function DocumentPipContent({
                     overflow: 'hidden',
                   }}
                 >
+                  {p.video && p.stream ? (
+                    <PipRemoteVideo stream={p.stream} />
+                  ) : (
                   <div
                     style={{
                       width: '38px',
@@ -700,6 +733,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                       initial
                     )}
                   </div>
+                  )}
                   <span
                     style={{
                       position: 'absolute',
@@ -710,6 +744,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                       backgroundColor: 'rgba(0,0,0,0.55)',
                       padding: '2px 5px',
                       borderRadius: '4px',
+                      zIndex: 2,
                       maxWidth: '120px',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -951,7 +986,7 @@ export function MeetingRoomPage() {
 
   const [micEnabled, setMicEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
-  const [blurEnabled, setBlurEnabled] = useState(false);
+  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showEndMeetingModal, setShowEndMeetingModal] = useState(false);
@@ -2176,7 +2211,10 @@ export function MeetingRoomPage() {
 
   // Keep references to current callbacks so listeners never suffer stale closures
   useEffect(() => {
-    triggerAutoPiPRef.current = () => openPip('auto');
+    triggerAutoPiPRef.current = () => {
+      if (getPref('autoPip') === 'never') return Promise.resolve();
+      return openPip('auto');
+    };
     handleTogglePiPRef.current = handleTogglePiP;
   }, [openPip, handleTogglePiP]);
 
@@ -3250,13 +3288,159 @@ export function MeetingRoomPage() {
     }
   };
 
+  // Live background on the pre-join preview: run the same segmentation effect the call uses over
+  // the preview camera track and show its output in the preview tile.
+  useEffect(() => {
+    if (hasJoined || !videoEnabled || !prejoinBackground) return;
+    let cancelled = false;
+    let effect: any = null;
+    let sourceTrack: MediaStreamTrack | null = null;
+    let output: MediaStream | null = null;
+    let starting = false;
+
+    const tick = async () => {
+      const stream = media.stream.current;
+      const el = media.preview.current;
+      const track = stream?.getVideoTracks()[0] || null;
+
+      if (cancelled || !stream || !el || !track || track.readyState !== 'live') return;
+      if (output && sourceTrack === track) {
+        if (el.srcObject !== output) {
+          el.srcObject = output;
+          el.play().catch(() => { });
+        }
+        return;
+      }
+      if (starting) return;
+      starting = true;
+      try {
+        effect?.stopEffect();
+        const { createVirtualBackgroundEffect } = await import('../lib/virtualBackground/createVirtualBackgroundEffect');
+        const created = await createVirtualBackgroundEffect(prejoinBackground);
+
+        if (cancelled) return;
+        effect = created;
+        sourceTrack = track;
+        output = effect.startEffect(new MediaStream([track]));
+        el.srcObject = output;
+        el.play().catch(() => { });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[MeetingRoomPage] prejoin background failed:', err);
+      } finally {
+        starting = false;
+      }
+    };
+
+    void tick();
+    const interval = window.setInterval(() => void tick(), 600);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      try { effect?.stopEffect(); } catch { /* already stopped */ }
+      const el = media.preview.current;
+
+      if (el && media.stream.current) {
+        el.srcObject = media.stream.current;
+      }
+    };
+  }, [hasJoined, videoEnabled, prejoinBackground, media.stream, media.preview]);
+
+  // Carry the chosen background into the call: apply it to the live camera track once it exists.
+  const backgroundAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!hasJoined) {
+      backgroundAppliedRef.current = false;
+      return;
+    }
+    const saved = getSavedBackground();
+
+    if (!saved || backgroundAppliedRef.current || !jitsiMeeting.localCameraStream) return;
+    backgroundAppliedRef.current = true;
+    jitsiMeeting.setVirtualBackground(saved).catch(() => { backgroundAppliedRef.current = false; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasJoined, jitsiMeeting.localCameraStream]);
+
+  // Push to talk: hold Space to unmute while muted; releasing re-mutes.
+  const inCallMutedRef = useRef(false);
+  useEffect(() => { inCallMutedRef.current = Boolean(inCallMuted); }, [inCallMuted]);
+  useEffect(() => {
+    if (!hasJoined) return;
+    let held = false;
+    const isTyping = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return Boolean(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable));
+    };
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat || !getPref('pushToTalk') || isTyping(e.target)) return;
+      e.preventDefault();
+      if (inCallMutedRef.current && !held) {
+        held = true;
+        toggleInCallMicRef.current();
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || !held) return;
+      e.preventDefault();
+      held = false;
+      if (!inCallMutedRef.current) toggleInCallMicRef.current();
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [hasJoined]);
+
+  // Leave empty calls: drop out after 5 minutes alone if the setting is on.
+  useEffect(() => {
+    if (!hasJoined || remoteParticipants.length > 0) return;
+    const timer = window.setTimeout(() => {
+      if (getPref('leaveEmptyCalls')) {
+        leaveMeetingRef.current();
+      }
+    }, 5 * 60 * 1000);
+    return () => window.clearTimeout(timer);
+  }, [hasJoined, remoteParticipants.length]);
+
+  // Desktop notification for the host when someone starts waiting.
+  const lastNotifiedWaitingRef = useRef(0);
+  useEffect(() => {
+    if (pendingQueue.length > lastNotifiedWaitingRef.current) {
+      notifyDesktop('Someone wants to join', `${pendingQueue[pendingQueue.length - 1]?.name || 'A guest'} is waiting to be admitted.`);
+    }
+    lastNotifiedWaitingRef.current = pendingQueue.length;
+  }, [pendingQueue]);
+
+  // "Your meeting's ready" card for the host, once per join.
+  const [showMeetingReady, setShowMeetingReady] = useState(false);
+  const meetingReadyShownRef = useRef(false);
+  useEffect(() => {
+    if (hasJoined && isModerator && !meetingReadyShownRef.current) {
+      meetingReadyShownRef.current = true;
+      setShowMeetingReady(true);
+    }
+    if (!hasJoined) meetingReadyShownRef.current = false;
+  }, [hasJoined, isModerator]);
+  useEffect(() => {
+    if (remoteParticipants.length > 0) setShowMeetingReady(false);
+  }, [remoteParticipants.length]);
+
+  const applySendResolution = (maxHeight: number) => {
+    try {
+      (jitsiMeeting.room as any)?.current?.setSenderVideoConstraint?.(maxHeight || 720);
+    } catch { /* not connected yet */ }
+  };
+
   const handleSendReaction = (emoji: string) => {
     const id = Date.now() + Math.random();
     setFloatingEmojis((prev) => [...prev, { id, emoji, left: 45 + (Math.random() * 10 - 5) }]);
     setTimeout(() => {
       setFloatingEmojis((prev) => prev.filter((e) => e.id !== id));
     }, 2400);
-    setShowReactions(false);
+    // Tray stays open so reactions can be spammed by clicking repeatedly, like Google Meet.
     // Broadcast via the same HTTP signal channel chat/raise-hand already use (real-time and
     // Jitsi-independent), so other participants also see the floating emoji.
     postRoomSignal('REACTION', { emoji, name: displayName || 'Participant' });
@@ -6879,6 +7063,101 @@ export function MeetingRoomPage() {
           onVote={handleVotePoll}
         />
 
+        <MeetingSettingsDialog
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          isDark={isDark}
+          devices={media.devices}
+          audioId={audioId}
+          videoId={videoId}
+          outputId={outputId}
+          onSelectAudio={handleSelectAudioDevice}
+          onSelectVideo={handleSelectVideoDevice}
+          onSelectOutput={handleSelectOutputDevice}
+          onSendResolution={applySendResolution}
+          onReceiveResolution={(h) => handlePerformanceSelect(h)}
+          onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
+        />
+
+        <MeetingReadyDialog
+          isOpen={Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0)}
+          onClose={() => setShowMeetingReady(false)}
+          onAddOthers={() => setShowShareModal(true)}
+          meetingUrl={`${window.location.origin}/meet/${encodeURIComponent(roomId)}`}
+          joinedAs={auth.currentUser?.email || ''}
+          isDark={isDark}
+        />
+
+        {/* Google-Meet-style "someone wants to join" prompt for the host */}
+        {hasJoined && isModerator && pendingQueue.length > 0 && (
+          <div
+            role="alertdialog"
+            aria-label="Participants waiting to join"
+            style={{
+              position: 'fixed',
+              left: '24px',
+              bottom: '104px',
+              zIndex: 250,
+              width: '340px',
+              maxWidth: 'calc(100vw - 48px)',
+              maxHeight: '50vh',
+              overflowY: 'auto',
+              backgroundColor: '#2D2E30',
+              color: '#E8EAED',
+              borderRadius: '16px',
+              border: '1px solid rgba(255,255,255,0.12)',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+              padding: '16px',
+            }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>
+              {pendingQueue.length === 1 ? 'Someone wants to join this call' : `${pendingQueue.length} people want to join this call`}
+            </div>
+            {pendingQueue.map((item) => (
+              <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <div
+                  style={{
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: '50%',
+                    backgroundColor: '#5F6368',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 600,
+                    flexShrink: 0,
+                  }}
+                >
+                  {(item.name || 'G').trim().charAt(0).toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0, fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {item.name || 'Guest'}
+                </div>
+                <button
+                  onClick={() => handleDenyParticipant(item.id)}
+                  style={{ padding: '6px 12px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', color: '#8AB4F8', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Deny
+                </button>
+                <button
+                  onClick={() => handleAdmitParticipant(item.id)}
+                  style={{ padding: '6px 14px', borderRadius: '16px', border: 'none', background: '#8AB4F8', color: '#202124', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+                >
+                  Admit
+                </button>
+              </div>
+            ))}
+            {pendingQueue.length > 1 && (
+              <button
+                onClick={() => handleAdmitParticipant(undefined, true)}
+                style={{ width: '100%', marginTop: '4px', padding: '8px', borderRadius: '16px', border: 'none', background: '#8AB4F8', color: '#202124', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}
+              >
+                Admit all
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Moderator Broadcast Announcement Dialog */}
         {showAnnounceDialog && (
           <div
@@ -7740,12 +8019,12 @@ export function MeetingRoomPage() {
 
               {/* Visual Effects (Blur toggle) */}
               <button
-                onClick={() => setBlurEnabled((b) => !b)}
+                onClick={() => setShowVirtualBackgroundModal(true)}
                 style={{
                   width: '44px',
                   height: '44px',
                   borderRadius: '50%',
-                  backgroundColor: blurEnabled ? '#4F46E5' : 'rgba(32, 33, 36, 0.75)',
+                  backgroundColor: prejoinBackground ? '#4F46E5' : 'rgba(32, 33, 36, 0.75)',
                   color: '#FFFFFF',
                   border: '1px solid rgba(255, 255, 255, 0.2)',
                   display: 'flex',
@@ -7755,7 +8034,7 @@ export function MeetingRoomPage() {
                   backdropFilter: 'blur(8px)',
                   boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
                 }}
-                title={blurEnabled ? 'Visual effects active' : 'Apply visual effects'}
+                title="Change background"
               >
                 <Sparkles size={18} />
               </button>
@@ -7972,26 +8251,6 @@ export function MeetingRoomPage() {
             >
               {joining ? 'Connecting...' : 'Join Meeting'}
             </button>
-
-            <button
-              onClick={() => setShowOtherWaysModal(true)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                borderRadius: '24px',
-                backgroundColor: 'transparent',
-                color: isDark ? '#8AB4F8' : '#1A73E8',
-                border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.15)' : '#DADCE0'}`,
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? 'rgba(255, 255, 255, 0.05)' : '#F1F3F4')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-              Other ways to join
-            </button>
           </div>
 
           {/* Safe Share Meeting Link Box */}
@@ -8038,155 +8297,32 @@ export function MeetingRoomPage() {
               {copiedLink ? 'Copied' : 'Copy'}
             </button>
           </div>
+
         </div>
       </div>
 
-      {/* Audio / Video Settings Dialog */}
-      {showSettingsModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.65)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 200,
-            padding: '20px',
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: isDark ? '#2D2E30' : '#FFFFFF',
-              borderRadius: '24px',
-              padding: '28px',
-              maxWidth: '480px',
-              width: '100%',
-              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.5)',
-              border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.1)' : '#E5E7EB'}`,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#202124' }}>
-                Audio & Video Settings
-              </h3>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                style={{ background: 'none', border: 'none', color: isDark ? '#9AA0A6' : '#5F6368', cursor: 'pointer' }}
-              >
-                <X size={20} />
-              </button>
-            </div>
+      <VirtualBackgroundModal
+        isOpen={!hasJoined && showVirtualBackgroundModal}
+        onClose={() => setShowVirtualBackgroundModal(false)}
+        onSelect={async (config) => setPrejoinBackground(config && config.backgroundType !== 'none' ? config : null)}
+      />
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Microphone Picker */}
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: isDark ? '#BDC1C6' : '#3C4043' }}>
-                  Microphone
-                </label>
-                <select
-                  value={audioId}
-                  onChange={(e) => handleSelectAudioDevice(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    borderRadius: '8px',
-                    backgroundColor: isDark ? '#202124' : '#F1F3F4',
-                    border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : '#DADCE0'}`,
-                    color: isDark ? '#fff' : '#202124',
-                    outline: 'none',
-                  }}
-                >
-                  <option value="">Default System Microphone</option>
-                  {media.devices
-                    .filter((d) => d.kind === 'audioinput')
-                    .map((d) => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `Microphone ${d.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {/* Camera Picker */}
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: isDark ? '#BDC1C6' : '#3C4043' }}>
-                  Camera
-                </label>
-                <select
-                  value={videoId}
-                  onChange={(e) => handleSelectVideoDevice(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    borderRadius: '8px',
-                    backgroundColor: isDark ? '#202124' : '#F1F3F4',
-                    border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : '#DADCE0'}`,
-                    color: isDark ? '#fff' : '#202124',
-                    outline: 'none',
-                  }}
-                >
-                  <option value="">Default System Camera</option>
-                  {media.devices
-                    .filter((d) => d.kind === 'videoinput')
-                    .map((d) => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `Camera ${d.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                </select>
-              </div>
-
-              {/* Speaker Picker */}
-              <div>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: isDark ? '#BDC1C6' : '#3C4043' }}>
-                  Speakers
-                </label>
-                <select
-                  value={outputId}
-                  onChange={(e) => handleSelectOutputDevice(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    borderRadius: '8px',
-                    backgroundColor: isDark ? '#202124' : '#F1F3F4',
-                    border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : '#DADCE0'}`,
-                    color: isDark ? '#fff' : '#202124',
-                    outline: 'none',
-                  }}
-                >
-                  <option value="">Default System Speaker</option>
-                  {media.devices
-                    .filter((d) => d.kind === 'audiooutput')
-                    .map((d) => (
-                      <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `Speaker ${d.deviceId.slice(0, 5)}`}
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                style={{
-                  padding: '10px 24px',
-                  borderRadius: '20px',
-                  backgroundColor: '#4F46E5',
-                  color: '#FFFFFF',
-                  border: 'none',
-                  fontWeight: 600,
-                  fontSize: '14px',
-                  cursor: 'pointer',
-                }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MeetingSettingsDialog
+        tabs={['audio', 'video']}
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        isDark={isDark}
+        devices={media.devices}
+        audioId={audioId}
+        videoId={videoId}
+        outputId={outputId}
+        onSelectAudio={handleSelectAudioDevice}
+        onSelectVideo={handleSelectVideoDevice}
+        onSelectOutput={handleSelectOutputDevice}
+        onSendResolution={applySendResolution}
+        onReceiveResolution={(h) => handlePerformanceSelect(h)}
+        onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
+      />
 
       {/* Other Ways to Join Dialog */}
       {showOtherWaysModal && (
