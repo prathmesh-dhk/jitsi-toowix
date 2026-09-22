@@ -3407,6 +3407,23 @@ export function MeetingRoomPage() {
     }
   }, [inCallVideo, inCallStream]);
 
+  // Safari can pause the self-view independently of the outgoing canvas stream.
+  useEffect(() => {
+    if (!hasJoined || !inCallVideo || !inCallStream) return;
+    const resumePreview = () => {
+      const node = inCallVideoRef.current;
+      if (document.hidden || !node) return;
+      if (node.srcObject !== inCallStream) node.srcObject = inCallStream;
+      void node.play().catch(() => { /* Browser may require a user gesture. */ });
+    };
+    document.addEventListener('visibilitychange', resumePreview);
+    window.addEventListener('pageshow', resumePreview);
+    return () => {
+      document.removeEventListener('visibilitychange', resumePreview);
+      window.removeEventListener('pageshow', resumePreview);
+    };
+  }, [hasJoined, inCallVideo, inCallStream]);
+
   // Screen shares, newest first: the most recent share gets the stage / first tile.
   const [localShareStartedAt, setLocalShareStartedAt] = useState(0);
   useEffect(() => {
@@ -8328,6 +8345,9 @@ export function MeetingRoomPage() {
     >
       {/* Top Header */}
       <style>{`
+        @media (max-width: 768px), (max-width: 1024px) and (pointer: coarse) and (orientation: landscape) {
+          .tw-prejoin .tw-prejoin-joining-info { display: none !important; }
+        }
         @media (max-width: 768px) {
           .tw-prejoin { width: 100% !important; min-height: 100dvh !important; padding: 76px 16px calc(24px + env(safe-area-inset-bottom)) !important; justify-content: flex-start !important; }
           .tw-prejoin > header { padding: 0 16px !important; background: var(--color-bg); }
@@ -8810,6 +8830,7 @@ export function MeetingRoomPage() {
 
           {/* Safe Share Meeting Link Box */}
           <div
+            className="tw-prejoin-joining-info"
             style={{
               padding: '12px 16px',
               borderRadius: '12px',

@@ -4,9 +4,8 @@ export const SET_TIMEOUT = 1;
 export const CLEAR_TIMEOUT = 2;
 export const TIMEOUT_TICK = 3;
 
-// Runs the frame-pacing timer in a real Worker (not just setTimeout on the main thread) so it
-// isn't throttled when the tab is backgrounded -- backgrounding a call shouldn't freeze your
-// own outgoing blurred video for everyone else.
+// Runs frame pacing in a Worker to reduce main-thread timer contention. Mobile browsers
+// can still suspend workers and camera capture when the app is backgrounded.
 const code = `
     var timer;
 

@@ -38,6 +38,20 @@ export default class JitsiStreamBackgroundEffect {
   _segmentationPixelCount: number;
   _stream: MediaStream | null = null;
   _virtualImage!: HTMLImageElement;
+  _blurCanvas = document.createElement('canvas');
+  _sourceTrack: MediaStreamTrack | null = null;
+  _lastPlaybackError = '';
+  _frameErrorReported = false;
+  _resumeInput = () => {
+    if (!this._stream || document.hidden) return;
+    void this._inputVideoElement.play().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== this._lastPlaybackError) {
+        console.warn('[VirtualBackground] Camera playback could not resume:', message);
+        this._lastPlaybackError = message;
+      }
+    });
+  };
 
   constructor(model: any, virtualBackground: IVirtualBackground) {
     // Workaround for a Firefox issue (https://bugzilla.mozilla.org/show_bug.cgi?id=1388974):
@@ -66,8 +80,18 @@ export default class JitsiStreamBackgroundEffect {
   }
 
   startEffect(stream: MediaStream): MediaStream {
-    this._stream = stream;
+    this.stopEffect();
     const firstVideoTrack = stream.getVideoTracks()[0];
+    if (!firstVideoTrack || firstVideoTrack.readyState === 'ended') {
+      throw new Error('Turn on your camera before applying a background.');
+    }
+    if (typeof this._outputCanvasElement.captureStream !== 'function') {
+      throw new Error('Background effects are not supported in this browser.');
+    }
+    this._stream = stream;
+    this._lastPlaybackError = '';
+    this._frameErrorReported = false;
+    this._sourceTrack = firstVideoTrack;
     const settings = firstVideoTrack.getSettings ? firstVideoTrack.getSettings() : firstVideoTrack.getConstraints();
     const { height, frameRate, width } = settings as any;
 
@@ -78,7 +102,10 @@ export default class JitsiStreamBackgroundEffect {
     this._inputVideoElement.height = this._outputCanvasElement.height;
     this._inputVideoElement.autoplay = true;
     this._inputVideoElement.srcObject = stream;
-    this._inputVideoElement.play().catch(() => undefined);
+    document.addEventListener('visibilitychange', this._resumeInput);
+    window.addEventListener('pageshow', this._resumeInput);
+    firstVideoTrack.addEventListener('unmute', this._resumeInput);
+    this._resumeInput();
 
     this._segmentationMask = new ImageData(this._options.width, this._options.height);
     this._segmentationMaskCanvas = document.createElement('canvas');
@@ -93,7 +120,13 @@ export default class JitsiStreamBackgroundEffect {
 
   stopEffect() {
     this._stopTimerLoop();
+    document.removeEventListener('visibilitychange', this._resumeInput);
+    window.removeEventListener('pageshow', this._resumeInput);
+    this._sourceTrack?.removeEventListener('unmute', this._resumeInput);
+    this._sourceTrack = null;
+    this._stream = null;
     this._inputVideoElement.onloadeddata = null;
+    this._inputVideoElement.pause();
     this._inputVideoElement.srcObject = null;
   }
 
@@ -101,18 +134,22 @@ export default class JitsiStreamBackgroundEffect {
     this._maskFrameTimerWorker = new Worker(timerWorkerScript, { name: 'VirtualBackground timer' });
     this._maskFrameTimerWorker.onmessage = (response: MessageEvent) => {
       if (response.data.id === TIMEOUT_TICK) {
-        this._renderMask();
-        this._maskFrameTimerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 });
+        try {
+          this._renderMask();
+        } catch (error) {
+          // A transient draw failure must not permanently kill the frame loop.
+          if (!this._frameErrorReported) {
+            console.warn('[VirtualBackground] Frame processing failed:', error);
+            this._frameErrorReported = true;
+          }
+        } finally {
+          this._maskFrameTimerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 });
+        }
       }
     };
 
-    if (this._inputVideoElement.readyState >= 2) {
-      this._maskFrameTimerWorker.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 });
-    } else {
-      this._inputVideoElement.onloadeddata = () => {
-        this._maskFrameTimerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 });
-      };
-    }
+    // Poll readiness too: loadeddata alone may not fire again after a mobile interruption.
+    this._maskFrameTimerWorker.postMessage({ id: SET_TIMEOUT, timeMs: 1000 / 30 });
   }
 
   _stopTimerLoop() {
@@ -142,7 +179,8 @@ export default class JitsiStreamBackgroundEffect {
     this._outputCanvasCtx.globalCompositeOperation = 'copy';
 
     // Draw the (blurred-edge) segmentation mask.
-    this._outputCanvasCtx.filter = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 'blur(4px)' : 'blur(8px)';
+    const supportsFilter = 'filter' in this._outputCanvasCtx;
+    if (supportsFilter) this._outputCanvasCtx.filter = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 'blur(4px)' : 'blur(8px)';
     this._outputCanvasCtx.drawImage(
         // @ts-ignore
         this._segmentationMaskCanvas,
@@ -150,7 +188,7 @@ export default class JitsiStreamBackgroundEffect {
         0, 0, this._inputVideoElement.width, this._inputVideoElement.height
     );
     this._outputCanvasCtx.globalCompositeOperation = 'source-in';
-    this._outputCanvasCtx.filter = 'none';
+    if (supportsFilter) this._outputCanvasCtx.filter = 'none';
 
     // Draw the sharp foreground (you) on top, masked by the alpha channel above.
     // @ts-ignore
@@ -162,10 +200,24 @@ export default class JitsiStreamBackgroundEffect {
       this._outputCanvasCtx.drawImage(
           this._virtualImage, 0, 0, this._outputCanvasElement.width, this._outputCanvasElement.height
       );
-    } else {
+    } else if (supportsFilter) {
       this._outputCanvasCtx.filter = `blur(${this._options.virtualBackground.blurValue}px)`;
       // @ts-ignore
       this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0);
+    } else {
+      // Safari versions without Canvas2D.filter: approximate blur by downsampling
+      // and smoothing the background only. The masked foreground remains sharp.
+      const scale = Math.max(8, this._options.virtualBackground.blurValue || 8);
+      const width = Math.max(1, Math.round(frameWidth / scale));
+      const height = Math.max(1, Math.round(frameHeight / scale));
+      if (this._blurCanvas.width !== width) this._blurCanvas.width = width;
+      if (this._blurCanvas.height !== height) this._blurCanvas.height = height;
+      const context = this._blurCanvas.getContext('2d');
+      if (context) {
+        context.drawImage(this._inputVideoElement, 0, 0, width, height);
+        this._outputCanvasCtx.imageSmoothingEnabled = true;
+        this._outputCanvasCtx.drawImage(this._blurCanvas, 0, 0, frameWidth, frameHeight);
+      }
     }
   }
 
@@ -182,6 +234,10 @@ export default class JitsiStreamBackgroundEffect {
   }
 
   _renderMask() {
+    // iOS may suspend capture while the tab is hidden or another app owns the camera.
+    // Keep the last valid frame instead of segmenting a black/muted source into background-only video.
+    if (document.hidden || !this._sourceTrack || this._sourceTrack.muted
+      || !this._sourceTrack.enabled || this._sourceTrack.readyState !== 'live') return;
     if (this._inputVideoElement.readyState < 2) return;
     if (this._options.virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE
       && (!this._virtualImage.complete || !this._virtualImage.naturalWidth)) return;
