@@ -8355,6 +8355,47 @@ export function MeetingRoomPage() {
     );
   }
 
+  // An intentional rejoin should not flash the full camera/settings lobby for a moment.
+  // Keep protected meetings and any failed admission on the normal lobby so users can supply
+  // a passcode or see the actionable error.
+  const showRejoinTransition = shouldAutoRejoin && !admissionError && (!meetingInfo || joining
+    || (!meetingInfo.passwordRequired && !meetingInfo.requireLobbyPolicy
+      && meetingInfo.type !== 'Private' && !meetingInfo.locked));
+  if (showRejoinTransition) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          width: '100vw',
+          backgroundColor: isDark ? '#202124' : '#F8F9FA',
+          color: isDark ? '#E8EAED' : '#202124',
+          fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
+          display: 'grid',
+          placeItems: 'center',
+          padding: '24px',
+          boxSizing: 'border-box',
+        }}
+        aria-live="polite"
+      >
+        <div style={{ textAlign: 'center' }}>
+          <div
+            aria-hidden="true"
+            style={{
+              width: '32px', height: '32px', margin: '0 auto 16px', borderRadius: '50%',
+              border: `3px solid ${isDark ? 'rgba(255,255,255,0.18)' : 'rgba(79,70,229,0.16)'}`,
+              borderTopColor: '#4F46E5', animation: 'tw-rejoin-spin 0.8s linear infinite',
+            }}
+          />
+          <div style={{ fontSize: '18px', fontWeight: 600 }}>Rejoining meeting…</div>
+          <div style={{ marginTop: '6px', fontSize: '13px', color: isDark ? '#9AA0A6' : '#5F6368' }}>
+            Restoring your camera and microphone settings
+          </div>
+        </div>
+        <style>{'@keyframes tw-rejoin-spin { to { transform: rotate(360deg); } }'}</style>
+      </div>
+    );
+  }
+
   // ===========================================================================
   // STAGE 0: PRE-JOIN LOBBY (Google Meet 2-Column Desktop Experience)
   // ===========================================================================

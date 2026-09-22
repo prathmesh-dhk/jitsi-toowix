@@ -20,3 +20,10 @@ test('automatic rejoin waits for restored media and never bypasses protected mee
   assert.match(roomPage, /meetingInfo\.requireLobbyPolicy/);
   assert.match(roomPage, /meetingInfo\.type === 'Private'/);
 });
+
+test('automatic rejoin shows a transition rather than flashing the pre-join lobby', () => {
+  assert.match(roomPage, /showRejoinTransition/);
+  assert.match(roomPage, /Rejoining meeting/);
+  assert.match(roomPage, /Restoring your camera and microphone settings/);
+  assert.match(roomPage, /!admissionError/);
+});
