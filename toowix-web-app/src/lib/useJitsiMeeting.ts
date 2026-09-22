@@ -1115,8 +1115,35 @@ export function useJitsiMeeting({
 
               remoteNamesRef.current[id] = name;
               remoteAvatarsRef.current[id] = avatarUrl;
-              // TEMP diagnostic for the "join/leave freezes other tiles" investigation -- remove
-              // once root-caused. Unconditional so it shows up on the production build.
+
+              // A dropped network doesn't always close the old session's connection cleanly, so
+              // the server can take a long time (well past any reasonable wait) to notice it's
+              // dead and remove that stale participant. When the same person rejoins, they show
+              // up here as a brand-new id with the same display name while their old, frozen tile
+              // is still sitting in the roster. Treat a fresh join with a name that already exists
+              // as that same person reconnecting and drop the stale entry immediately, rather than
+              // waiting on the server-side timeout to eventually clean it up.
+              if (name && name !== 'Participant') {
+                setRemoteParticipants((prev) => {
+                  const staleIds = Object.keys(prev).filter((pid) => pid !== id && prev[pid]?.name === name);
+
+                  if (staleIds.length === 0) {
+                    return prev;
+                  }
+                  const next = { ...prev };
+
+                  for (const staleId of staleIds) {
+                    delete next[staleId];
+                    delete remoteNamesRef.current[staleId];
+                    delete remoteAvatarsRef.current[staleId];
+                    delete remoteDesktopTracksRef.current[staleId];
+                    clearSpeaking(staleId);
+                  }
+
+                  return next;
+                });
+              }
+
               patchParticipant(id, {
                 name,
                 avatarUrl,

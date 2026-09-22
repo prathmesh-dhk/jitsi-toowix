@@ -990,7 +990,7 @@ export function MeetingRoomPage() {
   // Pre-join user inputs — restore name from rejoin state or localStorage
   const [displayName, setDisplayName] = useState<string>(() => {
     if (location.state?.displayName) return location.state.displayName;
-    if (!auth.currentUser) return localStorage.getItem('toowix_guest_displayName') || '';
+    if (participation !== 'account') return localStorage.getItem('toowix_guest_displayName') || '';
     return '';
   });
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(() => {
@@ -2491,21 +2491,40 @@ export function MeetingRoomPage() {
     };
   }, [participation]);
 
-  // Opening a meeting link directly (not via the dashboard) used to always join as a guest, so
-  // the host of a Private/Internal meeting was rejected. A signed-in user joins as themselves.
+  // Opening a meeting link directly (not via the dashboard) used to always join as a guest, so the
+  // host of a Private/Internal meeting was rejected (lost moderator/recording rights). That was
+  // fixed by joining any signed-in user as their account -- but that switch applied to EVERY
+  // signed-in visitor, not just the host, so anyone who happened to be logged into Toowix on their
+  // phone got their name and email forced onto a public link instead of the plain "enter your
+  // name" box a public link is supposed to show. Only the meeting's actual host gets switched to
+  // their account automatically; this runs once meetingInfo (and its organizerId) is known.
   useEffect(() => {
-    if (location.state?.participation) return;
-    let active = true;
-    (async () => {
-      try {
-        await auth.authStateReady();
-        if (active && auth.currentUser && localStorage.getItem('toowix_session_token')) {
-          setParticipation('account');
-        }
-      } catch { /* stay a guest */ }
-    })();
-    return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (location.state?.participation || !meetingInfo?.organizerId || !auth.currentUser) return;
+    try {
+      const cached = JSON.parse(localStorage.getItem('toowix_user') || '{}');
+      const cachedId = String(cached.id || cached._id || '');
+
+      if (cachedId && cachedId === meetingInfo.organizerId && localStorage.getItem('toowix_session_token')) {
+        setParticipation('account');
+      }
+    } catch { /* stay a guest */ }
+  }, [meetingInfo?.organizerId]);
+
+  // Used only for the initial meeting-info lookup below: attaches a bearer token when signed in,
+  // regardless of the participation choice, so that lookup can tell us the meeting's organizerId
+  // (needed by the host-detection effect above) and correctly waive the password for the host,
+  // without that alone committing anyone to joining as their account.
+  const getInfoLookupHeaders = useCallback(async (): Promise<Record<string, string>> => {
+    await auth.authStateReady();
+    if (!auth.currentUser) return {};
+    try {
+      return {
+        Authorization: `Bearer ${await auth.currentUser.getIdToken()}`,
+        'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
+      };
+    } catch {
+      return {};
+    }
   }, []);
 
   // Fetch meeting metadata
@@ -2517,7 +2536,7 @@ export function MeetingRoomPage() {
     (async () => {
       try {
         const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}`, {
-          headers: await accountHeaders(),
+          headers: await getInfoLookupHeaders(),
         });
         const data = await response.json();
         if (!response.ok) {
@@ -2541,7 +2560,7 @@ export function MeetingRoomPage() {
     return () => {
       active = false;
     };
-  }, [roomId, accountHeaders, navigate]);
+  }, [roomId, getInfoLookupHeaders, navigate]);
 
   // Mid-meeting lock: for dashboard meetings the backend enforces password + waiting room (like a
   // Private meeting); rooms with no saved meeting fall back to Jitsi's own room password.
@@ -8359,8 +8378,12 @@ export function MeetingRoomPage() {
             </p>
           </div>
 
-          {/* Identity Chip or Guest Name Input */}
-          {auth.currentUser ? (
+          {/* Identity Chip or Guest Name Input -- the chip (name + email) only shows when this
+              visitor is actually joining with their account (the meeting's host, or an explicit
+              dashboard "join with account" flow). A public link must default to asking anyone
+              opening it for just a name, even if they happen to be signed in to Toowix on that
+              device. */}
+          {participation === 'account' && auth.currentUser ? (
             <div
               style={{
                 display: 'flex',
