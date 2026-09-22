@@ -501,6 +501,13 @@ export function useJitsiMeeting({
   const degradedSampleCountRef = useRef(0);
   const goodSinceRef = useRef<number | null>(null);
   const lastAppliedQualityKeyRef = useRef<string | null>(null);
+  // Set by the user's own "Performance settings" choice. Without this, the periodic automatic
+  // network-quality check (below) had no idea a manual choice had ever been made, so the very
+  // next time it ran with a different key (someone joins/leaves, screen share starts/stops, a
+  // network-state flip) it silently pushed the resolution straight back to whatever the auto
+  // policy wanted -- the manual pick appeared to "not change anything" because it was reverted
+  // within a few seconds, often before the user even looked away.
+  const manualMaxHeightRef = useRef<number | null>(null);
   // Only this mode is allowed to mute/unmute the camera automatically. A manual user mute must
   // never be undone when the network recovers or Low Data Mode changes.
   const audioOnlyMutedVideoRef = useRef(false);
@@ -637,7 +644,16 @@ export function useJitsiMeeting({
     const participantCount = room.getParticipants?.().length || 0;
     const screenShareActive = Boolean(localDesktopTrackRef.current) || Object.keys(remoteDesktopTracksRef.current).length > 0;
     const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount, screenShareActive);
-    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare' ].join(':');
+    const manualCap = manualMaxHeightRef.current;
+
+    if (manualCap !== null) {
+      // The manual choice is a ceiling, not a floor -- a genuinely poor connection can still drop
+      // below it, but nothing here is ever allowed to raise quality back above what the user
+      // deliberately picked to save bandwidth.
+      policy.receiveMaxHeight = Math.min(policy.receiveMaxHeight, manualCap);
+      policy.sendMaxHeight = Math.min(policy.sendMaxHeight, manualCap);
+    }
+    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare', manualCap ?? 'auto' ].join(':');
 
     if (lastAppliedQualityKeyRef.current === key) {
       return;
@@ -1124,12 +1140,15 @@ export function useJitsiMeeting({
               // as that same person reconnecting and drop the stale entry immediately, rather than
               // waiting on the server-side timeout to eventually clean it up.
               if (name && name !== 'Participant') {
+                let staleIdsFound: string[] = [];
+
                 setRemoteParticipants((prev) => {
                   const staleIds = Object.keys(prev).filter((pid) => pid !== id && prev[pid]?.name === name);
 
                   if (staleIds.length === 0) {
                     return prev;
                   }
+                  staleIdsFound = staleIds;
                   const next = { ...prev };
 
                   for (const staleId of staleIds) {
@@ -1142,6 +1161,17 @@ export function useJitsiMeeting({
 
                   return next;
                 });
+                if (staleIdsFound.length > 0) {
+                  setConnectionStats((prev) => {
+                    const next = { ...prev };
+
+                    for (const staleId of staleIdsFound) {
+                      delete next[staleId];
+                    }
+
+                    return next;
+                  });
+                }
               }
 
               patchParticipant(id, {
@@ -1174,6 +1204,21 @@ export function useJitsiMeeting({
               delete remoteAvatarsRef.current[id];
               delete remoteDesktopTracksRef.current[id];
               recomputeRemoteScreenShare();
+              // connectionStats is keyed by participant id and only ever grown by the
+              // cq.remote_stats_updated listener above -- with nothing pruning it here, anyone
+              // who joined and later left stayed in the Participant stats modal forever under a
+              // blank "Participant" row (their name lookup fails once they're gone), inflating
+              // the apparent headcount past who's actually still on the call.
+              setConnectionStats(prev => {
+                if (!(id in prev)) {
+                  return prev;
+                }
+                const next = { ...prev };
+
+                delete next[id];
+
+                return next;
+              });
               setRemoteParticipants(prev => {
                 const next = { ...prev };
 
@@ -1686,18 +1731,16 @@ export function useJitsiMeeting({
         console.error('[useJitsiMeeting] Failed to dispose desktop track:', err);
       }
 
-      // Neither of the calls above is trustworthy at actually telling the server the share
-      // ended (see the comment on them) -- force a full leave+rejoin shortly after so Jicofo
-      // rebuilds this participant's source list from scratch, which IS reliable. Delayed and
-      // debounced so a fast re-share isn't caught mid-reconnect and killed (toggleScreenShare's
-      // start path clears this same timer).
-      if (pendingReconnectTimerRef.current) {
-        clearTimeout(pendingReconnectTimerRef.current);
-      }
-      pendingReconnectTimerRef.current = setTimeout(() => {
-        pendingReconnectTimerRef.current = null;
-        setReconnectEpoch(epoch => epoch + 1);
-      }, 1500);
+      // This used to force a full leave+rejoin ~1.5s after every stop, on the theory that
+      // removeTrack()/dispose() above weren't reliable enough at telling the server (and other
+      // participants) the share had ended, and a fresh join was the only sure way to clear a
+      // frozen last-frame on viewers. That reconnect is exactly what showed up as "I stop
+      // sharing and then get bounced out and back into the meeting." The actual freeze it was
+      // guarding against is now handled directly on the viewer's side instead (the dead-track
+      // purge in recomputeRemoteScreenShare, plus reacting to TRACK_REMOVED/TRACK_MUTE_CHANGED
+      // for the desktop track), so forcing every participant through a disruptive reconnect on
+      // every single stop is no longer worth the disruption. If a frozen remote tile after
+      // stopping a share turns up again, look there first before reintroducing a reconnect here.
     } finally {
       desktopStopInFlightRef.current = false;
     }
@@ -2104,6 +2147,9 @@ export function useJitsiMeeting({
     if (!room) {
       return;
     }
+    // Remember this as the user's own ceiling so the automatic network-quality check (which runs
+    // every few seconds regardless) stops silently overriding it back up the next time it fires.
+    manualMaxHeightRef.current = maxHeight;
     try {
       const constraints: Record<string, any> = {
         defaultConstraints: { maxHeight }

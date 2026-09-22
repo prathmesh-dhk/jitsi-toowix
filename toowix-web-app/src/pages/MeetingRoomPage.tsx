@@ -1114,6 +1114,15 @@ export function MeetingRoomPage() {
     requestId: number;
   }>({ phase: 'idle', kind: null, origin: null, requestId: 0 });
   const pipCanvasStreamRef = useRef<MediaStream | null>(null);
+  // iPhone/iPad Safari has no documentPictureInPicture and its requestPictureInPicture() support
+  // is inconsistent for a video whose source is a canvas-captured stream (which is what the
+  // Google-Meet-style bubble overlay is) -- true both for whether entering PiP even calls the
+  // standard events, and for whether document.exitPictureInPicture() is the right way to leave
+  // it again. Safari has its own older, separate API for this (webkitSetPresentationMode /
+  // webkitSupportsPresentationMode) that behaves reliably even where the standard one does not.
+  // This records which mechanism actually opened PiP, purely so closePip() below knows how to
+  // close it correctly again.
+  const pipWebkitModeRef = useRef(false);
   const pipUserEnabledRef = useRef(false);
   // Separate from pipUserEnabledRef: this one only ever flips true->stays true for the
   // life of the tab, purely to gate the "only once" permission hint toast. Reusing
@@ -1436,6 +1445,43 @@ export function MeetingRoomPage() {
           startPipDraw();
         }
         logPipDiagnostic('enter', { type: 'video' });
+      });
+
+      // Safari's own (non-standard, webkit-prefixed) equivalent of enter/leavepictureinpicture --
+      // fires for both entering and leaving, including when the person closes it themselves via
+      // Safari's native PiP window controls, which the standard events above would never see on
+      // a browser that only supports the webkit-prefixed API.
+      vid.addEventListener('webkitpresentationmodechanged', () => {
+        const mode = (vid as any).webkitPresentationMode;
+
+        if (mode === 'picture-in-picture') {
+          pipWebkitModeRef.current = true;
+          setIsPiPActive(true);
+          const lc = pipLifecycleRef.current;
+
+          if (lc.phase !== 'open' || lc.kind !== 'video') {
+            lc.phase = 'open';
+            lc.kind = 'video';
+            if (!lc.origin) lc.origin = 'auto';
+          }
+          if (pipCanvasStreamRef.current && vid.srcObject === pipCanvasStreamRef.current) {
+            startPipDraw();
+          }
+          logPipDiagnostic('enter', { type: 'video-webkit' });
+        } else if (pipWebkitModeRef.current) {
+          pipWebkitModeRef.current = false;
+          stopPipDraw();
+          setIsPiPActive(false);
+          pipAutoTriggeredRef.current = false;
+          const lc = pipLifecycleRef.current;
+
+          if (lc.kind === 'video') {
+            lc.phase = 'idle';
+            lc.kind = null;
+            lc.origin = null;
+          }
+          logPipDiagnostic('leave', { type: 'video-webkit' });
+        }
       });
 
       vid.addEventListener('leavepictureinpicture', () => {
@@ -2043,10 +2089,19 @@ export function MeetingRoomPage() {
 
     try {
       if (closingKind === 'video') {
-        try {
-          await (document as any).exitPictureInPicture();
-        } catch (err: any) {
-          logPipDiagnostic('close-error', { type: 'video', errorName: err?.name, errorMessage: err?.message });
+        if (pipWebkitModeRef.current) {
+          try {
+            (pipVideoRef.current as any)?.webkitSetPresentationMode?.('inline');
+          } catch (err: any) {
+            logPipDiagnostic('close-error', { type: 'video-webkit', errorName: err?.name, errorMessage: err?.message });
+          }
+          pipWebkitModeRef.current = false;
+        } else {
+          try {
+            await (document as any).exitPictureInPicture();
+          } catch (err: any) {
+            logPipDiagnostic('close-error', { type: 'video', errorName: err?.name, errorMessage: err?.message });
+          }
         }
         stopPipDraw();
       } else if (closingKind === 'document') {
@@ -2146,10 +2201,17 @@ export function MeetingRoomPage() {
       if (!isCurrent()) return;
 
       // 2. Video PiP fallback.
-      if (!(document as any).pictureInPictureEnabled) return;
       ensurePipElements();
       const vid = pipVideoRef.current;
       if (!vid) return;
+      const webkitPipSupported = typeof (vid as any).webkitSupportsPresentationMode === 'function'
+        && (vid as any).webkitSupportsPresentationMode('picture-in-picture')
+        && typeof (vid as any).webkitSetPresentationMode === 'function';
+
+      // Only bail out here if NEITHER mechanism this browser might support is available --
+      // Safari (particularly older versions) can report document.pictureInPictureEnabled as
+      // falsy/undefined while still supporting its own webkit-prefixed API perfectly well.
+      if (!(document as any).pictureInPictureEnabled && !webkitPipSupported) return;
       initPipStream();
       if (vid.paused) {
         try { await vid.play(); } catch { }
@@ -2168,10 +2230,27 @@ export function MeetingRoomPage() {
       }
       if (!isCurrent()) return;
 
+      // Prefer the standard API when this browser claims to support it (true for both Chromium
+      // and modern Safari) -- fall back to Safari's webkit-prefixed one only if that either
+      // isn't offered at all, or throws (older/inconsistent Safari builds accept the call but
+      // never actually show anything for a canvas-sourced video).
+      const canTryStandard = Boolean((document as any).pictureInPictureEnabled) && typeof (vid as any).requestPictureInPicture === 'function';
+
       try {
-        await (vid as any).requestPictureInPicture();
-        if (!isCurrent()) {
-          try { await (document as any).exitPictureInPicture(); } catch { }
+        if (canTryStandard) {
+          await (vid as any).requestPictureInPicture();
+          if (!isCurrent()) {
+            try { await (document as any).exitPictureInPicture(); } catch { }
+            return;
+          }
+        } else if (webkitPipSupported) {
+          (vid as any).webkitSetPresentationMode('picture-in-picture');
+          if (!isCurrent()) {
+            try { (vid as any).webkitSetPresentationMode('inline'); } catch { }
+            return;
+          }
+          pipWebkitModeRef.current = true;
+        } else {
           return;
         }
         lc.phase = 'open';
@@ -2179,11 +2258,35 @@ export function MeetingRoomPage() {
         setIsPiPActive(true);
         opened = true;
         if (origin === 'manual') maybeShowAutoPipAllowNudge();
-        logPipDiagnostic('open-success', { type: 'video', origin });
+        logPipDiagnostic('open-success', { type: 'video', origin, via: canTryStandard ? 'standard' : 'webkit' });
       } catch (videoPipErr: any) {
         logPipDiagnostic('open-error', {
           type: 'video', origin, errorName: videoPipErr?.name, errorMessage: videoPipErr?.message,
         });
+        // The standard call failed (or wasn't supported) -- Safari's webkit-prefixed API is a
+        // genuinely different code path with its own success/failure behavior, so a rejection
+        // from one says nothing about the other. Worth trying before giving up entirely.
+        if (canTryStandard && webkitPipSupported) {
+          try {
+            (vid as any).webkitSetPresentationMode('picture-in-picture');
+            if (!isCurrent()) {
+              try { (vid as any).webkitSetPresentationMode('inline'); } catch { }
+              return;
+            }
+            pipWebkitModeRef.current = true;
+            lc.phase = 'open';
+            lc.kind = 'video';
+            setIsPiPActive(true);
+            opened = true;
+            if (origin === 'manual') maybeShowAutoPipAllowNudge();
+            logPipDiagnostic('open-success', { type: 'video', origin, via: 'webkit-fallback' });
+            return;
+          } catch (webkitErr: any) {
+            logPipDiagnostic('open-error', {
+              type: 'video', origin, errorName: webkitErr?.name, errorMessage: webkitErr?.message, via: 'webkit-fallback',
+            });
+          }
+        }
         if (videoPipErr?.name === 'NotAllowedError' && origin === 'auto' && !pipHintShownRef.current) {
           pipHintShownRef.current = true;
           setPipHintToast('Automatic Picture-in-Picture isn\'t enabled for this browser/site yet. Use the PiP button, or check your browser\'s Automatic Picture-in-Picture site permission.');
@@ -5494,13 +5597,13 @@ export function MeetingRoomPage() {
                         <MicOff size={16} color="#F87171" />
                       </div>
                     )}
-                    {/* Remote Raised-Hand Indicator in Top-Left */}
+                    {/* Remote Raised-Hand Indicator, beside (not under) the pin button that also sits top-left */}
                     {remote.raisedHand && (
                       <div
                         style={{
                           position: 'absolute',
                           top: '16px',
-                          left: '16px',
+                          left: '56px',
                           width: '32px',
                           height: '32px',
                           borderRadius: '50%',
@@ -6734,7 +6837,15 @@ export function MeetingRoomPage() {
                     Broadcast announcement
                   </button>
                 )}
-                {('documentPictureInPicture' in window || (document as any).pictureInPictureEnabled) && (
+                {(
+                  'documentPictureInPicture' in window
+                  || (document as any).pictureInPictureEnabled
+                  // Safari (iPhone/iPad included) can support PiP via its own webkit-prefixed
+                  // API even when it doesn't set document.pictureInPictureEnabled -- checked on
+                  // the prototype so this doesn't need a live <video> element to answer "does
+                  // this browser have the capability at all".
+                  || typeof (window as any).HTMLVideoElement !== 'undefined' && 'webkitSupportsPresentationMode' in (window as any).HTMLVideoElement.prototype
+                ) && (
                   <button
                     onClick={() => {
                       setShowMoreMenu(false);
