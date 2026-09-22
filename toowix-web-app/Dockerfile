@@ -13,7 +13,9 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 
-ARG VITE_API_URL=http://192.168.22.59:4000
+# The browser app is served over HTTPS at talk.toowix.com. Keep API calls on that
+# same secure origin so Safari never blocks them as mixed HTTP content.
+ARG VITE_API_URL=https://talk.toowix.com
 ARG VITE_FIREBASE_API_KEY=AIzaSyAUmG8KYxkNf29ojG6qiSWb4W4U4_lK4XU
 ARG VITE_FIREBASE_AUTH_DOMAIN=toowix-meet-ff587.firebaseapp.com
 ARG VITE_FIREBASE_PROJECT_ID=toowix-meet-ff587
