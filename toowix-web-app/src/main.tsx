@@ -3,6 +3,31 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
+// This site previously served the stock Jitsi web client under /meet. That client
+// registered pwa-worker.js at the meeting-path scope. The React client is not a PWA;
+// leaving that old worker active can make iPhone Safari serve its stale/offline response
+// instead of a newly opened meeting link. Remove only that legacy worker on this origin.
+if ('serviceWorker' in navigator) {
+  void navigator.serviceWorker.getRegistrations()
+    .then((registrations) => Promise.all(registrations.map(async (registration) => {
+      const scriptUrls = [ registration.active, registration.installing, registration.waiting ]
+        .map((worker) => worker?.scriptURL || '');
+      const isLegacyJitsiWorker = scriptUrls.some((url) => url.includes('/pwa-worker.js'));
+
+      if (isLegacyJitsiWorker) {
+        await registration.unregister();
+        try {
+          await caches.delete('offline');
+        } catch {
+          // Cache Storage is unavailable in some private browser contexts.
+        }
+      }
+    })))
+    .catch(() => {
+      // A blocked service-worker API must not prevent the meeting app from loading.
+    });
+}
+
 // ============================================================================
 // SECURITY LAYER: MASK JWT TOKENS & SENSITIVE CREDENTIALS IN CONSOLE
 // ============================================================================

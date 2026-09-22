@@ -831,17 +831,25 @@ export function useJitsiMeeting({
         }
         previousVideoStatsRef.current = { bytesSent: videoBytesSent, timestamp: now };
         const localCandidate = selectedPair?.localCandidateId ? localCandidates.get(selectedPair.localCandidateId) : null;
-        const availableOutgoingBitrate = Number(selectedPair?.availableOutgoingBitrate);
-        const currentRoundTripTime = Number(selectedPair?.currentRoundTripTime);
+        const availableOutgoingBitrate = selectedPair?.availableOutgoingBitrate;
+        const currentRoundTripTime = selectedPair?.currentRoundTripTime;
         const packetTotal = packetsLost + packetsReceived;
 
         await updateNetworkStateFromMetrics({
-          availableOutgoingBitrateKbps: Number.isFinite(availableOutgoingBitrate) ? availableOutgoingBitrate / 1000 : null,
+          // Number(null) is 0. Edge often uses null/0 when it has no bandwidth
+          // estimate, which must remain unknown rather than becoming a false alarm.
+          availableOutgoingBitrateKbps: typeof availableOutgoingBitrate === 'number'
+            && Number.isFinite(availableOutgoingBitrate)
+            && availableOutgoingBitrate > 0
+            ? availableOutgoingBitrate / 1000
+            : null,
           candidateType: localCandidate?.candidateType || null,
           connectionState,
           jitterMs: jitterSeconds === null ? null : jitterSeconds * 1000,
           packetLossPercent: packetTotal > 0 ? (packetsLost / packetTotal) * 100 : null,
-          rttMs: Number.isFinite(currentRoundTripTime) ? currentRoundTripTime * 1000 : null,
+          rttMs: typeof currentRoundTripTime === 'number' && Number.isFinite(currentRoundTripTime)
+            ? currentRoundTripTime * 1000
+            : null,
           videoBitrateKbps
         });
       } catch (err) {
@@ -1997,6 +2005,10 @@ export function useJitsiMeeting({
       }
 
       return;
+    }
+
+    if (!track || track.isMuted?.()) {
+      throw new Error('Turn on your camera before applying a background.');
     }
 
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');

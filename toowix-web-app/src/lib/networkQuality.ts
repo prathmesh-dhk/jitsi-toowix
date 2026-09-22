@@ -40,7 +40,11 @@ export function classifyNetwork(metrics: INetworkMetrics): Exclude<NetworkState,
   if (
     (isNumber(metrics.rttMs) && metrics.rttMs > NETWORK_THRESHOLDS.poorRttMs)
     || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent > NETWORK_THRESHOLDS.poorLossPercent)
-    || (isNumber(metrics.availableOutgoingBitrateKbps) && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps)
+    // Edge may report 0 (or omit this field) for a healthy selected ICE pair.
+    // A non-positive estimate is "unknown", not proof that the call is limited.
+    || (isNumber(metrics.availableOutgoingBitrateKbps)
+      && metrics.availableOutgoingBitrateKbps > 0
+      && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps)
   ) {
     return 'POOR';
   }

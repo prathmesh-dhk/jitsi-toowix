@@ -19,6 +19,24 @@ const PRESET_IMAGES = Array.from({ length: 7 }, (_, i) => `/images/virtual-backg
 
 type SelectionKey = 'none' | `blur-${number}` | `image-${number}`;
 
+function getBackgroundErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('low data mode')) return message;
+  if (normalized.includes('turn on your camera') || normalized.includes('camera')) {
+    return 'Turn on your camera, then try the background again.';
+  }
+  if (normalized.includes('capturestream') || normalized.includes('not supported') || normalized.includes('webassembly')) {
+    return "This browser doesn't support virtual backgrounds for this call.";
+  }
+  if (normalized.includes('model') || normalized.includes('download') || normalized.includes('http')) {
+    return 'The background engine could not load. Refresh the page and try again.';
+  }
+
+  return 'Could not apply this background. Keep your camera on and try again.';
+}
+
 export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBackgroundModalProps) {
   const [ selected, setSelected ] = useState<SelectionKey>(() => {
     const saved = getSavedBackground();
@@ -47,11 +65,8 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
       saveBackground(config);
       setSelected(key);
     } catch (err: any) {
-      setError(
-          err?.message?.includes('WebAssembly')
-            ? "Your browser doesn't support this feature."
-            : 'Could not apply this background -- try again.'
-      );
+      // Preserve the useful reason without exposing a raw browser/internal error to the user.
+      setError(getBackgroundErrorMessage(err));
     } finally {
       setBusyKey(null);
     }
