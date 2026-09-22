@@ -971,10 +971,11 @@ export function MeetingRoomPage() {
   const attendanceEntryIdRef = useRef<string | null>(null);
   const leavingRef = useRef(false);
 
-  // Device IDs
-  const [audioId, setAudioId] = useState('');
-  const [videoId, setVideoId] = useState('');
-  const [outputId, setOutputId] = useState('');
+  // Device IDs -- restored from the last meeting on this device so returning here doesn't reset
+  // the microphone/camera/speaker choice back to "default" every single visit.
+  const [audioId, setAudioId] = useState(() => { try { return localStorage.getItem('toowix_audio_device') || ''; } catch { return ''; } });
+  const [videoId, setVideoId] = useState(() => { try { return localStorage.getItem('toowix_video_device') || ''; } catch { return ''; } });
+  const [outputId, setOutputId] = useState(() => { try { return localStorage.getItem('toowix_output_device') || ''; } catch { return ''; } });
 
   // Meeting Stages & States
   const [hasJoined, setHasJoined] = useState(false);
@@ -1010,8 +1011,10 @@ export function MeetingRoomPage() {
     } catch {}
   }, []);
 
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
+  // Same idea for the on/off toggle itself -- if someone joined muted or camera-off last time,
+  // don't silently turn their mic/camera back on for them without asking.
+  const [micEnabled, setMicEnabled] = useState(() => { try { return localStorage.getItem('toowix_mic_enabled') !== '0'; } catch { return true; } });
+  const [videoEnabled, setVideoEnabled] = useState(() => { try { return localStorage.getItem('toowix_video_enabled') !== '0'; } catch { return true; } });
   const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -1190,7 +1193,7 @@ export function MeetingRoomPage() {
   const inCallVideoRef = useRef<HTMLVideoElement | null>(null);
   const presentationVideoRef = useRef<HTMLVideoElement | null>(null);
   const [recordingToast, setRecordingToast] = useState<string | null>(null);
-  const [chatToasts, setChatToasts] = useState<Array<{ id: string; sender: string; text: string }>>([]);
+  const [chatToasts, setChatToasts] = useState<Array<{ id: string; sender: string; text: string; kind?: 'chat' | 'poll' }>>([]);
   const activePanelRef = useRef<string | null>(null);
   const [unreadChat, setUnreadChat] = useState(0);
   useEffect(() => {
@@ -2547,6 +2550,23 @@ export function MeetingRoomPage() {
 
   // Real-time media preview hook (cleaned up cleanly on joining)
   const media = useMediaPreview(hasJoined, micEnabled, videoEnabled, audioId, videoId);
+
+  // Persist every device/on-off choice as it's made, and drop a saved device id that no longer
+  // exists (unplugged headset, swapped phone) back to "default" instead of silently failing.
+  useEffect(() => { try { localStorage.setItem('toowix_mic_enabled', micEnabled ? '1' : '0'); } catch { /* storage unavailable */ } }, [micEnabled]);
+  useEffect(() => { try { localStorage.setItem('toowix_video_enabled', videoEnabled ? '1' : '0'); } catch { /* storage unavailable */ } }, [videoEnabled]);
+  useEffect(() => { try { if (audioId) localStorage.setItem('toowix_audio_device', audioId); else localStorage.removeItem('toowix_audio_device'); } catch { /* storage unavailable */ } }, [audioId]);
+  useEffect(() => { try { if (videoId) localStorage.setItem('toowix_video_device', videoId); else localStorage.removeItem('toowix_video_device'); } catch { /* storage unavailable */ } }, [videoId]);
+  useEffect(() => { try { if (outputId) localStorage.setItem('toowix_output_device', outputId); else localStorage.removeItem('toowix_output_device'); } catch { /* storage unavailable */ } }, [outputId]);
+  useEffect(() => {
+    if (!media.devices.length) return;
+    const ids = new Set(media.devices.map((d) => d.deviceId));
+
+    if (audioId && !ids.has(audioId)) setAudioId('');
+    if (videoId && !ids.has(videoId)) setVideoId('');
+    if (outputId && !ids.has(outputId)) setOutputId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media.devices]);
   const videoPreviewRef = media.preview;
   const mediaStreamRef = media.stream;
   const cameraPermissionError = !!media.cameraError;
@@ -2636,6 +2656,17 @@ export function MeetingRoomPage() {
     let active = true;
     setMeetingInfo(null);
     setAdmissionError('');
+    // Existence checks must not wait for Firebase's auth restoration on a slow mobile link.
+    const probeController = new AbortController();
+    void fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}`, {
+      signal: probeController.signal,
+    }).then(async response => {
+      const data = await response.json();
+      if (active && (isUnavailableMeetingResponse(response.status, data.error)
+        || data.meeting?.expired || data.meeting?.cancelled)) {
+        navigate('/meeting-link-expired', { replace: true });
+      }
+    }).catch(() => { /* Authenticated lookup below reports network errors. */ });
     (async () => {
       try {
         const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}`, {
@@ -2662,6 +2693,7 @@ export function MeetingRoomPage() {
     })();
     return () => {
       active = false;
+      probeController.abort();
     };
   }, [roomId, getInfoLookupHeaders, navigate]);
 
@@ -3100,6 +3132,40 @@ export function MeetingRoomPage() {
   });
 
   // Reconcile the custom mic/video buttons and self-view with the real conference state.
+  const interruptedMediaRef = useRef<{ mic: boolean; video: boolean } | null>(null);
+  const resumeRecoveryRef = useRef<() => void>(() => {});
+  resumeRecoveryRef.current = () => {
+    const saved = interruptedMediaRef.current;
+    if (!saved || !hasJoined || leavingRef.current || joining || document.hidden) return;
+    interruptedMediaRef.current = null;
+    if (!jitsiMeeting.connected) {
+      setMicEnabled(saved.mic);
+      setVideoEnabled(saved.video);
+      // Fresh admission checks expiry and host restrictions before reconnecting.
+      void handleJoinMeeting();
+    } else {
+      const stream = jitsiMeeting.localCameraStream;
+      if (saved.video && stream?.getVideoTracks().some(track => track.readyState === 'ended')) {
+        void jitsiMeeting.switchDevice('videoInput', videoId).catch(() => setCallError('Tap the camera button to resume video.'));
+      }
+      for (const audio of document.querySelectorAll<HTMLAudioElement>('audio')) void audio.play().catch(() => {});
+    }
+  };
+  useEffect(() => {
+    if (!hasJoined) { interruptedMediaRef.current = null; return; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const visibility = () => {
+      if (document.hidden) {
+        interruptedMediaRef.current = { mic: !jitsiMeeting.localAudioMuted, video: !jitsiMeeting.localVideoMuted };
+      } else {
+        clearTimeout(timer);
+        timer = setTimeout(() => resumeRecoveryRef.current(), 1500);
+      }
+    };
+    document.addEventListener('visibilitychange', visibility);
+    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', visibility); };
+  }, [hasJoined, jitsiMeeting.localAudioMuted, jitsiMeeting.localVideoMuted]);
+
   useEffect(() => {
     setInCallMuted(jitsiMeeting.localAudioMuted);
   }, [jitsiMeeting.localAudioMuted]);
@@ -3660,6 +3726,17 @@ export function MeetingRoomPage() {
     };
 
     setPolls((prev) => [ ...prev, poll ]);
+    // Announce the new poll in chat too (matching "poll created, vote now" -- visible in the
+    // transcript for anyone who opens chat later, not just people watching right this second).
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: `poll-${poll.id}`,
+        sender: 'Toowix System',
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        text: `📊 ${poll.createdBy} created a poll: "${question}" — Vote now!`,
+      },
+    ]);
     postRoomSignal('POLL_CREATED', { poll });
   };
 
@@ -3672,9 +3749,11 @@ export function MeetingRoomPage() {
 
   const handlePerformanceSelect = (maxHeight: number) => {
     setPerformanceMaxHeight(maxHeight);
-    // "Audio only" (0) still needs a real (very low) height passed to the bridge -- 0 isn't a
-    // valid constraint value, just our own UI's way of labeling "as low as it goes".
-    void jitsiMeeting.setVideoQuality(maxHeight || 1);
+    void (async () => {
+      await jitsiMeeting.setVideoQuality(maxHeight);
+      if (maxHeight === 0) await jitsiMeeting.setLowDataMode('audio-only');
+      else if (jitsiMeeting.lowDataMode === 'audio-only') await jitsiMeeting.setLowDataMode('auto');
+    })().catch(() => setCallError('Could not apply video quality. Please try again.'));
   };
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
@@ -3846,6 +3925,18 @@ export function MeetingRoomPage() {
 
         if (!poll || typeof poll.id !== 'string') return;
         setPolls((prev) => (prev.some((p) => p.id === poll.id) ? prev : [ ...prev, poll ]));
+        setChatMessages((prev) => (prev.some((m) => m.id === `poll-${poll.id}`) ? prev : [
+          ...prev,
+          {
+            id: `poll-${poll.id}`,
+            sender: 'Toowix System',
+            time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            text: `📊 ${poll.createdBy || 'Someone'} created a poll: "${poll.question}" — Vote now!`,
+          },
+        ]));
+        playChatMessageTone();
+        setChatToasts((prev) => [ ...prev.slice(-2), { id: `poll-toast-${poll.id}`, sender: poll.createdBy || 'Participant', text: `Created a poll: "${poll.question}" — Vote now!`, kind: 'poll' } ]);
+        setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== `poll-toast-${poll.id}`)), 6000);
       } else if (type === 'POLL_VOTE') {
         const { pollId, optionIndex, voterId } = payload || {};
 
@@ -3920,31 +4011,85 @@ export function MeetingRoomPage() {
     void applyJitsiDevice('audioOutput', devId);
   };
 
-  // Refresh the device list from the browser's own device APIs once in-call (no Jitsi
-  // dependency), and fall back to the system default automatically if the currently selected
-  // device disappears (e.g. a USB headset is unplugged mid-call).
+  const handleMobileSpeaker = async () => {
+    setShowMoreMenu(false);
+    try {
+      const devices = navigator.mediaDevices as MediaDevices & {
+        selectAudioOutput?: () => Promise<MediaDeviceInfo>;
+      };
+      if (devices?.selectAudioOutput) {
+        const selected = await devices.selectAudioOutput();
+        await jitsiMeeting.switchDevice('audioOutput', selected.deviceId);
+        setOutputId(selected.deviceId);
+      }
+      const audio = Array.from(document.querySelectorAll<HTMLAudioElement>('audio'));
+      await Promise.all(audio.map(el => { el.volume = 1; return el.play().catch(() => undefined); }));
+      setParticipantToast('Meeting audio is on. Use your phone volume buttons and audio output controls to choose the speaker or Bluetooth.');
+      setTimeout(() => setParticipantToast(null), 6000);
+    } catch (error) {
+      if ((error as Error)?.name !== 'NotAllowedError') setCallError('Could not select audio output. Use your phone audio controls.');
+    }
+  };
+
+  // Refresh the device list from the browser's own device APIs (works before and during a call),
+  // fall back to the system default automatically if the currently selected device disappears
+  // (e.g. a USB headset is unplugged), and -- the other direction -- automatically switch TO a
+  // device that newly appears (a Bluetooth headset finishing its pairing handshake, a camera
+  // being plugged in), so the person doesn't have to dig into the device menu themselves. Only
+  // auto-switches away from the plain system default, never away from something the person
+  // picked by hand, so it can't fight a deliberate choice.
+  const knownDeviceIdsRef = useRef<Set<string> | null>(null);
+
   useEffect(() => {
-    if (!hasJoined) return;
     let cancelled = false;
     const refresh = async () => {
       try {
         const result = await navigator.mediaDevices?.enumerateDevices();
 
         if (cancelled || !result) return;
-        const audioInput = result.filter((d) => d.kind === 'audioinput');
-        const videoInput = result.filter((d) => d.kind === 'videoinput');
-        const audioOutput = result.filter((d) => d.kind === 'audiooutput');
+        const audioInput = result.filter((d) => d.kind === 'audioinput' && d.deviceId);
+        const videoInput = result.filter((d) => d.kind === 'videoinput' && d.deviceId);
+        const audioOutput = result.filter((d) => d.kind === 'audiooutput' && d.deviceId);
+        const currentIds = new Set(result.map((d) => d.deviceId).filter(Boolean));
+        const previousIds = knownDeviceIdsRef.current;
+
+        knownDeviceIdsRef.current = currentIds;
 
         if (audioId && audioInput.length && !audioInput.some((d) => d.deviceId === audioId)) {
           setAudioId('');
-          setCallError('Your microphone was disconnected. Switched to the system default.');
+          void applyJitsiDevice('audioInput', '');
+          if (hasJoined) setCallError('Your microphone was disconnected. Switched to the system default.');
         }
         if (videoId && videoInput.length && !videoInput.some((d) => d.deviceId === videoId)) {
           setVideoId('');
-          setCallError('Your camera was disconnected. Switched to the system default.');
+          void applyJitsiDevice('videoInput', '');
+          if (hasJoined) setCallError('Your camera was disconnected. Switched to the system default.');
         }
         if (outputId && audioOutput.length && !audioOutput.some((d) => d.deviceId === outputId)) {
           setOutputId('');
+          void applyJitsiDevice('audioOutput', '');
+        }
+
+        // previousIds is null only on the very first run (nothing to compare against yet, and
+        // every device would look "new") -- skip auto-connecting until the second pass onward.
+        if (previousIds) {
+          const isNew = (d: MediaDeviceInfo) => !previousIds.has(d.deviceId);
+          const newAudioIn = audioInput.find(isNew);
+          const newAudioOut = audioOutput.find(isNew);
+          const newVideoIn = videoInput.find(isNew);
+
+          if (newAudioIn && !audioId) {
+            setAudioId(newAudioIn.deviceId);
+            void applyJitsiDevice('audioInput', newAudioIn.deviceId);
+          }
+          if (newAudioOut && !outputId) {
+            setOutputId(newAudioOut.deviceId);
+            void applyJitsiDevice('audioOutput', newAudioOut.deviceId);
+          }
+          if (newVideoIn && !videoId) {
+            setVideoId(newVideoIn.deviceId);
+            void applyJitsiDevice('videoInput', newVideoIn.deviceId);
+          }
         }
       } catch {
         // enumerateDevices isn't supported on every browser/platform; ignore silently.
@@ -3956,6 +4101,7 @@ export function MeetingRoomPage() {
       cancelled = true;
       navigator.mediaDevices?.removeEventListener('devicechange', refresh);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined, audioId, videoId, outputId]);
 
   // ===========================================================================
@@ -3999,6 +4145,9 @@ export function MeetingRoomPage() {
             .tw-topbar > div:first-child > div[title] { display: none !important; }
             .tw-main { padding: 2px 6px 84px !important; }
             .tw-stage-row { flex-direction: column !important; max-width: 100% !important; gap: 8px !important; }
+            .tw-stage-row > div:first-child { min-height: 0 !important; flex: 1 1 0 !important; }
+            .tw-speaker-filmstrip { width: 100% !important; min-width: 0 !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; height: 100px !important; flex: 0 0 100px !important; }
+            .tw-speaker-filmstrip > div { width: 140px !important; flex: 0 0 140px !important; height: 92px !important; aspect-ratio: auto !important; }
             [style*="min-width: 240px"] { width: 100% !important; min-width: 0 !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; max-height: 96px !important; flex: none !important; }
             [style*="min-width: 240px"] > div { width: 140px !important; flex: 0 0 140px !important; height: 88px !important; aspect-ratio: auto !important; }
             [style*="calc(100% - 380px)"] { max-width: 100% !important; }
@@ -4098,7 +4247,11 @@ export function MeetingRoomPage() {
               key={toast.id}
               role="status"
               onClick={() => {
-                setActivePanel('chat');
+                if (toast.kind === 'poll') {
+                  setShowPollsModal(true);
+                } else {
+                  setActivePanel('chat');
+                }
                 setChatToasts((prev) => prev.filter((t) => t.id !== toast.id));
               }}
               style={{
@@ -4118,7 +4271,11 @@ export function MeetingRoomPage() {
                 animation: 'slideInRight 0.25s ease',
               }}
             >
-              <MessageSquare size={18} color="#8AB4F8" style={{ flexShrink: 0, marginTop: '2px' }} />
+              {toast.kind === 'poll' ? (
+                <BarChart3 size={18} color="#8AB4F8" style={{ flexShrink: 0, marginTop: '2px' }} />
+              ) : (
+                <MessageSquare size={18} color="#8AB4F8" style={{ flexShrink: 0, marginTop: '2px' }} />
+              )}
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#8AB4F8', marginBottom: '2px' }}>{toast.sender}</div>
                 <div style={{ fontSize: '13px', lineHeight: 1.35, wordBreak: 'break-word', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{toast.text}</div>
@@ -5061,6 +5218,7 @@ export function MeetingRoomPage() {
 
                     {/* Filmstrip sidebar: local tile + everyone else, click to pin */}
                     <div
+                      className="tw-speaker-filmstrip"
                       style={{
                         width: '220px',
                         minWidth: '220px',
@@ -6688,6 +6846,9 @@ export function MeetingRoomPage() {
                   <LayoutGrid size={16} />
                   {tileViewEnabled ? 'Exit tile view' : 'Tile view'}
                 </button>
+                <button className="tw-mobile-only" onClick={() => void handleMobileSpeaker()} style={menuButtonStyle(false)}>
+                  <Volume2 size={16} /> Speaker / audio output
+                </button>
                 {isModerator && (
                   <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'host' ? null : 'host'); }} style={menuButtonStyle(activePanel === 'host')}>
                     <ShieldCheck size={16} />
@@ -8149,6 +8310,7 @@ export function MeetingRoomPage() {
   // ===========================================================================
   return (
     <div
+      className="tw-prejoin"
       style={{
         minHeight: '100vh',
         width: '100vw',
@@ -8165,6 +8327,17 @@ export function MeetingRoomPage() {
       }}
     >
       {/* Top Header */}
+      <style>{`
+        @media (max-width: 768px) {
+          .tw-prejoin { width: 100% !important; min-height: 100dvh !important; padding: 76px 16px calc(24px + env(safe-area-inset-bottom)) !important; justify-content: flex-start !important; }
+          .tw-prejoin > header { padding: 0 16px !important; background: var(--color-bg); }
+          .tw-prejoin > header > div > div { display: none !important; }
+          .tw-prejoin-layout { flex-direction: column !important; flex-wrap: nowrap !important; gap: 24px !important; margin-top: 0 !important; }
+          .tw-prejoin-layout > div { flex: none !important; width: 100% !important; max-width: 540px !important; min-width: 0 !important; }
+          .tw-prejoin input { font-size: 16px !important; }
+          .tw-prejoin h1, .tw-prejoin h2 { overflow-wrap: anywhere; }
+        }
+      `}</style>
       <header
         style={{
           position: 'fixed',
@@ -8227,6 +8400,7 @@ export function MeetingRoomPage() {
 
       {/* Main 2-Column Pre-Join Container */}
       <div
+        className="tw-prejoin-layout"
         style={{
           display: 'flex',
           flexDirection: 'row',

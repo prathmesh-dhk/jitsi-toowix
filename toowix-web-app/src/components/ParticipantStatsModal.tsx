@@ -62,7 +62,8 @@ function StatRow({ name, stats, isLocal }: { name: string; stats: any; isLocal: 
 export function ParticipantStatsModal({ isOpen, onClose, localName, connectionStats, participantNames }: IParticipantStatsModalProps) {
   if (!isOpen) return null;
 
-  const remoteIds = Object.keys(connectionStats).filter((id) => id !== 'local');
+  // Membership, not cached telemetry, determines who is currently in the call.
+  const remoteIds = Object.keys(participantNames).filter((id) => id !== 'local');
 
   return (
     <div

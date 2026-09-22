@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import YouTube from 'react-youtube';
 
 import { ISharedVideoState } from '../lib/useJitsiMeeting';
@@ -21,13 +21,14 @@ export interface ISharedVideoManagerProps {
 
 // "Return true if the difference between the two times is larger than 5" -- ported verbatim.
 function shouldSeekToPosition(newTime: number, previousTime: number): boolean {
-  return Math.abs(newTime - previousTime) > 5;
+  return Math.abs(newTime - previousTime) > 2;
 }
 
 export function SharedVideoManager({
   sharedVideo, localParticipantId, isLocalAudioMuted, onMuteLocalAudio, onStatusUpdate, onError
 }: ISharedVideoManagerProps) {
   const playerRef = useRef<any>(null);
+  const [playerReady, setPlayerReady] = useState(false);
   const isOwner = sharedVideo.ownerId === localParticipantId;
   const lastFiredAtRef = useRef(0);
 
@@ -43,7 +44,7 @@ export function SharedVideoManager({
     }
     const now = Date.now();
 
-    if (throttled && now - lastFiredAtRef.current < 5000) {
+    if (throttled && now - lastFiredAtRef.current < 1000) {
       return;
     }
     lastFiredAtRef.current = now;
@@ -82,15 +83,26 @@ export function SharedVideoManager({
     const player = event.target;
 
     playerRef.current = player;
+    setPlayerReady(true);
     player.addEventListener('onVolumeChange', () => fireUpdateSharedVideoEvent(true));
 
-    player.playVideo();
+    if (sharedVideo.status === PLAYBACK_STATUSES.PAUSED) player.pauseVideo();
+    else player.playVideo();
     // YouTube can retain muted state from a previously played video in this browser tab; we
     // disable native controls, so explicitly unmute rather than leaving it silently muted.
-    if (player.isMuted()) {
+    if (player.isMuted() && !sharedVideo.muted) {
       player.unMute();
     }
   };
+
+  // Send progress even when no play/pause event fires (including seeks during playback).
+  const heartbeatRef = useRef(fireUpdateSharedVideoEvent);
+  heartbeatRef.current = fireUpdateSharedVideoEvent;
+  useEffect(() => {
+    if (!isOwner || !playerReady) return;
+    const timer = window.setInterval(() => heartbeatRef.current(true), 1000);
+    return () => window.clearInterval(timer);
+  }, [isOwner, playerReady]);
 
   const handleStateChange = (event: any) => {
     if (event.data === YouTube.PlayerState.PLAYING) {
@@ -142,7 +154,7 @@ export function SharedVideoManager({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ sharedVideo.status, sharedVideo.time, sharedVideo.muted, isOwner ]);
+  }, [ sharedVideo.status, sharedVideo.time, sharedVideo.muted, isOwner, playerReady ]);
 
   useEffect(() => () => {
     playerRef.current?.destroy?.();
@@ -167,6 +179,7 @@ export function SharedVideoManager({
             origin: window.location.origin,
             fs: 0,
             autoplay: 0,
+            playsinline: 1,
             controls: isOwner ? 1 : 0,
             rel: 0
           }

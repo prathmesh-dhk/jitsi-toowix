@@ -45,6 +45,10 @@ export default class JitsiStreamBackgroundEffect {
     this._outputCanvasElement = document.createElement('canvas');
     this._outputCanvasElement.getContext('2d');
     this._inputVideoElement = document.createElement('video');
+    this._inputVideoElement.muted = true;
+    this._inputVideoElement.playsInline = true;
+    this._inputVideoElement.setAttribute('playsinline', '');
+    this._inputVideoElement.setAttribute('webkit-playsinline', '');
 
     this._options = { height: SEG_HEIGHT, virtualBackground, width: SEG_WIDTH };
     this._model = model;
@@ -67,11 +71,11 @@ export default class JitsiStreamBackgroundEffect {
     const settings = firstVideoTrack.getSettings ? firstVideoTrack.getSettings() : firstVideoTrack.getConstraints();
     const { height, frameRate, width } = settings as any;
 
-    this._outputCanvasElement.width = parseInt(String(width), 10);
-    this._outputCanvasElement.height = parseInt(String(height), 10);
+    this._outputCanvasElement.width = Number(width) || 640;
+    this._outputCanvasElement.height = Number(height) || 360;
     this._outputCanvasCtx = this._outputCanvasElement.getContext('2d');
-    this._inputVideoElement.width = parseInt(String(width), 10);
-    this._inputVideoElement.height = parseInt(String(height), 10);
+    this._inputVideoElement.width = this._outputCanvasElement.width;
+    this._inputVideoElement.height = this._outputCanvasElement.height;
     this._inputVideoElement.autoplay = true;
     this._inputVideoElement.srcObject = stream;
     this._inputVideoElement.play().catch(() => undefined);
@@ -129,8 +133,12 @@ export default class JitsiStreamBackgroundEffect {
     const { height, width } = settings as any;
     const { backgroundType } = this._options.virtualBackground;
 
-    this._outputCanvasElement.height = height;
-    this._outputCanvasElement.width = width;
+    const frameWidth = this._inputVideoElement.videoWidth || Number(width) || 640;
+    const frameHeight = this._inputVideoElement.videoHeight || Number(height) || 360;
+    this._inputVideoElement.width = frameWidth;
+    this._inputVideoElement.height = frameHeight;
+    if (this._outputCanvasElement.height !== frameHeight) this._outputCanvasElement.height = frameHeight;
+    if (this._outputCanvasElement.width !== frameWidth) this._outputCanvasElement.width = frameWidth;
     this._outputCanvasCtx.globalCompositeOperation = 'copy';
 
     // Draw the (blurred-edge) segmentation mask.
@@ -174,6 +182,9 @@ export default class JitsiStreamBackgroundEffect {
   }
 
   _renderMask() {
+    if (this._inputVideoElement.readyState < 2) return;
+    if (this._options.virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE
+      && (!this._virtualImage.complete || !this._virtualImage.naturalWidth)) return;
     this.resizeSource();
     this.runInference();
     this.runPostProcessing();

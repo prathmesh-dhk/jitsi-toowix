@@ -49,16 +49,35 @@ async function request(path, options = {}) {
 }
 const admit = (body = {}, authenticated = false) => request('/api/meetings/room/test-room/admission', { method: 'POST', headers: authenticated ? headers() : {}, body: JSON.stringify(body) });
 
-test('private lookup ignores forged query email', async () => {
+test('private lookup exposes lobby metadata but no password or admission token', async () => {
   meeting.type = 'Private'; meeting.invitees = ['host@example.com'];
-  assert.equal((await request('/api/meetings/room/test-room?email=host@example.com')).status, 403);
+  meeting.passcode = 'private-test-password';
+  const normal = await request('/api/meetings/room/test-room');
+  const forged = await request('/api/meetings/room/test-room?email=host@example.com');
+  assert.equal(normal.status, 200);
+  assert.equal(forged.status, 200);
+  assert.deepEqual(forged.data, normal.data);
+  assert.equal(forged.data.meeting.passwordRequired, true);
+  assert.equal(forged.data.meeting.passcode, undefined);
+  assert.equal(forged.data.jitsiToken, undefined);
+  assert.equal(forged.data.attendanceToken, undefined);
+  assert.equal(JSON.stringify(forged.data).includes(meeting.passcode), false);
 });
 test('private admission ignores forged body email', async () => {
   meeting.type = 'Private'; meeting.invitees = ['host@example.com'];
   assert.equal((await admit({ email: 'host@example.com' })).status, 403);
 });
-test('verified invitee is admitted; organizer role cannot be forged', async () => {
+test('verified private invitee cannot bypass lobby or forge organizer role', async () => {
   meeting.type = 'Private'; meeting.invitees = [account.email];
+  meeting.passcode = 'private-test-password';
+  const result = await admit({ email: 'host@example.com', moderator: true, passcode: meeting.passcode }, true);
+  assert.equal(result.status, 403);
+  assert.equal(result.data.useLobby, true);
+  assert.equal(result.data.jitsiToken, undefined);
+  assert.equal(result.data.attendanceToken, undefined);
+});
+
+test('public meeting admission uses verified identity and ignores forged moderator role', async () => {
   const result = await admit({ email: 'host@example.com', moderator: true }, true);
   assert.equal(result.status, 200); assert.equal(result.data.moderator, false);
   const token = verifyJitsiToken(result.data.jitsiToken);

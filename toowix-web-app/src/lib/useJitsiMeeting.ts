@@ -705,6 +705,8 @@ export function useJitsiMeeting({
       // A storage failure must not block a temporary in-call preference.
     }
 
+    // Apply network constraints immediately, while background cleanup runs independently.
+    const qualityChange = applyMediaQualityPolicy(networkStateRef.current, mode);
     // Segmentation effects are intentionally disabled for data-saving modes. They consume
     // local CPU/GPU and can worsen encode stability on weak devices.
     if (mode !== 'auto' && virtualBackgroundRef.current) {
@@ -715,7 +717,7 @@ export function useJitsiMeeting({
         // Quality controls remain useful even if a browser refuses to remove an effect.
       }
     }
-    await applyMediaQualityPolicy(networkStateRef.current, mode);
+    await qualityChange;
   }, [ applyMediaQualityPolicy ]);
 
   const updateNetworkStateFromMetrics = useCallback(async (metrics: INetworkMetrics) => {
@@ -2150,6 +2152,7 @@ export function useJitsiMeeting({
     // Remember this as the user's own ceiling so the automatic network-quality check (which runs
     // every few seconds regardless) stops silently overriding it back up the next time it fires.
     manualMaxHeightRef.current = maxHeight;
+    lastAppliedQualityKeyRef.current = null;
     try {
       const constraints: Record<string, any> = {
         defaultConstraints: { maxHeight }
@@ -2165,6 +2168,7 @@ export function useJitsiMeeting({
       // setReceiverConstraints isn't universally supported by every bridge version; degrade
       // silently rather than surface an error for a pure bandwidth-saving hint.
     }
+    room.setReceiverVideoConstraint?.(maxHeight);
     try {
       await room.setSenderVideoConstraint(maxHeight);
     } catch {
