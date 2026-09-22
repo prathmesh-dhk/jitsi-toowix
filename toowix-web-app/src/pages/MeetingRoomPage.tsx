@@ -957,6 +957,10 @@ export function MeetingRoomPage() {
   const [participation, setParticipation] = useState<'guest' | 'account'>(
     location.state?.participation === 'account' ? 'account' : 'guest'
   );
+  // Rejoin is an intentional return from MeetingEndedPage, not an ordinary shared-link open.
+  // Preserve it once at mount so replacing history state cannot start duplicate admissions.
+  const [shouldAutoRejoin] = useState<boolean>(Boolean((location.state as any)?.autoJoin));
+  const autoRejoinStartedRef = useRef(false);
   // Free/unauthenticated instant meeting from the public landing page's "New Meeting" button --
   // capped at 30 minutes, like a free-tier call limit. Captured once at mount (not re-read from
   // location.state on every render) so it can't be lost on an in-page navigation.
@@ -2833,6 +2837,35 @@ export function MeetingRoomPage() {
     }
   };
 
+  // Wait for the metadata request and the restored lobby camera/mic before joining. This keeps
+  // the prior device, camera, microphone and display-name settings instead of showing the
+  // pre-join screen after an intentional rejoin.
+  useEffect(() => {
+    if (!shouldAutoRejoin || autoRejoinStartedRef.current || !meetingInfo || joining
+      || meetingInfo.cancelled || meetingInfo.expired || meetingInfo.passwordRequired
+      || meetingInfo.requireLobbyPolicy || meetingInfo.type === 'Private' || meetingInfo.locked) {
+      return;
+    }
+    let timer: number | undefined;
+    const attemptRejoin = () => {
+      const videoTrack = media.stream.current?.getVideoTracks()[0];
+      const audioTrack = media.stream.current?.getAudioTracks()[0];
+      const mediaReady = (!videoEnabled || (videoTrack && videoTrack.readyState === 'live'))
+        && (!micEnabled || (audioTrack && audioTrack.readyState === 'live'));
+
+      if (!mediaReady || autoRejoinStartedRef.current) return;
+      autoRejoinStartedRef.current = true;
+      if (timer) window.clearInterval(timer);
+      void handleJoinMeeting();
+    };
+
+    attemptRejoin();
+    // MediaStream refs change outside React state, so poll briefly until the browser has
+    // restored the chosen devices. The ref prevents more than one admission request.
+    if (!autoRejoinStartedRef.current) timer = window.setInterval(attemptRejoin, 200);
+    return () => { if (timer) window.clearInterval(timer); };
+  }, [shouldAutoRejoin, meetingInfo, joining, videoEnabled, micEnabled, media.stream]);
+
   // ---------------------------------------------------------------------------
   // Waiting Room Polling (when attendee is waiting for admission)
   // ---------------------------------------------------------------------------
@@ -3023,10 +3056,10 @@ export function MeetingRoomPage() {
       // explicit hangup/dispose call needed here.
       navigate('/meeting-ended', {
         replace: true,
-        state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName },
+        state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName, participation },
       });
     },
-    [navigate, recordAttendanceLeave, roomId, isModerator, displayName]
+    [navigate, recordAttendanceLeave, roomId, isModerator, displayName, participation]
   );
 
   const handleEndMeetingForEveryone = async () => {

@@ -24,6 +24,7 @@ export function MeetingEndedPage() {
     wasModerator?: boolean;
     durationMinutes?: number;
     displayName?: string;
+    participation?: 'guest' | 'account';
   };
 
   const roomId = state.roomId || 'meeting';
@@ -31,6 +32,11 @@ export function MeetingEndedPage() {
   const savedDisplayName = state.displayName || '';
   const isEndedForEveryone = reason.toLowerCase().includes('ended') || reason.toLowerCase().includes('host');
   const isDenied = reason.toLowerCase().includes('denied');
+  const rejoinState = {
+    autoJoin: true,
+    displayName: savedDisplayName,
+    participation: state.participation,
+  };
 
   // 20-second automatic rejoin timer for accidental disconnects/exits
   const [secondsLeft, setSecondsLeft] = useState(20);
@@ -42,7 +48,7 @@ export function MeetingEndedPage() {
     }
 
     if (secondsLeft <= 0) {
-      navigate(`/meet/${encodeURIComponent(roomId)}`, { state: { displayName: savedDisplayName } });
+      navigate(`/meet/${encodeURIComponent(roomId)}`, { state: rejoinState });
       return;
     }
 
@@ -51,7 +57,7 @@ export function MeetingEndedPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [secondsLeft, isAutoRejoinActive, isEndedForEveryone, isDenied, roomId, navigate]);
+  }, [secondsLeft, isAutoRejoinActive, isEndedForEveryone, isDenied, roomId, navigate, rejoinState]);
 
   const progressPercent = Math.max(0, Math.min(100, (secondsLeft / 20) * 100));
 
@@ -275,7 +281,7 @@ export function MeetingEndedPage() {
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', width: '100%' }}>
           {!isEndedForEveryone && !isDenied && (
             <button
-              onClick={() => navigate(`/meet/${encodeURIComponent(roomId)}`, { state: { displayName: savedDisplayName } })}
+              onClick={() => navigate(`/meet/${encodeURIComponent(roomId)}`, { state: rejoinState })}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
