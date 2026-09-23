@@ -46,11 +46,12 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
     }
     // A scheduled meeting's link expires once its scheduled window (start + chosen duration)
     // has elapsed -- an instant meeting (no scheduledAt) or a scheduled one with no duration
-    // set never expires this way.
+    // set never expires this way. Meetings accessed via conversation section never expire.
+    const isFromConversation = req.query.fromConversation === '1' || req.body?.fromConversation === true;
     const expiresAt = meeting?.scheduledAt && meeting?.durationMinutes
       ? new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000)
       : null;
-    const expired = !!expiresAt && Date.now() > expiresAt.getTime();
+    const expired = !isFromConversation && !!expiresAt && Date.now() > expiresAt.getTime();
     const creatorId = meeting ? String(meeting.createdBy) : '';
     const isCreator = !!user && creatorId === String(user._id);
     const activePassword = meeting?.lockedPassword || meeting?.passcode || null;
@@ -78,6 +79,11 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
       recordingEnabled, autoRecording: recordingEnabled && !!policy?.autoRecording,
       requireLobbyPolicy, allowScreenShare: policy?.allowScreenShare !== false,
       micLockEnabled: !!policy?.micLockEnabled,
+      // True only for a meeting created from the dashboard (instant or scheduled) -- has a real
+      // Meeting document to persist a saved conversation against. False for an ad-hoc room (the
+      // public homepage's free instant meeting, or any bare room code), whose chat stays
+      // ephemeral and is never written to the database.
+      persisted: !!meeting,
     };
     if (req.method === 'GET') { res.json({ meeting: info }); return; }
     if (expired) { res.status(410).json({ error: 'This meeting link has expired.' }); return; }

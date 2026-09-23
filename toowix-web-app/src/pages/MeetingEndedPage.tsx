@@ -65,8 +65,12 @@ export function MeetingEndedPage() {
   return (
     <div
       style={{
-        minHeight: '100vh',
+        // dvh (not vh) accounts for the mobile browser's address bar showing/hiding -- 100vh
+        // alone is taller than the real visible viewport on iOS/Android Chrome, which is what
+        // forced this page to scroll instead of sitting statically centered.
+        height: '100dvh',
         width: '100%',
+        overflow: 'hidden',
         backgroundColor: isDark ? '#202124' : '#F8F9FA',
         color: isDark ? '#E8EAED' : '#202124',
         fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
@@ -113,6 +117,11 @@ export function MeetingEndedPage() {
           justifyContent: 'center',
           padding: 'clamp(16px, 4vw, 24px)',
           boxSizing: 'border-box',
+          // Safety net only, not the normal case: if content ever genuinely exceeds the space
+          // left below the header on a very small/landscape screen, this region scrolls on its
+          // own instead of clipping content or dragging the header along with it.
+          overflowY: 'auto',
+          minHeight: 0,
         }}
       >
       {/* Center Card */}

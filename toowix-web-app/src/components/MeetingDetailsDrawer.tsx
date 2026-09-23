@@ -22,6 +22,7 @@ import { MeetingChatModal } from './MeetingChatModal';
 import { MeetingNotesModal } from './MeetingNotesModal';
 import { MeetingSharedFilesModal } from './MeetingSharedFilesModal';
 import { MeetingAttendanceModal } from './MeetingAttendanceModal';
+import { fetchChatHistory, ISavedChatMessage } from '../lib/chatApi';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -137,9 +138,24 @@ export function MeetingDetailsDrawer({
   // Modals
   const [showTranscriptModal, setShowTranscriptModal] = useState(false);
   const [showChatModal, setShowChatModal] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ISavedChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showSharedFilesModal, setShowSharedFilesModal] = useState(false);
   const [showAttendanceModal, setShowAttendanceModal] = useState(false);
+
+  useEffect(() => {
+    if (!showChatModal) return;
+    let cancelled = false;
+    setChatLoading(true);
+    setChatError(null);
+    fetchChatHistory(activeMeeting.roomSlug)
+      .then((data) => { if (!cancelled) setChatMessages(data); })
+      .catch((err) => { if (!cancelled) setChatError(err instanceof Error ? err.message : 'Failed to load this conversation'); })
+      .finally(() => { if (!cancelled) setChatLoading(false); });
+    return () => { cancelled = true; };
+  }, [showChatModal, activeMeeting.roomSlug]);
 
   useEffect(() => {
     setActiveMeeting(meeting);
@@ -387,6 +403,9 @@ export function MeetingDetailsDrawer({
           isOpen={showChatModal}
           onClose={() => setShowChatModal(false)}
           meeting={activeMeeting}
+          messages={chatMessages}
+          loading={chatLoading}
+          error={chatError}
         />
       )}
 

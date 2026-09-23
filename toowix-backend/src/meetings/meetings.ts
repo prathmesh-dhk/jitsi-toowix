@@ -474,6 +474,57 @@ export const getMeetingHandler = async (req: AuthenticatedRequest, res: Response
   }
 };
 
+/**
+ * GET /api/meetings/conversations
+ * Lightweight list of meetings (visible to the caller, same scoping as listMeetingsHandler) that
+ * have at least one saved chat message -- powers the Dashboard's "Conversations" tab. Message
+ * bodies/images aren't included here (a full history can be large); open a specific conversation
+ * via GET /room/:roomSlug/chat instead.
+ */
+export const listConversationsHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = await resolveUser(req);
+    if (!user) {
+      res.status(404).json({ error: 'User profile not found' });
+      return;
+    }
+
+    const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+    const meetingDocuments = await Meeting.find({ ...filter, 'chatMessages.0': { $exists: true } })
+      .select('name roomSlug type scheduledAt actualStartedAt actualEndedAt endedAt createdAt chatMessages participants sharedFiles cancelledAt')
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    const conversations = meetingDocuments.map((meeting) => {
+      const messages = meeting.chatMessages || [];
+      const last = messages[messages.length - 1];
+      return {
+        id: String(meeting._id),
+        name: meeting.name,
+        roomSlug: meeting.roomSlug,
+        type: meeting.type,
+        messageCount: messages.length,
+        lastMessageAt: last ? last.createdAt : meeting.createdAt,
+        participantCount: meeting.participants?.length || 0,
+        status: meeting.cancelledAt
+          ? 'Ended'
+          : meeting.actualStartedAt && !meeting.actualEndedAt && !meeting.endedAt
+            ? 'Live'
+            : meeting.scheduledAt && new Date(meeting.scheduledAt).getTime() > Date.now()
+              ? 'Upcoming'
+              : 'Ended',
+        joinable: !meeting.cancelledAt && !(meeting.actualEndedAt || meeting.endedAt),
+        sharedFiles: meeting.sharedFiles || [],
+      };
+    }).sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime());
+
+    res.json({ conversations });
+  } catch (error: any) {
+    console.error('[Meetings] Error listing conversations:', error.message);
+    res.status(500).json({ error: 'Failed to fetch conversations' });
+  }
+};
+
 const isAdminRole = (role?: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN';
 
 /**

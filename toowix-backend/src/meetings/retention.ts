@@ -15,6 +15,12 @@ const ABANDONED_INSTANT_GRACE_MS = 24 * 60 * 60 * 1000;
 // Meetings with a recording running or still being processed are never deleted.
 const notHeld = (now: number) => ({ $or: [ { recordingHoldUntil: null }, { recordingHoldUntil: { $lt: new Date(now) } } ] });
 
+// A saved conversation (chatMessages, from the Conversations feature) lives embedded on the
+// Meeting document -- any automatic, time-based sweep below must never delete a meeting that has
+// one, or the "saved" conversation would quietly disappear on its own. Only an explicit user
+// action (Cancel, or "Delete history" in Past Meetings) removes a meeting with saved chat.
+const hasNoChatHistory = { $or: [ { chatMessages: { $exists: false } }, { chatMessages: { $size: 0 } } ] };
+
 const scheduledEndOf = (meeting: { scheduledAt?: Date | null; durationMinutes?: number | null }) =>
   (meeting.scheduledAt?.getTime() || 0) + (meeting.durationMinutes || 0) * 60 * 1000;
 
@@ -34,6 +40,7 @@ const sweepScheduledMeetings = async (now: number): Promise<number> => {
     recurrence: null,
     cancelledAt: null,
     ...notHeld(now),
+    ...hasNoChatHistory,
   });
 
   let deleted = 0;
@@ -62,7 +69,7 @@ const sweepRecurringSeries = async (now: number): Promise<number> => {
     const finalOccurrenceEnd = Math.max(...occurrences.map(scheduledEndOf));
 
     if (now >= finalOccurrenceEnd + RECURRING_SERIES_GRACE_MS) {
-      const result = await Meeting.deleteMany({ 'recurrence.seriesId': seriesId, ...notHeld(now) });
+      const result = await Meeting.deleteMany({ 'recurrence.seriesId': seriesId, ...notHeld(now), ...hasNoChatHistory });
 
       deleted += result.deletedCount || 0;
     }
@@ -81,6 +88,7 @@ const sweepAbandonedInstantMeetings = async (now: number): Promise<number> => {
     recurrence: null,
     createdAt: { $lt: cutoff },
     ...notHeld(now),
+    ...hasNoChatHistory,
   });
 
   return result.deletedCount || 0;

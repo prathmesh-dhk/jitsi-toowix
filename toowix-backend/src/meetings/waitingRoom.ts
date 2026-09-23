@@ -60,8 +60,9 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
       return;
     }
     // Same expiry rule as the direct-admission path: a scheduled meeting's link stops working
-    // once start + chosen duration has elapsed.
-    if (meeting?.scheduledAt && meeting?.durationMinutes) {
+    // once start + chosen duration has elapsed (unless accessed from conversation).
+    const isFromConversation = req.query.fromConversation === '1' || req.body?.fromConversation === true;
+    if (!isFromConversation && meeting?.scheduledAt && meeting?.durationMinutes) {
       const expiresAt = new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000);
       if (Date.now() > expiresAt.getTime()) {
         res.status(410).json({ error: 'This meeting link has expired.' });
@@ -406,8 +407,14 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
     // Keep the record while a recording is running or still being processed; the retention sweep
     // removes it afterwards.
     const recordingPending = !!meeting.recordingHoldUntil && new Date(meeting.recordingHoldUntil).getTime() > Date.now();
+    // A saved conversation (chatMessages) lives on this same document -- deleting the meeting
+    // record would destroy it the instant the host ends the call, which defeats the whole point
+    // of the Conversations feature persisting chat for dashboard-created meetings in the first
+    // place. Keep the record (same as a pending recording) whenever there's chat to preserve;
+    // the retention sweep also skips it going forward (see hasNoChatHistory in retention.ts).
+    const hasChatHistory = (meeting.chatMessages?.length || 0) > 0;
 
-    if (isInstantMeeting && !recordingPending) {
+    if (isInstantMeeting && !recordingPending && !hasChatHistory) {
       await meeting.deleteOne();
     } else {
       await meeting.save({ validateBeforeSave: false });

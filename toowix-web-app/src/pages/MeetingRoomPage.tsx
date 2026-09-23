@@ -53,7 +53,9 @@ import {
   Keyboard,
   Code2,
   Volume2,
+  Paperclip,
 } from 'lucide-react';
+import { persistChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES } from '../lib/chatApi';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import {
   playChatMessageTone,
@@ -954,12 +956,35 @@ export function MeetingRoomPage() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [participation, setParticipation] = useState<'guest' | 'account'>(
-    location.state?.participation === 'account' ? 'account' : 'guest'
-  );
-  // Rejoin is an intentional return from MeetingEndedPage, not an ordinary shared-link open.
+  const [isFromConversation] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('fromConversation') === '1' || params.get('direct') === '1' || Boolean((location.state as any)?.fromConversation);
+    } catch {
+      return Boolean((location.state as any)?.fromConversation);
+    }
+  });
+
+  const [participation, setParticipation] = useState<'guest' | 'account'>(() => {
+    if (location.state?.participation === 'account') return 'account';
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('fromConversation') === '1' || params.get('direct') === '1') {
+        if (auth.currentUser || localStorage.getItem('toowix_session_token')) return 'account';
+      }
+    } catch {}
+    return 'guest';
+  });
+  // Rejoin is an intentional return from MeetingEndedPage or when entering directly from conversations.
   // Preserve it once at mount so replacing history state cannot start duplicate admissions.
-  const [shouldAutoRejoin] = useState<boolean>(Boolean((location.state as any)?.autoJoin));
+  const [shouldAutoRejoin] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('fromConversation') === '1' || params.get('direct') === '1' || Boolean((location.state as any)?.autoJoin) || Boolean((location.state as any)?.fromConversation);
+    } catch {
+      return Boolean((location.state as any)?.autoJoin);
+    }
+  });
   const autoRejoinStartedRef = useRef(false);
   // Free/unauthenticated instant meeting from the public landing page's "New Meeting" button --
   // capped at 30 minutes, like a free-tier call limit. Captured once at mount (not re-read from
@@ -995,8 +1020,13 @@ export function MeetingRoomPage() {
   // Pre-join user inputs — restore name from rejoin state or localStorage
   const [displayName, setDisplayName] = useState<string>(() => {
     if (location.state?.displayName) return location.state.displayName;
-    if (participation !== 'account') return localStorage.getItem('toowix_guest_displayName') || '';
-    return '';
+    if (auth.currentUser?.displayName) return auth.currentUser.displayName;
+    try {
+      const user = JSON.parse(localStorage.getItem('toowix_user') || '{}');
+      if (user.fullName || user.name) return user.fullName || user.name;
+    } catch {}
+    if (participation !== 'account') return localStorage.getItem('toowix_guest_displayName') || (auth.currentUser?.email?.split('@')[0] || '');
+    return auth.currentUser?.email?.split('@')[0] || '';
   });
   const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(() => {
     try {
@@ -1186,10 +1216,13 @@ export function MeetingRoomPage() {
   const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [quickAccessEnabled, setQuickAccessEnabled] = useState(true);
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; time: string; text: string }>>([
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; senderId?: string; time: string; text: string; imageUrl?: string; uploading?: boolean }>>([
     { id: '1', sender: 'Toowix System', time: 'Just now', text: 'Welcome to the meeting! Messages sent here are visible to all participants.' }
   ]);
   const [chatInput, setChatInput] = useState('');
+  const [chatImageUploading, setChatImageUploading] = useState(false);
+  const [chatImageError, setChatImageError] = useState<string | null>(null);
+  const chatImageInputRef = useRef<HTMLInputElement | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const inCallStreamRef = useRef<MediaStream | null>(null);
@@ -2600,6 +2633,10 @@ export function MeetingRoomPage() {
     requireLobbyPolicy: boolean;
     allowScreenShare: boolean;
     micLockEnabled: boolean;
+    // True only for a meeting created from the dashboard (instant or "schedule for later") --
+    // has a saved conversation on the backend. False for an ad-hoc room (the public homepage's
+    // free instant meeting, or any bare room code), whose chat is never persisted.
+    persisted?: boolean;
   } | null>(null);
 
   const meetingInfoRef = useRef(meetingInfo);
@@ -2656,29 +2693,29 @@ export function MeetingRoomPage() {
 
   // Fetch meeting metadata
   useEffect(() => {
-    if (window.location.search) window.history.replaceState(window.history.state, '', window.location.pathname);
+    if (window.location.search && !isFromConversation) window.history.replaceState(window.history.state, '', window.location.pathname);
     let active = true;
     setMeetingInfo(null);
     setAdmissionError('');
     // Existence checks must not wait for Firebase's auth restoration on a slow mobile link.
     const probeController = new AbortController();
-    void fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}`, {
+    void fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}${isFromConversation ? '?fromConversation=1' : ''}`, {
       signal: probeController.signal,
     }).then(async response => {
       const data = await response.json();
-      if (active && (isUnavailableMeetingResponse(response.status, data.error)
+      if (active && !isFromConversation && (isUnavailableMeetingResponse(response.status, data.error)
         || data.meeting?.expired || data.meeting?.cancelled)) {
         navigate('/meeting-link-expired', { replace: true });
       }
     }).catch(() => { /* Authenticated lookup below reports network errors. */ });
     (async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}`, {
+        const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}${isFromConversation ? '?fromConversation=1' : ''}`, {
           headers: await getInfoLookupHeaders(),
         });
         const data = await response.json();
         if (!response.ok) {
-          if (active && isUnavailableMeetingResponse(response.status, data.error)) {
+          if (active && !isFromConversation && isUnavailableMeetingResponse(response.status, data.error)) {
             navigate('/meeting-link-expired', { replace: true });
             return;
           }
@@ -2687,7 +2724,7 @@ export function MeetingRoomPage() {
         if (active) {
           setMeetingInfo(data.meeting);
           meetingInfoRef.current = data.meeting;
-          if (data.meeting?.cancelled || data.meeting?.expired) {
+          if (!isFromConversation && (data.meeting?.cancelled || data.meeting?.expired)) {
             navigate('/meeting-link-expired', { replace: true });
           }
         }
@@ -2699,7 +2736,7 @@ export function MeetingRoomPage() {
       active = false;
       probeController.abort();
     };
-  }, [roomId, getInfoLookupHeaders, navigate]);
+  }, [roomId, getInfoLookupHeaders, navigate, isFromConversation]);
 
   // Mid-meeting lock: for dashboard meetings the backend enforces password + waiting room (like a
   // Private meeting); rooms with no saved meeting fall back to Jitsi's own room password.
@@ -2767,8 +2804,8 @@ export function MeetingRoomPage() {
   // Join Flow: Knocks on lobby or joins directly
   // ---------------------------------------------------------------------------
   const handleJoinMeeting = async (audioOnly: boolean = false) => {
-    if (!meetingInfo || meetingInfo.cancelled || meetingInfo.expired || joining || leavingRef.current) return;
-    if (meetingInfo.passwordRequired && !passcodeInput.trim()) {
+    if (!meetingInfo || meetingInfo.cancelled || (!isFromConversation && meetingInfo.expired) || joining || leavingRef.current) return;
+    if (meetingInfo.passwordRequired && !passcodeInput.trim() && !isFromConversation) {
       setAdmissionError('Enter the meeting password to join.');
       return;
     }
@@ -2786,21 +2823,22 @@ export function MeetingRoomPage() {
 
     try {
       const headers = await accountHeaders();
-      const endpoint = (meetingInfo?.requireLobbyPolicy || meetingInfo?.type === 'Private' || meetingInfo?.locked)
+      const endpoint = (!isFromConversation && (meetingInfo?.requireLobbyPolicy || meetingInfo?.type === 'Private' || meetingInfo?.locked))
         ? `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/knock`
         : `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/admission`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({
-          name: displayName.trim() || 'Guest',
+          name: displayName.trim() || auth.currentUser?.displayName || 'User',
           requestId: waitingRequestId || undefined,
           passcode: meetingInfo.passwordRequired ? passcodeInput.trim() : undefined,
+          fromConversation: isFromConversation,
         }),
       });
       const data = await response.json();
       if (!response.ok) {
-        if (isUnavailableMeetingResponse(response.status, data.error)) {
+        if (!isFromConversation && isUnavailableMeetingResponse(response.status, data.error)) {
           navigate('/meeting-link-expired', { replace: true });
           return;
         }
@@ -2839,11 +2877,11 @@ export function MeetingRoomPage() {
 
   // Wait for the metadata request and the restored lobby camera/mic before joining. This keeps
   // the prior device, camera, microphone and display-name settings instead of showing the
-  // pre-join screen after an intentional rejoin.
+  // pre-join screen after an intentional rejoin or when joining directly from conversations.
   useEffect(() => {
     if (!shouldAutoRejoin || autoRejoinStartedRef.current || !meetingInfo || joining
-      || meetingInfo.cancelled || meetingInfo.expired || meetingInfo.passwordRequired
-      || meetingInfo.requireLobbyPolicy || meetingInfo.type === 'Private' || meetingInfo.locked) {
+      || meetingInfo.cancelled || (!isFromConversation && (meetingInfo.expired || meetingInfo.passwordRequired
+      || meetingInfo.requireLobbyPolicy || meetingInfo.type === 'Private' || meetingInfo.locked))) {
       return;
     }
     let timer: number | undefined;
@@ -2853,7 +2891,7 @@ export function MeetingRoomPage() {
       const mediaReady = (!videoEnabled || (videoTrack && videoTrack.readyState === 'live'))
         && (!micEnabled || (audioTrack && audioTrack.readyState === 'live'));
 
-      if (!mediaReady || autoRejoinStartedRef.current) return;
+      if ((!mediaReady && !isFromConversation) || autoRejoinStartedRef.current) return;
       autoRejoinStartedRef.current = true;
       if (timer) window.clearInterval(timer);
       void handleJoinMeeting();
@@ -2862,9 +2900,9 @@ export function MeetingRoomPage() {
     attemptRejoin();
     // MediaStream refs change outside React state, so poll briefly until the browser has
     // restored the chosen devices. The ref prevents more than one admission request.
-    if (!autoRejoinStartedRef.current) timer = window.setInterval(attemptRejoin, 200);
+    if (!autoRejoinStartedRef.current) timer = window.setInterval(attemptRejoin, 150);
     return () => { if (timer) window.clearInterval(timer); };
-  }, [shouldAutoRejoin, meetingInfo, joining, videoEnabled, micEnabled, media.stream]);
+  }, [shouldAutoRejoin, isFromConversation, meetingInfo, joining, videoEnabled, micEnabled, media.stream]);
 
   // ---------------------------------------------------------------------------
   // Waiting Room Polling (when attendee is waiting for admission)
@@ -3813,6 +3851,7 @@ export function MeetingRoomPage() {
     const msg = {
       id: String(Date.now()),
       sender: displayName || 'You',
+      senderId: sessionIdRef.current,
       time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
       text,
     };
@@ -3823,6 +3862,70 @@ export function MeetingRoomPage() {
     // on Jitsi's BridgeChannel, which can be unready or unavailable, and had no fallback, so
     // messages could silently never reach other participants. HTTP always works.
     postRoomSignal('CHAT_MESSAGE', { text });
+    // Saving the conversation is a no-op on the backend for a meeting with no Meeting document
+    // (the homepage's free instant meeting) -- only a dashboard-created meeting actually gets
+    // anything written, so there's no persisted.check needed here.
+    void persistChatMessage(roomId, { senderName: displayName || 'You', senderId: sessionIdRef.current, text });
+  };
+
+  const handleAttachChatImage = async (file: File | undefined) => {
+    if (!file) return;
+    setChatImageError(null);
+    const caption = chatInput.trim();
+
+    if (!file.type.startsWith('image/')) {
+      setChatImageError('Only image files (JPG, PNG, GIF, WEBP) can be attached.');
+      setTimeout(() => setChatImageError(null), 4000);
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
+      return;
+    }
+    if (file.size > MAX_CHAT_IMAGE_BYTES) {
+      setChatImageError('Image is too large -- the limit is 3MB.');
+      setTimeout(() => setChatImageError(null), 4000);
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
+      return;
+    }
+
+    // Show the picked image immediately via a local blob URL, rather than waiting on the
+    // upload round-trip -- the bubble then swaps to the real hosted URL (or is removed on
+    // failure) once uploadChatImage resolves, same "instant preview" feel as WhatsApp/Messenger.
+    const localPreviewUrl = URL.createObjectURL(file);
+    const tempId = `local-${Date.now()}`;
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        sender: displayName || 'You',
+        senderId: sessionIdRef.current,
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        text: caption,
+        imageUrl: localPreviewUrl,
+        uploading: true,
+      },
+    ]);
+    setChatInput('');
+    setChatImageUploading(true);
+    try {
+      const url = await uploadChatImage(roomId, file);
+      const resolvedUrl = resolveChatImageUrl(url);
+      setChatMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, imageUrl: resolvedUrl, uploading: false } : m)));
+      URL.revokeObjectURL(localPreviewUrl);
+      postRoomSignal('CHAT_MESSAGE', { text: caption, imageUrl: resolvedUrl });
+      void persistChatMessage(roomId, {
+        senderName: displayName || 'You',
+        senderId: sessionIdRef.current,
+        text: caption,
+        imageUrl: resolvedUrl,
+      });
+    } catch (err: any) {
+      setChatMessages((prev) => prev.filter((m) => m.id !== tempId));
+      URL.revokeObjectURL(localPreviewUrl);
+      setChatImageError(err?.message || 'Failed to send image');
+      setTimeout(() => setChatImageError(null), 4000);
+    } finally {
+      setChatImageUploading(false);
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
+    }
   };
 
   const postRoomSignal = useCallback(
@@ -3943,21 +4046,24 @@ export function MeetingRoomPage() {
         // screen-share already relies on. msgId dedup above prevents a double-add on the
         // rare chance both this and a working datachannel send arrive.
         const text = typeof payload?.text === 'string' ? payload.text : '';
-        if (!text) return;
+        const imageUrl = typeof payload?.imageUrl === 'string' ? resolveChatImageUrl(payload.imageUrl) : undefined;
+        if (!text && !imageUrl) return;
         const chatId = msgId || String(Date.now());
         setChatMessages((prev) => [
           ...prev,
           {
             id: chatId,
             sender: sender || 'Participant',
+            senderId: senderSessionId,
             time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             text,
+            imageUrl,
           },
         ]);
         playChatMessageTone();
         if (activePanelRef.current !== 'chat') {
           setUnreadChat((n) => n + 1);
-          setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text } ]);
+          setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text: text || 'Sent an image' } ]);
           setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== chatId)), 5000);
         }
       } else if (type === 'REACTION') {
@@ -6024,18 +6130,99 @@ export function MeetingRoomPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>
                       {chatMessages.map((msg) => (
-                        <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#8AB4F8' }}>{msg.sender}</span>
+                        <div
+                          key={msg.id}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: msg.senderId === sessionIdRef.current ? 'flex-end' : 'flex-start',
+                            gap: '3px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: msg.senderId === sessionIdRef.current ? 'row-reverse' : 'row' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: msg.senderId === sessionIdRef.current ? '#A8DAB5' : '#8AB4F8' }}>{msg.sender}</span>
                             <span style={{ fontSize: '11px', color: '#9AA0A6' }}>{msg.time}</span>
                           </div>
-                          <div style={{ fontSize: '13px', color: '#E8EAED', lineHeight: 1.4, wordBreak: 'break-word' }}>
-                            {msg.text}
+                          <div
+                            style={{
+                              maxWidth: '82%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: msg.senderId === sessionIdRef.current ? 'flex-end' : 'flex-start',
+                              gap: '6px',
+                              padding: msg.imageUrl || msg.text ? '8px' : '0',
+                              borderRadius: '12px',
+                              backgroundColor: msg.senderId === sessionIdRef.current ? '#075E54' : '#263238',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                            }}
+                          >
+                            {msg.imageUrl && (
+                              <div style={{ position: 'relative', display: 'inline-block' }}>
+                                <a href={msg.uploading ? undefined : resolveChatImageUrl(msg.imageUrl)} target="_blank" rel="noreferrer">
+                                  <img
+                                    src={resolveChatImageUrl(msg.imageUrl)}
+                                    alt="Shared attachment"
+                                    style={{
+                                      maxWidth: '220px',
+                                      maxHeight: '220px',
+                                      borderRadius: '8px',
+                                      display: 'block',
+                                      opacity: msg.uploading ? 0.65 : 1,
+                                    }}
+                                  />
+                                </a>
+                                {msg.uploading && (
+                                  <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
+                                    Sending...
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {msg.text && (
+                              <div style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                                {msg.text}
+                              </div>
+                            )}
                           </div>
                         </div>
                       ))}
                     </div>
+                    {chatImageError && (
+                      <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatImageError}</div>
+                    )}
                     <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                      {meetingInfo?.persisted && (
+                        <>
+                          <input
+                            ref={chatImageInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            style={{ display: 'none' }}
+                            onChange={(e) => void handleAttachChatImage(e.target.files?.[0])}
+                          />
+                          <button
+                            type="button"
+                            title="Attach an image (max 3MB)"
+                            disabled={chatImageUploading}
+                            onClick={() => chatImageInputRef.current?.click()}
+                            style={{
+                              backgroundColor: 'transparent',
+                              color: '#9AA0A6',
+                              border: '1px solid rgba(255, 255, 255, 0.12)',
+                              borderRadius: '50%',
+                              width: '36px',
+                              height: '36px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: chatImageUploading ? 'wait' : 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <Paperclip size={16} />
+                          </button>
+                        </>
+                      )}
                       <input
                         type="text"
                         value={chatInput}
@@ -6043,6 +6230,7 @@ export function MeetingRoomPage() {
                         placeholder="Send a message..."
                         style={{
                           flex: 1,
+                          minWidth: 0,
                           backgroundColor: '#2D2E30',
                           border: '1px solid rgba(255, 255, 255, 0.12)',
                           borderRadius: '20px',
@@ -6065,6 +6253,7 @@ export function MeetingRoomPage() {
                           alignItems: 'center',
                           justifyContent: 'center',
                           cursor: 'pointer',
+                          flexShrink: 0,
                         }}
                       >
                         <Send size={16} />
@@ -8355,10 +8544,10 @@ export function MeetingRoomPage() {
     );
   }
 
-  // An intentional rejoin should not flash the full camera/settings lobby for a moment.
+  // An intentional rejoin or conversation direct join should not flash the full camera/settings lobby for a moment.
   // Keep protected meetings and any failed admission on the normal lobby so users can supply
   // a passcode or see the actionable error.
-  const showRejoinTransition = shouldAutoRejoin && !admissionError && (!meetingInfo || joining
+  const showRejoinTransition = shouldAutoRejoin && !admissionError && (isFromConversation || !meetingInfo || joining
     || (!meetingInfo.passwordRequired && !meetingInfo.requireLobbyPolicy
       && meetingInfo.type !== 'Private' && !meetingInfo.locked));
   if (showRejoinTransition) {

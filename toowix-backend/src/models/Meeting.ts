@@ -60,6 +60,18 @@ export interface IMeeting {
     sharedBy?: string;
     sharedAt?: string;
   }>;
+  // Only populated for meetings that exist as a Meeting document (created from the dashboard --
+  // "New Meeting" or "Schedule for later"). A room joined straight from the public homepage's
+  // free instant-meeting link has no Meeting document at all, so its chat is never written here
+  // and is destroyed with the in-memory signaling buffer once the meeting ends.
+  chatMessages?: Array<{
+    id: string;
+    senderName: string;
+    senderId?: string | null;
+    text?: string | null;
+    imageUrl?: string | null;
+    createdAt: Date;
+  }>;
   waitingQueue?: Array<{
     id: string;
     name: string;
@@ -186,6 +198,17 @@ const MeetingSchema = new Schema<IMeetingDocument>(
         size: { type: String, default: '1.2 MB' },
         sharedBy: { type: String, default: 'Participant' },
         sharedAt: { type: String, default: null },
+      }],
+      default: [],
+    },
+    chatMessages: {
+      type: [{
+        id: { type: String, required: true },
+        senderName: { type: String, required: true },
+        senderId: { type: String, default: null },
+        text: { type: String, default: null },
+        imageUrl: { type: String, default: null },
+        createdAt: { type: Date, default: Date.now },
       }],
       default: [],
     },

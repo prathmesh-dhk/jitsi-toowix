@@ -26,8 +26,10 @@ import {
   Moon,
   Share2,
   Contact as ContactIcon,
+  MessageSquare,
 } from 'lucide-react';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
+import { ConversationsPanel } from '../components/ConversationsPanel';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
@@ -44,8 +46,8 @@ import { NotificationToasts } from '../components/NotificationToasts';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams';
-const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams'];
+type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams' | 'conversations';
+const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams', 'conversations'];
 
 interface IMeeting {
   id: string;
@@ -468,7 +470,7 @@ export function DashboardPage() {
   const secondaryMeetings = spotlightMeetings.slice(1, 3);
 
   return (
-    <div className="dashboard-layout">
+    <div className={`dashboard-layout ${activeTab === 'conversations' ? 'conversations-active-layout' : ''}`}>
       <NotificationToasts />
 
       {/* Mobile Sidebar Backdrop Overlay */}
@@ -544,6 +546,7 @@ export function DashboardPage() {
             { key: 'upcoming', label: 'Upcoming', icon: <Clock size={18} />, action: () => { setActiveTab('upcoming'); setSidebarOpen(false); } },
             { key: 'past', label: 'Past Meetings', icon: <History size={18} />, action: () => { setActiveTab('past'); setSidebarOpen(false); } },
             { key: 'recordings', label: 'Recordings', icon: <Video size={18} />, action: () => { setActiveTab('recordings'); setSidebarOpen(false); } },
+            { key: 'conversations', label: 'Conversations', icon: <MessageSquare size={18} />, action: () => { setActiveTab('conversations'); setSidebarOpen(false); } },
             { key: 'contacts', label: 'Contact book', icon: <ContactIcon size={18} />, action: () => { setActiveTab('contacts'); setSidebarOpen(false); } },
           ].map((item) => (
             <button
@@ -910,7 +913,7 @@ export function DashboardPage() {
         {/* =========================================================================
             Dashboard Content Canvas
             ========================================================================= */}
-        <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}`}>
+        <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}${activeTab === 'conversations' ? ' conversations-canvas' : ''}`}>
           {activeTab === 'schedule' ? (
             <ScheduleCalendar
               meetings={allMeetings.map((meeting) => ({
@@ -935,6 +938,8 @@ export function DashboardPage() {
             <ContactBookPanel />
           ) : activeTab === 'recordings' ? (
             <RecordingsPanel />
+          ) : activeTab === 'conversations' ? (
+            <ConversationsPanel isDark={isDark} />
           ) : activeTab === 'past' ? (
             <PastMeetingsPanel
               meetings={allMeetings.filter((meeting) => !meeting.isFuture).map((meeting) => ({

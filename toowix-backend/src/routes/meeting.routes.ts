@@ -11,7 +11,13 @@ import {
   deleteMeetingHandler,
   rsvpMeetingHandler,
   inviteToMeetingHandler,
+  listConversationsHandler,
 } from '../meetings/meetings';
+import {
+  postChatMessageHandler,
+  getChatHistoryHandler,
+  uploadChatImageHandler,
+} from '../meetings/chatHistory';
 import {
   knockLobbyHandler,
   getLobbyStatusHandler,
@@ -54,6 +60,16 @@ router.post('/room/:roomSlug/lobby/deny', optionalAccount, denyLobbyHandler);
 router.post('/room/:roomSlug/lobby/announce', optionalAccount, announceLobbyHandler);
 router.post('/room/:roomSlug/end-for-everyone', optionalAccount, endMeetingForEveryoneHandler);
 router.get('/room/:roomSlug/live-status', optionalAccount, getLiveMeetingStatusHandler);
+
+// Chat persistence -- postChatMessageHandler/uploadChatImageHandler silently no-op (or reject,
+// for images) when the room isn't backed by a Meeting document, so an anonymous homepage instant
+// meeting never gets anything written server-side; see chatHistory.ts for the rule.
+router.post('/room/:roomSlug/chat', optionalAccount, postChatMessageHandler);
+router.get('/room/:roomSlug/chat', verifyFirebaseToken, getChatHistoryHandler);
+router.post('/room/:roomSlug/chat/image', optionalAccount, uploadChatImageHandler);
+
+// Must come before '/:id' below, or "conversations" would be matched as an :id.
+router.get('/conversations', verifyFirebaseToken, listConversationsHandler);
 
 router.get('/', verifyFirebaseToken, listMeetingsHandler);
 router.get('/:id', verifyFirebaseToken, getMeetingHandler);

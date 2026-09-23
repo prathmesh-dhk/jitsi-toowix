@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, Copy, Download, Check, MessageSquare, Clock } from 'lucide-react';
-import type { IPastMeeting } from './PastMeetingsPanel';
+import { resolveChatImageUrl, type ISavedChatMessage } from '../lib/chatApi';
 
 interface IMeetingChatModalProps {
   isOpen: boolean;
   onClose: () => void;
-  meeting: IPastMeeting | null;
+  meeting: { name: string; organizer?: string } | null;
+  messages: ISavedChatMessage[];
+  loading?: boolean;
+  error?: string | null;
 }
 
 interface IChatMessage {
@@ -15,10 +18,14 @@ interface IChatMessage {
   initials: string;
   time: string;
   text: string;
+  imageUrl?: string | null;
   isHost?: boolean;
 }
 
-export function MeetingChatModal({ isOpen, onClose, meeting }: IMeetingChatModalProps) {
+const initialsOf = (name: string) =>
+  name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() || '').join('') || '?';
+
+export function MeetingChatModal({ isOpen, onClose, meeting, messages, loading, error }: IMeetingChatModalProps) {
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -33,63 +40,25 @@ export function MeetingChatModal({ isOpen, onClose, meeting }: IMeetingChatModal
   if (!isOpen || !meeting) return null;
 
   const organizerName = meeting.organizer || 'Organizer';
-  const organizerInitials = meeting.organizerInitials || 'O';
 
-  const defaultMessages: IChatMessage[] = [
-    {
-      id: 'msg-1',
-      sender: organizerName,
-      initials: organizerInitials,
-      time: '10:02 AM',
-      text: 'Good morning everyone! Glad you could make it today.',
-      isHost: true,
-    },
-    {
-      id: 'msg-2',
-      sender: 'Sarah Chen',
-      initials: 'SC',
-      time: '10:04 AM',
-      text: 'Morning! Can everyone see the shared sprint roadmap on screen?',
-    },
-    {
-      id: 'msg-3',
-      sender: 'Alex Rivera',
-      initials: 'AR',
-      time: '10:05 AM',
-      text: 'Yes, clear on my end. Audio and video quality look great too.',
-    },
-    {
-      id: 'msg-4',
-      sender: 'Sarah Chen',
-      initials: 'SC',
-      time: '10:16 AM',
-      text: 'I have attached the updated sprint action plan and deck in the shared files tab.',
-    },
-    {
-      id: 'msg-5',
-      sender: organizerName,
-      initials: organizerInitials,
-      time: '10:28 AM',
-      text: 'Thanks Sarah! Let us make sure attendance logs and recordings are reviewed by EOD.',
-      isHost: true,
-    },
-    {
-      id: 'msg-6',
-      sender: 'Alex Rivera',
-      initials: 'AR',
-      time: '10:30 AM',
-      text: 'Sounds great! Will follow up on the open items. Thank you!',
-    },
-  ];
+  const chatMessages: IChatMessage[] = messages.map((m) => ({
+    id: m.id,
+    sender: m.senderName,
+    initials: initialsOf(m.senderName),
+    time: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    text: m.text || '',
+    imageUrl: m.imageUrl ? resolveChatImageUrl(m.imageUrl) : m.imageUrl,
+    isHost: m.senderName === organizerName,
+  }));
 
-  const filtered = defaultMessages.filter(
+  const filtered = chatMessages.filter(
     (m) =>
       m.sender.toLowerCase().includes(search.toLowerCase()) ||
       m.text.toLowerCase().includes(search.toLowerCase())
   );
 
-  const fullChatExport = defaultMessages
-    .map((m) => `[${m.time}] ${m.sender}${m.isHost ? ' (Host)' : ''}:\n${m.text}\n`)
+  const fullChatExport = chatMessages
+    .map((m) => `[${m.time}] ${m.sender}${m.isHost ? ' (Host)' : ''}:\n${m.text || (m.imageUrl ? `[image] ${m.imageUrl}` : '')}\n`)
     .join('\n');
 
   const handleCopy = async () => {
@@ -168,7 +137,7 @@ export function MeetingChatModal({ isOpen, onClose, meeting }: IMeetingChatModal
                 Meeting Chat History
               </h2>
               <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#6B7280' }}>
-                {meeting.name} • {defaultMessages.length} messages
+                {meeting.name} • {chatMessages.length} message{chatMessages.length === 1 ? '' : 's'}
               </p>
             </div>
           </div>
@@ -292,9 +261,17 @@ export function MeetingChatModal({ isOpen, onClose, meeting }: IMeetingChatModal
             gap: '16px',
           }}
         >
-          {filtered.length === 0 ? (
+          {loading ? (
             <div style={{ textAlign: 'center', padding: '40px 0', color: '#9CA3AF', fontSize: '13px' }}>
-              No chat messages found for "{search}".
+              Loading conversation…
+            </div>
+          ) : error ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#DC2626', fontSize: '13px' }}>
+              {error}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#9CA3AF', fontSize: '13px' }}>
+              {search ? `No chat messages found for "${search}".` : 'No messages in this conversation.'}
             </div>
           ) : (
             filtered.map((msg) => (
@@ -339,22 +316,33 @@ export function MeetingChatModal({ isOpen, onClose, meeting }: IMeetingChatModal
                       {msg.time}
                     </span>
                   </div>
-                  <div
-                    style={{
-                      display: 'inline-block',
-                      backgroundColor: msg.isHost ? '#F5F3FF' : '#F9FAFB',
-                      border: `1px solid ${msg.isHost ? '#EDE9FE' : '#E5E7EB'}`,
-                      borderRadius: '8px',
-                      padding: '8px 12px',
-                      fontSize: '13px',
-                      color: '#1F2937',
-                      lineHeight: '1.4',
-                      maxWidth: '92%',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {msg.text}
-                  </div>
+                  {msg.imageUrl && (
+                    <a href={msg.imageUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginBottom: msg.text ? '6px' : 0 }}>
+                      <img
+                        src={msg.imageUrl}
+                        alt="Shared attachment"
+                        style={{ maxWidth: '260px', maxHeight: '260px', borderRadius: '8px', display: 'block', border: '1px solid #E5E7EB' }}
+                      />
+                    </a>
+                  )}
+                  {msg.text && (
+                    <div
+                      style={{
+                        display: 'inline-block',
+                        backgroundColor: msg.isHost ? '#F5F3FF' : '#F9FAFB',
+                        border: `1px solid ${msg.isHost ? '#EDE9FE' : '#E5E7EB'}`,
+                        borderRadius: '8px',
+                        padding: '8px 12px',
+                        fontSize: '13px',
+                        color: '#1F2937',
+                        lineHeight: '1.4',
+                        maxWidth: '92%',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {msg.text}
+                    </div>
+                  )}
                 </div>
               </div>
             ))

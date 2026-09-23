@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase, pingDatabase } from './db/connection';
 import { getAvatarUploadRoot } from './uploads/avatarStorage';
+import { getChatImageUploadRoot } from './uploads/chatImageStorage';
 
 dotenv.config();
 
@@ -85,6 +86,7 @@ app.use('/api/contacts', contactRoutes);
 // Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
+app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot()));
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {

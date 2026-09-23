@@ -30,35 +30,39 @@ function HomePage() {
       {/* Header / Navbar */}
       <header
         style={{
-          height: '68px',
+          minHeight: '68px',
           borderBottom: '1px solid var(--color-border)',
           backgroundColor: 'var(--color-surface)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0 32px',
+          padding: 'clamp(10px, 2.5vw, 0px) clamp(16px, 4vw, 32px)',
+          flexWrap: 'wrap',
+          gap: '8px',
+          boxSizing: 'border-box',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
           <img
             src="/assets/toowix-logo.svg"
             alt="Toowix Logo"
-            style={{ width: '38px', height: '38px', objectFit: 'contain' }}
+            style={{ width: 'clamp(30px, 6vw, 38px)', height: 'clamp(30px, 6vw, 38px)', objectFit: 'contain', flexShrink: 0 }}
           />
-          <span style={{ fontSize: '22px', fontWeight: 700, letterSpacing: '-0.5px' }}>
+          <span style={{ fontSize: 'clamp(17px, 4.5vw, 22px)', fontWeight: 700, letterSpacing: '-0.5px', whiteSpace: 'nowrap' }}>
             Toowix <span style={{ color: 'var(--color-primary)' }}>Meet</span>
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'clamp(6px, 2vw, 16px)' }}>
           <Link
             to="/login"
             style={{
-              padding: '8px 18px',
+              padding: 'clamp(6px, 1.5vw, 8px) clamp(10px, 3vw, 18px)',
               borderRadius: 'var(--radius-md)',
               color: 'var(--color-text-primary)',
               fontWeight: 500,
-              fontSize: '14px',
+              fontSize: 'clamp(13px, 3vw, 14px)',
+              whiteSpace: 'nowrap',
             }}
           >
             Sign In
@@ -66,13 +70,14 @@ function HomePage() {
           <Link
             to="/signup"
             style={{
-              padding: '8px 18px',
+              padding: 'clamp(6px, 1.5vw, 8px) clamp(10px, 3vw, 18px)',
               borderRadius: 'var(--radius-md)',
               backgroundColor: 'var(--color-primary)',
               color: '#FFFFFF',
               fontWeight: 600,
-              fontSize: '14px',
+              fontSize: 'clamp(13px, 3vw, 14px)',
               boxShadow: '0 2px 6px rgba(58, 134, 202, 0.3)',
+              whiteSpace: 'nowrap',
             }}
           >
             Register Company
@@ -87,13 +92,14 @@ function HomePage() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '40px 24px',
+          padding: 'clamp(28px, 6vw, 40px) clamp(18px, 5vw, 24px)',
           maxWidth: '1200px',
           margin: '0 auto',
           width: '100%',
+          boxSizing: 'border-box',
         }}
       >
-        <div style={{ maxWidth: '640px', textAlign: 'center' }}>
+        <div style={{ maxWidth: '640px', width: '100%', textAlign: 'center' }}>
           <div
             style={{
               display: 'inline-flex',
@@ -105,7 +111,7 @@ function HomePage() {
               color: 'var(--color-primary-dark)',
               fontSize: '13px',
               fontWeight: 600,
-              marginBottom: '24px',
+              marginBottom: 'clamp(16px, 4vw, 24px)',
             }}
           >
             <Sparkles size={16} /> Enterprise Video Collaboration
@@ -113,7 +119,7 @@ function HomePage() {
 
           <h1
             style={{
-              fontSize: '44px',
+              fontSize: 'clamp(28px, 7vw, 44px)',
               fontWeight: 700,
               lineHeight: 1.2,
               letterSpacing: '-0.02em',
@@ -125,10 +131,10 @@ function HomePage() {
 
           <p
             style={{
-              fontSize: '18px',
+              fontSize: 'clamp(15px, 3.5vw, 18px)',
               color: 'var(--color-text-secondary)',
               lineHeight: 1.6,
-              marginBottom: '36px',
+              marginBottom: 'clamp(24px, 6vw, 36px)',
             }}
           >
             Connect, collaborate, and celebrate securely from anywhere with crystal-clear audio and video powered by Toowix.
@@ -142,7 +148,7 @@ function HomePage() {
               gap: '16px',
               justifyContent: 'center',
               alignItems: 'center',
-              marginBottom: '48px',
+              marginBottom: 'clamp(32px, 7vw, 48px)',
             }}
           >
             <button
@@ -150,6 +156,7 @@ function HomePage() {
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '10px',
                 padding: '14px 28px',
                 borderRadius: 'var(--radius-md)',
@@ -159,6 +166,8 @@ function HomePage() {
                 fontWeight: 600,
                 boxShadow: '0 4px 14px rgba(58, 134, 202, 0.35)',
                 transition: 'background-color 0.2s',
+                flex: '1 1 220px',
+                boxSizing: 'border-box',
               }}
             >
               <Plus size={20} /> New Meeting
@@ -174,9 +183,11 @@ function HomePage() {
                 borderRadius: 'var(--radius-md)',
                 padding: '4px 6px 4px 14px',
                 boxShadow: 'var(--shadow-sm)',
+                flex: '1 1 220px',
+                boxSizing: 'border-box',
               }}
             >
-              <Keyboard size={18} color="#717881" style={{ marginRight: '8px' }} />
+              <Keyboard size={18} color="#717881" style={{ marginRight: '8px', flexShrink: 0 }} />
               <input
                 type="text"
                 placeholder="Enter room code or link"
@@ -187,7 +198,8 @@ function HomePage() {
                   fontSize: '15px',
                   color: 'var(--color-text-primary)',
                   backgroundColor: 'transparent',
-                  width: '200px',
+                  width: '100%',
+                  minWidth: 0,
                 }}
               />
               <button
@@ -200,6 +212,7 @@ function HomePage() {
                   color: customRoom.trim() ? '#FFFFFF' : '#717881',
                   fontWeight: 600,
                   fontSize: '14px',
+                  flexShrink: 0,
                 }}
               >
                 Join
@@ -211,7 +224,7 @@ function HomePage() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
               gap: '20px',
               borderTop: '1px solid var(--color-border-light)',
               paddingTop: '32px',
