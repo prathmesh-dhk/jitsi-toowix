@@ -1258,6 +1258,16 @@ export function useJitsiMeeting({
               // Fallback cue when per-track audio levels aren't delivered: hold ~2.5s.
               setSpeakingLevel(id, 1);
               setSpeakingLevel(id, 0, 2500);
+              // Dominant-speaker detection is based on audio arriving at the bridge. If it says
+              // a remote participant is speaking, an earlier track-level muted flag is stale;
+              // never show a red muted badge on somebody who is actively speaking.
+              if (id && id !== room.myUserId()) {
+                setRemoteParticipants((prev) => (
+                  prev[id]?.muted
+                    ? { ...prev, [id]: { ...prev[id], muted: false } }
+                    : prev
+                ));
+              }
             });
 
             // Real Jibri recording status -- rides XMPP presence, so every participant (not
@@ -1986,6 +1996,53 @@ export function useJitsiMeeting({
       switchDeviceInFlightRef.current[kind] = false;
     }
   }, []);
+
+  // Mobile browsers can silently take the microphone away when the tab is backgrounded --
+  // switching apps, or another app briefly grabbing audio focus (a phone call, another app
+  // playing sound) -- without ever telling this page the mic stopped working. The camera
+  // recovers from the same situation mostly on its own once the self-view <video> element is
+  // re-bound and asked to play again (handled at the page level), but a microphone has no such
+  // "just re-bind it" fix: once the OS has muted the underlying hardware track, it can stay
+  // silent even though our own mute toggle still says "on." Checked a moment after the tab
+  // becomes visible again (and once more shortly after, in case the OS hasn't let go of the mic
+  // yet), and only reacquires when the mic looks genuinely dead -- so this never fights someone
+  // who muted themselves on purpose.
+  useEffect(() => {
+    const checkMicHealth = async () => {
+      if (document.visibilityState !== 'visible' || !joined) {
+        return;
+      }
+      const track = localAudioTrackRef.current;
+
+      if (!track || track.isMuted()) {
+        return;
+      }
+      const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
+      const looksDead = !nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true;
+
+      if (!looksDead || switchDeviceInFlightRef.current.audioInput) {
+        return;
+      }
+      try {
+        await switchDevice('audioInput', deviceIdsRef.current.audioDeviceId || '');
+      } catch {
+        // Best-effort recovery; a real device error surfaces through the normal mic-toggle path
+        // the next time the person actually touches the mic button.
+      }
+    };
+    const onVisible = () => {
+      void checkMicHealth();
+      setTimeout(() => void checkMicHealth(), 900);
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onVisible);
+    };
+  }, [ joined, switchDevice ]);
 
   // Applies (blur/image) or clears (null) a virtual background on the local camera track.
   // Re-thrown to the caller on failure (model download failed, WebAssembly unsupported, etc.) so
