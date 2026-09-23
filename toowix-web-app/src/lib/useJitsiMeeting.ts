@@ -1601,13 +1601,36 @@ export function useJitsiMeeting({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
 
-  const toggleAudio = useCallback(() => {
+  // switchDevice is declared further below (after toggleAudio in source order) but toggleAudio
+  // needs to call it for stale-mic recovery -- routed through a ref instead of a direct
+  // reference so this useCallback doesn't have to sit below switchDevice's declaration.
+  const switchDeviceRef = useRef<typeof switchDevice | null>(null);
+
+  const toggleAudio = useCallback(async () => {
     const track = localAudioTrackRef.current;
 
     if (!track) {
       return;
     }
     if (track.isMuted()) {
+      // On iOS Safari the OS can quietly kill the underlying hardware track while it sits
+      // muted (background audio session reclaimed, another app grabs the mic, etc). Calling
+      // unmute() on that dead JitsiLocalTrack object succeeds but produces silence -- same
+      // class of bug as the stale-camera-track case handled in toggleVideo above. Detect it
+      // and reacquire a fresh mic track instead of unmuting a corpse.
+      const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
+      const looksDead = !nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true;
+
+      if (looksDead && switchDeviceRef.current && !switchDeviceInFlightRef.current.audioInput) {
+        try {
+          await switchDeviceRef.current('audioInput', deviceIdsRef.current.audioDeviceId || '');
+          localAudioTrackRef.current?.unmute();
+          setLocalAudioMuted(false);
+          return;
+        } catch {
+          // Fall through and try the normal unmute path as a best-effort below.
+        }
+      }
       track.unmute();
       setLocalAudioMuted(false);
     } else {
@@ -2003,6 +2026,7 @@ export function useJitsiMeeting({
       switchDeviceInFlightRef.current[kind] = false;
     }
   }, []);
+  switchDeviceRef.current = switchDevice;
 
   // Mobile browsers can silently take the microphone away when the tab is backgrounded --
   // switching apps, or another app briefly grabbing audio focus (a phone call, another app
