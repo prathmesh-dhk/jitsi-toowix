@@ -38,7 +38,8 @@ export function MeetingEndedPage() {
     participation: state.participation,
   };
 
-  // 20-second automatic rejoin timer for accidental disconnects/exits
+  // 20-second countdown that returns to home on expiry (accidental disconnects/exits).
+  // Only the "Rejoin" button below can actually join the meeting -- the timer itself never does.
   const [secondsLeft, setSecondsLeft] = useState(20);
   const [isAutoRejoinActive, setIsAutoRejoinActive] = useState(true);
 
@@ -48,7 +49,7 @@ export function MeetingEndedPage() {
     }
 
     if (secondsLeft <= 0) {
-      navigate(`/meet/${encodeURIComponent(roomId)}`, { state: rejoinState });
+      handleReturnHome();
       return;
     }
 
@@ -57,7 +58,7 @@ export function MeetingEndedPage() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [secondsLeft, isAutoRejoinActive, isEndedForEveryone, isDenied, roomId, navigate, rejoinState]);
+  }, [secondsLeft, isAutoRejoinActive, isEndedForEveryone, isDenied, roomId]);
 
   const progressPercent = Math.max(0, Math.min(100, (secondsLeft / 20) * 100));
 
@@ -209,16 +210,16 @@ export function MeetingEndedPage() {
                 </div>
                 <div>
                   <div style={{ fontSize: '14px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#1F2937' }}>
-                    Left by mistake? Rejoining in <span style={{ color: '#818CF8' }}>{secondsLeft}s</span>
+                    Returning to home in <span style={{ color: '#818CF8' }}>{secondsLeft}s</span>
                   </div>
                   <div style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
-                    Click below to rejoin immediately or wait for the timer.
+                    Click "Rejoin meeting" to go back in, or cancel to stay on this page.
                   </div>
                 </div>
               </div>
               <button
                 onClick={() => setIsAutoRejoinActive(false)}
-                title="Cancel auto-rejoin"
+                title="Cancel countdown"
                 style={{
                   background: 'none',
                   border: 'none',
@@ -301,7 +302,7 @@ export function MeetingEndedPage() {
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#4F46E5')}
             >
               <RotateCcw size={16} />
-              <span>{isAutoRejoinActive ? `Rejoin now (${secondsLeft}s)` : 'Rejoin meeting'}</span>
+              <span>Rejoin meeting</span>
             </button>
           )}
 
