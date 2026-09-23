@@ -66,26 +66,26 @@ export function MeetingEndedPage() {
     <div
       style={{
         minHeight: '100vh',
-        width: '100vw',
+        width: '100%',
         backgroundColor: isDark ? '#202124' : '#F8F9FA',
         color: isDark ? '#E8EAED' : '#202124',
         fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
         boxSizing: 'border-box',
       }}
     >
-      {/* Top Left Logo */}
+      {/* Top Logo Bar -- kept in normal document flow (not fixed) so it never overlaps the
+          centered card below on short mobile viewports; a fixed header here used to sit on top
+          of the card on phones. */}
       <header
         onClick={handleReturnHome}
         style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          padding: '20px 32px',
+          flexShrink: 0,
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: 'clamp(12px, 3vw, 20px) clamp(16px, 4vw, 32px)',
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + clamp(12px, 3vw, 20px))',
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
@@ -95,20 +95,33 @@ export function MeetingEndedPage() {
         <img
           src="/assets/toowix-logo.svg"
           alt="Toowix"
-          style={{ width: '36px', height: '36px', objectFit: 'contain' }}
+          style={{ width: '32px', height: '32px', objectFit: 'contain', flexShrink: 0 }}
         />
-        <span style={{ fontSize: '20px', fontWeight: 600, letterSpacing: '-0.3px' }}>
+        <span style={{ fontSize: 'clamp(16px, 4vw, 20px)', fontWeight: 600, letterSpacing: '-0.3px' }}>
           Toowix <span style={{ color: '#4F46E5' }}>Meet</span>
         </span>
       </header>
 
+      {/* Centering wrapper -- the card is always statically centered in whatever space is left
+          below the header, and never jumps or overlaps other elements. */}
+      <div
+        style={{
+          flex: 1,
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 'clamp(16px, 4vw, 24px)',
+          boxSizing: 'border-box',
+        }}
+      >
       {/* Center Card */}
       <div
         style={{
           maxWidth: '520px',
           width: '100%',
           textAlign: 'center',
-          padding: '40px 32px',
+          padding: 'clamp(24px, 6vw, 40px) clamp(18px, 5vw, 32px)',
           borderRadius: '24px',
           backgroundColor: isDark ? '#2D2E30' : '#FFFFFF',
           boxShadow: isDark
@@ -118,6 +131,7 @@ export function MeetingEndedPage() {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
+          boxSizing: 'border-box',
         }}
       >
         <div
@@ -188,8 +202,8 @@ export function MeetingEndedPage() {
               boxSizing: 'border-box',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', textAlign: 'left', minWidth: 0, flex: 1 }}>
                 <div
                   style={{
                     width: '36px',
@@ -208,11 +222,11 @@ export function MeetingEndedPage() {
                 >
                   <Timer size={16} />
                 </div>
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: '14px', fontWeight: 600, color: isDark ? '#FFFFFF' : '#1F2937' }}>
                     Returning to home in <span style={{ color: '#818CF8' }}>{secondsLeft}s</span>
                   </div>
-                  <div style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
+                  <div style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', wordBreak: 'break-word' }}>
                     Click "Rejoin meeting" to go back in, or cancel to stay on this page.
                   </div>
                 </div>
@@ -229,6 +243,7 @@ export function MeetingEndedPage() {
                   borderRadius: '6px',
                   display: 'flex',
                   alignItems: 'center',
+                  flexShrink: 0,
                 }}
               >
                 <X size={18} />
@@ -286,6 +301,7 @@ export function MeetingEndedPage() {
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '8px',
                 padding: '12px 28px',
                 borderRadius: '24px',
@@ -297,6 +313,8 @@ export function MeetingEndedPage() {
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
                 boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
+                flex: '1 1 180px',
+                boxSizing: 'border-box',
               }}
               onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#4338CA')}
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#4F46E5')}
@@ -311,6 +329,7 @@ export function MeetingEndedPage() {
             style={{
               display: 'inline-flex',
               alignItems: 'center',
+              justifyContent: 'center',
               gap: '8px',
               padding: '12px 28px',
               borderRadius: '24px',
@@ -321,6 +340,8 @@ export function MeetingEndedPage() {
               fontSize: '15px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
+              flex: '1 1 180px',
+              boxSizing: 'border-box',
             }}
             onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDark ? 'rgba(255,255,255,0.06)' : '#F8F9FA')}
             onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -328,6 +349,7 @@ export function MeetingEndedPage() {
             <ArrowLeft size={16} /> Return to Home
           </button>
         </div>
+      </div>
       </div>
     </div>
   );
