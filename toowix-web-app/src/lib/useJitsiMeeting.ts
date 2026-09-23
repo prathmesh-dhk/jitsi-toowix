@@ -731,9 +731,16 @@ export function useJitsiMeeting({
       poorSampleCountRef.current += 1;
       degradedSampleCountRef.current = 0;
       goodSinceRef.current = null;
-      // A disconnected/failed connection is acted on immediately. Otherwise two consecutive
-      // samples avoid lowering video for a short stats spike.
-      if ([ 'disconnected', 'failed', 'closed' ].includes(metrics.connectionState || '') || poorSampleCountRef.current >= 2) {
+      // This used to act on a single disconnected/failed/closed reading immediately, on the
+      // theory that a real connection loss shouldn't wait. But Jitsi switches a call between the
+      // server-relayed connection and a direct peer-to-peer one right at the two-participant
+      // mark (this deployment has P2P enabled), and that switch can itself report the old
+      // connection as briefly "disconnected"/"closed" while the new one takes over -- a totally
+      // normal handover, not a real problem. Reacting to that instantly is exactly what made the
+      // connection look "Limited" and the video freeze the moment a second person joined. Always
+      // require the same two-consecutive-samples confirmation, so a real failure is still caught
+      // within a few seconds, but a routine handover blip no longer collapses video quality.
+      if (poorSampleCountRef.current >= 2) {
         next = 'POOR';
       }
     } else if (observed === 'DEGRADED') {
