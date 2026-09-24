@@ -3,4 +3,4 @@ dist/
 .env
 *.log
 serviceAccountKey.json
-uploads/
+/uploads/
