@@ -939,7 +939,12 @@ export function DashboardPage() {
           ) : activeTab === 'recordings' ? (
             <RecordingsPanel />
           ) : activeTab === 'conversations' ? (
-            <ConversationsPanel isDark={isDark} />
+            <ConversationsPanel
+              isDark={isDark}
+              initialConversationId={searchParams.get('conversation') || undefined}
+              initialMessageId={searchParams.get('message') || undefined}
+              initialRoomSlug={searchParams.get('room') || undefined}
+            />
           ) : activeTab === 'past' ? (
             <PastMeetingsPanel
               meetings={allMeetings.filter((meeting) => !meeting.isFuture).map((meeting) => ({

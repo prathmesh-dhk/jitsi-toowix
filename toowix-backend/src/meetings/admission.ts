@@ -7,6 +7,7 @@ import { User } from '../models/User';
 import { Company } from '../models/Company';
 import { generateJitsiToken } from '../auth/jitsi-token';
 import { jitsiConfig } from '../config/jitsi';
+import { reactivateMeetingForConversation } from './waitingRoom';
 
 export function mayAttend(meeting: any, user: any, company: any): boolean {
   if (meeting.cancelledAt || (meeting.companyId && (!company || company.status !== 'ACTIVE'))) return false;
@@ -96,6 +97,12 @@ export async function roomAdmission(req: AuthenticatedRequest, res: Response): P
       if (!submitted || submitted !== activePassword) {
         res.status(401).json({ error: 'Incorrect meeting password.', passwordRequired: true }); return;
       }
+    }
+    // Rejoining a previously-ended meeting from Conversations must behave like a fresh instant
+    // meeting, not immediately get kicked back out by the "was this meeting ended?" poll every
+    // client runs every 3s -- see reactivateMeetingForConversation's own comment.
+    if (isFromConversation && meeting) {
+      await reactivateMeetingForConversation(room);
     }
     const identity = {
       id: user ? String(user._id) : crypto.randomUUID(),

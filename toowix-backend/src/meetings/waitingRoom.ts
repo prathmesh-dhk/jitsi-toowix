@@ -375,6 +375,19 @@ export async function announceLobbyHandler(req: AuthenticatedRequest, res: Respo
 const endedMeetingSlugs = new Set<string>();
 
 /**
+ * Clears the "ended" state (both the in-memory flag the live-status poll checks, and the
+ * persisted endedAt on the Meeting document) for a meeting that has a saved conversation and is
+ * being rejoined from Conversations. Without this, joining is allowed (admission.ts's own
+ * expiry bypass), but the still-live-status poll (every 3s, see MeetingRoomPage.tsx) sees the
+ * leftover "ended" state from the meeting's original end and immediately kicks the rejoining
+ * participant back out -- the meeting must behave like a fresh instant meeting once reopened.
+ */
+export async function reactivateMeetingForConversation(roomSlug: string): Promise<void> {
+  endedMeetingSlugs.delete(roomSlug);
+  await Meeting.updateOne({ roomSlug }, { $set: { endedAt: null } });
+}
+
+/**
  * POST /api/meetings/room/:roomSlug/end-for-everyone
  * Moderator ends the meeting for everyone in the call.
  */

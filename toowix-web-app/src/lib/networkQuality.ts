@@ -62,7 +62,8 @@ export function getMediaQualityPolicy(
   mode: LowDataMode,
   state: NetworkState,
   participantCount: number,
-  screenShareActive = false
+  screenShareActive = false,
+  highBandwidth = false
 ): IMediaQualityPolicy {
   const normalLastN = participantCount >= 8 ? 4 : 6;
 
@@ -102,14 +103,19 @@ export function getMediaQualityPolicy(
     };
   }
 
+  // 1080p costs substantially more encoder bandwidth than 720p. Request it only when the
+  // browser's live WebRTC estimator has at least 2.5 Mbps available and the call is small;
+  // JVB still chooses a lower simulcast layer immediately if that estimate falls again.
+  const use1080pCamera = highBandwidth && participantCount <= 4;
+
   return {
     audioOnly: false,
     desktopFps: 10,
     desktopMaxHeight: 1080,
     desktopMaxWidth: 1920,
     lastN: normalLastN,
-    receiveMaxHeight: screenShareActive ? 1080 : 720,
-    sendMaxHeight: screenShareActive ? 1080 : 720
+    receiveMaxHeight: screenShareActive || use1080pCamera ? 1080 : 720,
+    sendMaxHeight: screenShareActive || use1080pCamera ? 1080 : 720
   };
 }
 

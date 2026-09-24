@@ -55,7 +55,7 @@ import {
   Volume2,
   Paperclip,
 } from 'lucide-react';
-import { persistChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES } from '../lib/chatApi';
+import { persistChatMessage, uploadChatImage, resolveChatImageUrl, fetchChatHistory, MAX_CHAT_IMAGE_BYTES } from '../lib/chatApi';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import {
   playChatMessageTone,
@@ -995,6 +995,14 @@ export function MeetingRoomPage() {
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
   const [joining, setJoining] = useState(false);
+  // React state (`joining`) updates asynchronously, so two near-simultaneous synchronous calls
+  // to handleJoinMeeting (e.g. a manual click racing the auto-rejoin effect's poll, or a genuine
+  // accidental double-click) could both read joining === false before either sets it true --
+  // each would then run its own admission request and its own useJitsiMeeting connect, producing
+  // two real conference joins for the same person (duplicate tile, "camera in use by another
+  // tab", one side dropping a few seconds later). This ref is checked-and-set synchronously, so
+  // the second call bails out immediately no matter what raced it.
+  const joiningRef = useRef(false);
   const [passcodeInput, setPasscodeInput] = useState('');
   const attendanceTokenRef = useRef('');
   const attendanceEntryIdRef = useRef<string | null>(null);
@@ -1223,6 +1231,33 @@ export function MeetingRoomPage() {
   const [chatImageUploading, setChatImageUploading] = useState(false);
   const [chatImageError, setChatImageError] = useState<string | null>(null);
   const chatImageInputRef = useRef<HTMLInputElement | null>(null);
+  const chatHistoryLoadedRef = useRef(false);
+
+  // Joining a call from Conversations should feel like walking back into the same conversation,
+  // not a fresh empty one -- load the saved history into the live chat panel and open it, once,
+  // right when the join completes. A plain instant meeting (not opened via Conversations) never
+  // triggers this, so its chat starts empty as before.
+  useEffect(() => {
+    if (!isFromConversation || !hasJoined || chatHistoryLoadedRef.current) return;
+    chatHistoryLoadedRef.current = true;
+    setActivePanel('chat');
+    fetchChatHistory(roomId)
+      .then(({ messages }) => {
+        if (messages.length === 0) return;
+        setChatMessages(messages.map((m) => ({
+          id: m.id,
+          sender: m.senderName,
+          senderId: m.senderId || undefined,
+          time: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+          text: m.text || '',
+          imageUrl: m.imageUrl || undefined,
+        })));
+      })
+      .catch(() => {
+        // Best-effort -- live chat still works over the existing signaling channel even if
+        // history fails to load (e.g. a guest without permission to view this conversation).
+      });
+  }, [isFromConversation, hasJoined, roomId]);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const inCallStreamRef = useRef<MediaStream | null>(null);
@@ -2804,11 +2839,12 @@ export function MeetingRoomPage() {
   // Join Flow: Knocks on lobby or joins directly
   // ---------------------------------------------------------------------------
   const handleJoinMeeting = async (audioOnly: boolean = false) => {
-    if (!meetingInfo || meetingInfo.cancelled || (!isFromConversation && meetingInfo.expired) || joining || leavingRef.current) return;
+    if (!meetingInfo || meetingInfo.cancelled || (!isFromConversation && meetingInfo.expired) || joining || leavingRef.current || joiningRef.current) return;
     if (meetingInfo.passwordRequired && !passcodeInput.trim() && !isFromConversation) {
       setAdmissionError('Enter the meeting password to join.');
       return;
     }
+    joiningRef.current = true;
     try { initPipStream(); } catch { }
     setJoining(true);
     setAdmissionError('');
@@ -2872,6 +2908,7 @@ export function MeetingRoomPage() {
       setAdmissionError(error instanceof Error ? error.message : 'Join failed');
     } finally {
       setJoining(false);
+      joiningRef.current = false;
     }
   };
 
@@ -3092,12 +3129,19 @@ export function MeetingRoomPage() {
       // The lib-jitsi-meet connection/room itself is torn down by useJitsiMeeting's own
       // cleanup effect when this page unmounts (which navigate() below triggers) -- no
       // explicit hangup/dispose call needed here.
+      if (isFromConversation) {
+        // A call started from Conversations should drop you straight back into that same
+        // conversation, not the generic "meeting ended" screen -- covers both a plain Leave and
+        // ending the meeting for everyone, since both funnel through this same function.
+        navigate(`/dashboard?tab=conversations&room=${encodeURIComponent(roomId)}`, { replace: true });
+        return;
+      }
       navigate('/meeting-ended', {
         replace: true,
         state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName, participation },
       });
     },
-    [navigate, recordAttendanceLeave, roomId, isModerator, displayName, participation]
+    [navigate, recordAttendanceLeave, roomId, isModerator, displayName, participation, isFromConversation]
   );
 
   const handleEndMeetingForEveryone = async () => {
@@ -3130,8 +3174,12 @@ export function MeetingRoomPage() {
     }
   }, [isFreeInstantMeeting, hasJoined]);
 
-  const effectiveExpiresAt = meetingInfo?.expiresAt
-    || (freeInstantExpiresAtRef.current ? new Date(freeInstantExpiresAtRef.current).toISOString() : null);
+  // meetingInfo.expiresAt is still the meeting's ORIGINAL scheduled end time even when opened
+  // via Conversations (only the join-time "expired" block is bypassed there, in admission.ts) --
+  // for an old meeting that's long since passed, using it here would auto-end the call within
+  // moments of joining. A conversation call has no scheduled window to enforce, so skip it.
+  const effectiveExpiresAt = isFromConversation ? null : (meetingInfo?.expiresAt
+    || (freeInstantExpiresAtRef.current ? new Date(freeInstantExpiresAtRef.current).toISOString() : null));
 
   useEffect(() => {
     if (!hasJoined || !effectiveExpiresAt) return;
@@ -6125,22 +6173,34 @@ export function MeetingRoomPage() {
                   </div>
                 )}
 
-                {/* 2. In-Call Messages Panel */}
+                {/* 2. In-Call Messages Panel -- same tm-* bubble classes/layout as the Conversations
+                     tab's chat (sender on the right, receiver on the left), so a call started
+                     from a saved conversation looks identical in both places. */}
                 {activePanel === 'chat' && (
                   <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>
-                      {chatMessages.map((msg) => (
+                    <div className="tw-chat-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>
+                      {chatMessages.map((msg) => {
+                        // senderId alone can't tell "is this me" reliably -- it's a fresh, random
+                        // Jitsi session id every time you (re)join, so a message loaded from
+                        // saved conversation history (sent in an earlier session) would never
+                        // match the CURRENT session's id even if it's the same person. Falling
+                        // back to a name match catches that case; a live message from this same
+                        // session still matches on id as before.
+                        const isMine = msg.senderId === sessionIdRef.current
+                          || (msg.sender || '').trim().toLowerCase() === (displayName || 'You').trim().toLowerCase();
+
+                        return (
                         <div
                           key={msg.id}
                           style={{
                             display: 'flex',
                             flexDirection: 'column',
-                            alignItems: msg.senderId === sessionIdRef.current ? 'flex-end' : 'flex-start',
+                            alignItems: isMine ? 'flex-end' : 'flex-start',
                             gap: '3px',
                           }}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: msg.senderId === sessionIdRef.current ? 'row-reverse' : 'row' }}>
-                            <span style={{ fontSize: '12px', fontWeight: 600, color: msg.senderId === sessionIdRef.current ? '#A8DAB5' : '#8AB4F8' }}>{msg.sender}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: isMine ? 'row-reverse' : 'row' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: isMine ? '#A8DAB5' : '#8AB4F8' }}>{msg.sender}</span>
                             <span style={{ fontSize: '11px', color: '#9AA0A6' }}>{msg.time}</span>
                           </div>
                           <div
@@ -6148,11 +6208,11 @@ export function MeetingRoomPage() {
                               maxWidth: '82%',
                               display: 'flex',
                               flexDirection: 'column',
-                              alignItems: msg.senderId === sessionIdRef.current ? 'flex-end' : 'flex-start',
+                              alignItems: isMine ? 'flex-end' : 'flex-start',
                               gap: '6px',
                               padding: msg.imageUrl || msg.text ? '8px' : '0',
                               borderRadius: '12px',
-                              backgroundColor: msg.senderId === sessionIdRef.current ? '#075E54' : '#263238',
+                              backgroundColor: isMine ? '#075E54' : '#263238',
                               border: '1px solid rgba(255,255,255,0.1)',
                             }}
                           >
@@ -6185,7 +6245,8 @@ export function MeetingRoomPage() {
                             )}
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     {chatImageError && (
                       <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatImageError}</div>

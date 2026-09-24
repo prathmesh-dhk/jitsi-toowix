@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Video, Users, Shield, AlertTriangle, X } from 'lucide-react';
+import { Calendar, Video, Users, Shield, AlertTriangle, MessageSquare, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import type { INotification } from './NotificationBell';
+import { playChatMessageTone } from '../lib/notificationSounds';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const TOAST_DURATION_MS = 10000;
@@ -49,6 +50,8 @@ export function NotificationToasts() {
         const unseen = fresh.filter((n) => !seenIds.current.has(n.id));
         unseen.forEach((n) => seenIds.current.add(n.id));
         if (unseen.length > 0) {
+          // One calm tone per delivery batch keeps a busy conversation from becoming noisy.
+          playChatMessageTone();
           setToasts((prev) => [...unseen, ...prev].slice(0, 4));
           unseen.forEach((n) => {
             setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== n.id)), TOAST_DURATION_MS);
@@ -93,7 +96,7 @@ export function NotificationToasts() {
           }}
         >
           <div style={{ width: '30px', height: '30px', borderRadius: '8px', backgroundColor: 'rgba(79,70,229,0.2)', color: '#818CF8', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            {categoryIcon(n.category)}
+            {n.type === 'CHAT_MESSAGE' ? <MessageSquare size={16} /> : categoryIcon(n.category)}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#F9FAFB' }}>{n.title}</div>

@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase, pingDatabase } from './db/connection';
 import { getAvatarUploadRoot } from './uploads/avatarStorage';
 import { getChatImageUploadRoot } from './uploads/chatImageStorage';
+import { getChatAudioUploadRoot } from './uploads/chatAudioStorage';
 
 dotenv.config();
 
@@ -87,6 +88,7 @@ app.use('/api/contacts', contactRoutes);
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
 app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot()));
+app.use('/api/uploads/chat-audios', express.static(getChatAudioUploadRoot()));
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {

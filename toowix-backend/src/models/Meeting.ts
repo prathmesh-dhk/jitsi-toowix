@@ -70,8 +70,22 @@ export interface IMeeting {
     senderId?: string | null;
     text?: string | null;
     imageUrl?: string | null;
+    audioUrl?: string | null;
+    audioDuration?: number | null;
+    mentions?: string[];
     createdAt: Date;
   }>;
+  // One entry per person who has opened this conversation, so the sender's view can show a
+  // WhatsApp-style read receipt (blue double-check once the other side's lastReadAt is at or
+  // after the message's createdAt).
+  chatReadReceipts?: Array<{
+    viewerId: string;
+    viewerName: string;
+    lastReadAt: Date;
+  }>;
+  // Conversation ownership is deliberately separate from the meeting organizer. It lets an
+  // organizer leave the saved chat while keeping the meeting record and its audit trail intact.
+  conversationAdminEmail?: string | null;
   waitingQueue?: Array<{
     id: string;
     name: string;
@@ -208,10 +222,22 @@ const MeetingSchema = new Schema<IMeetingDocument>(
         senderId: { type: String, default: null },
         text: { type: String, default: null },
         imageUrl: { type: String, default: null },
+        audioUrl: { type: String, default: null },
+        audioDuration: { type: Number, default: null },
+        mentions: { type: [String], default: [] },
         createdAt: { type: Date, default: Date.now },
       }],
       default: [],
     },
+    chatReadReceipts: {
+      type: [{
+        viewerId: { type: String, required: true },
+        viewerName: { type: String, required: true },
+        lastReadAt: { type: Date, default: Date.now },
+      }],
+      default: [],
+    },
+    conversationAdminEmail: { type: String, default: null, trim: true, lowercase: true },
     waitingQueue: {
       type: [{
         id: { type: String, required: true },

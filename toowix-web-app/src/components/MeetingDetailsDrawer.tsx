@@ -151,7 +151,7 @@ export function MeetingDetailsDrawer({
     setChatLoading(true);
     setChatError(null);
     fetchChatHistory(activeMeeting.roomSlug)
-      .then((data) => { if (!cancelled) setChatMessages(data); })
+      .then((data) => { if (!cancelled) setChatMessages(data.messages); })
       .catch((err) => { if (!cancelled) setChatError(err instanceof Error ? err.message : 'Failed to load this conversation'); })
       .finally(() => { if (!cancelled) setChatLoading(false); });
     return () => { cancelled = true; };

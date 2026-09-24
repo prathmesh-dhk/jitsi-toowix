@@ -491,21 +491,33 @@ export const listConversationsHandler = async (req: AuthenticatedRequest, res: R
 
     const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
     const meetingDocuments = await Meeting.find({ ...filter, 'chatMessages.0': { $exists: true } })
-      .select('name roomSlug type scheduledAt actualStartedAt actualEndedAt endedAt createdAt chatMessages participants sharedFiles cancelledAt')
+      .select('name roomSlug type scheduledAt actualStartedAt actualEndedAt endedAt createdAt chatMessages chatReadReceipts participants sharedFiles cancelledAt')
       .sort({ createdAt: -1 })
       .limit(100);
 
+    const viewerId = String(user._id);
     const conversations = meetingDocuments.map((meeting) => {
       const messages = meeting.chatMessages || [];
       const last = messages[messages.length - 1];
+      // "Unread" is relative to THIS viewer's own last-read time on this conversation -- not the
+      // total message count, which was being shown as a permanent badge before and never went
+      // away even after opening the conversation.
+      const myReceipt = (meeting.chatReadReceipts || []).find((r) => r.viewerId === viewerId);
+      const myLastReadAt = myReceipt ? new Date(myReceipt.lastReadAt).getTime() : 0;
+      const myName = (user.fullName || user.email || '').trim().toLowerCase();
+      const unreadCount = messages.filter((m) =>
+        new Date(m.createdAt).getTime() > myLastReadAt
+        && (m.senderName || '').trim().toLowerCase() !== myName
+      ).length;
       return {
         id: String(meeting._id),
         name: meeting.name,
         roomSlug: meeting.roomSlug,
         type: meeting.type,
         messageCount: messages.length,
+        unreadCount,
         lastMessageAt: last ? last.createdAt : meeting.createdAt,
-        participantCount: meeting.participants?.length || 0,
+        participantCount: countUniqueParticipants(meeting.participants),
         status: meeting.cancelledAt
           ? 'Ended'
           : meeting.actualStartedAt && !meeting.actualEndedAt && !meeting.endedAt
@@ -523,6 +535,77 @@ export const listConversationsHandler = async (req: AuthenticatedRequest, res: R
     console.error('[Meetings] Error listing conversations:', error.message);
     res.status(500).json({ error: 'Failed to fetch conversations' });
   }
+};
+
+/**
+ * POST /api/meetings/:id/conversation/leave
+ * Transfers chat administration to an existing participant before the current administrator
+ * removes this conversation from their own list. This never changes the meeting organizer.
+ */
+export const leaveConversationHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const user = await resolveUser(req);
+    if (!user) {
+      res.status(404).json({ error: 'User profile not found' });
+      return;
+    }
+
+    const nextAdminEmail = typeof req.body?.nextAdminEmail === 'string'
+      ? req.body.nextAdminEmail.trim().toLowerCase()
+      : '';
+    if (!nextAdminEmail) {
+      res.status(400).json({ error: 'Choose the next conversation admin' });
+      return;
+    }
+
+    const meeting = await Meeting.findById(req.params.id).populate('createdBy', 'email');
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting not found' });
+      return;
+    }
+    const company = meeting.companyId ? await Company.findById(meeting.companyId) : null;
+    if (!mayAttend(meeting, user, company)) {
+      res.status(403).json({ error: 'You are not authorized to manage this conversation' });
+      return;
+    }
+
+    const creatorEmail = String((meeting.createdBy as any)?.email || '').trim().toLowerCase();
+    const currentAdminEmail = String(meeting.conversationAdminEmail || creatorEmail).trim().toLowerCase();
+    if (currentAdminEmail !== String(user.email || '').trim().toLowerCase()) {
+      res.status(403).json({ error: 'Only the conversation admin can hand over this conversation' });
+      return;
+    }
+
+    const participantEmails = new Set((meeting.participants || [])
+      .map((participant) => String(participant.email || '').trim().toLowerCase())
+      .filter(Boolean));
+    for (const invitee of meeting.invitees || []) participantEmails.add(String(invitee).trim().toLowerCase());
+    if (!participantEmails.has(nextAdminEmail)) {
+      res.status(400).json({ error: 'The next admin must be a conversation participant' });
+      return;
+    }
+
+    meeting.conversationAdminEmail = nextAdminEmail;
+    await meeting.save();
+    res.json({ conversationAdminEmail: nextAdminEmail });
+  } catch (error: any) {
+    console.error('[Meetings] Error leaving conversation:', error.message);
+    res.status(500).json({ error: 'Failed to hand over this conversation' });
+  }
+};
+
+// Each rejoin (e.g. reopening the embedded call from Conversations) pushes a fresh entry onto
+// participants -- one per join *session*, not one per person -- so a raw array length massively
+// overcounts anyone who joined more than once. Count distinct people instead, by email (the
+// stable identity for a signed-in participant) falling back to name for a guest with no email.
+const countUniqueParticipants = (participants: Array<{ name?: string; email?: string }> | undefined): number => {
+  if (!participants || participants.length === 0) return 0;
+  const seen = new Set<string>();
+  for (const p of participants) {
+    const key = (p.email || p.name || '').trim().toLowerCase();
+    if (key) seen.add(key);
+  }
+  return seen.size;
 };
 
 const isAdminRole = (role?: string) => role === 'COMPANY_ADMIN' || role === 'SUPER_ADMIN';

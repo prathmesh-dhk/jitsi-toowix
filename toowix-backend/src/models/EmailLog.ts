@@ -10,7 +10,8 @@ export type EmailTemplateName =
   | 'E7_PASSWORD_RESET'
   | 'E8_INVITE_MEMBER'
   | 'E9_MEETING_INVITE'
-  | 'E10_2FA_ENABLED';
+  | 'E10_2FA_ENABLED'
+  | 'E11_CONVERSATION_INVITE';
 
 export type EmailDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
 
@@ -58,6 +59,7 @@ const EmailLogSchema = new Schema<IEmailLogDocument>(
         'E8_INVITE_MEMBER',
         'E9_MEETING_INVITE',
         'E10_2FA_ENABLED',
+        'E11_CONVERSATION_INVITE',
       ],
       required: [true, 'Email template name is required'],
       index: true,

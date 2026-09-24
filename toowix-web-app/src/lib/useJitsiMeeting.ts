@@ -60,6 +60,32 @@ export interface IRemoteParticipant {
   audioStream: MediaStream | null;
 }
 
+/**
+ * The conference API exposes the signed JWT user object on remote presence, but does not expose
+ * it for the local participant. Reading the already-issued local token gives us a stable identity
+ * to distinguish our own stale connection from a real attendee with the same display name.
+ * This is only a client-side roster guard; authorization remains entirely server-side.
+ */
+function getJwtUserId(jwt: string | undefined): string | null {
+  if (!jwt) {
+    return null;
+  }
+
+  try {
+    const payload = jwt.split('.')[1];
+    if (!payload) {
+      return null;
+    }
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const json = decodeURIComponent(atob(base64).split('').map((char) => `%${(`00${char.charCodeAt(0).toString(16)}`).slice(-2)}`).join(''));
+    const userId = JSON.parse(json)?.context?.user?.id;
+
+    return typeof userId === 'string' && userId.trim() ? userId : null;
+  } catch {
+    return null;
+  }
+}
+
 interface IUseJitsiMeetingOptions {
   jitsiDomain: string;
   roomName: string;
@@ -119,6 +145,7 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
+const HIGH_BANDWIDTH_VIDEO_KBPS = 2500;
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -463,6 +490,8 @@ export function useJitsiMeeting({
   // participant id otherwise, or null before anyone has spoken. Drives speaker-view auto-follow.
   const [ dominantSpeakerId, setDominantSpeakerId ] = useState<string | null>(null);
   const [ localParticipantId, setLocalParticipantId ] = useState<string | null>(null);
+  const localConferenceIdRef = useRef<string | null>(null);
+  const localIdentityUserIdRef = useRef<string | null>(getJwtUserId(jwt));
   // Real, JVB/Jibri-confirmed recording state -- driven by RECORDER_STATE_CHANGED, which fires
   // for EVERY participant (it rides XMPP presence broadcast to the whole room, not just the
   // person who clicked start), unlike a locally-optimistic flag that only the initiator would
@@ -598,6 +627,7 @@ export function useJitsiMeeting({
   onForceMutedRef.current = onForceMuted;
   existingStreamRef.current = existingStream;
   deviceIdsRef.current = { audioDeviceId, videoDeviceId };
+  localIdentityUserIdRef.current = getJwtUserId(jwt);
 
   // Runs `fn` only after every previously-queued room operation has settled (see
   // trackOperationQueueRef above for why). `.then(fn, fn)` -- not `.then(fn).catch(...)` -- so a
@@ -630,6 +660,21 @@ export function useJitsiMeeting({
     }));
   }, []);
 
+  // Keep React's microphone state tied to the real Jitsi track. This binding is shared by the
+  // initial track and any replacement track created after the browser/OS ends a microphone.
+  // A moderator mute is still authoritative: this only observes and reports it, never undoes it.
+  const bindLocalAudioTrackState = useCallback((audioTrack: any, JitsiMeetJS: any) => {
+    audioTrack.addEventListener(JitsiMeetJS.events.track.TRACK_MUTE_CHANGED, () => {
+      const muted = audioTrack.isMuted();
+
+      setLocalAudioMuted(muted);
+      if (muted && !selfInitiatedMuteRef.current) {
+        onForceMutedRef.current?.();
+      }
+      selfInitiatedMuteRef.current = false;
+    });
+  }, []);
+
   // Applies only public lib-jitsi-meet receiver/sender controls. This does not acquire a new
   // camera/microphone stream and does not manipulate individual video frames.
   const applyMediaQualityPolicy = useCallback(async (
@@ -643,7 +688,10 @@ export function useJitsiMeeting({
     }
     const participantCount = room.getParticipants?.().length || 0;
     const screenShareActive = Boolean(localDesktopTrackRef.current) || Object.keys(remoteDesktopTracksRef.current).length > 0;
-    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount, screenShareActive);
+    const highBandwidth = requestedMode === 'auto'
+      && requestedState === 'GOOD'
+      && (networkMetricsRef.current.availableOutgoingBitrateKbps || 0) >= HIGH_BANDWIDTH_VIDEO_KBPS;
+    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount, screenShareActive, highBandwidth);
     const manualCap = manualMaxHeightRef.current;
 
     if (manualCap !== null) {
@@ -653,7 +701,7 @@ export function useJitsiMeeting({
       policy.receiveMaxHeight = Math.min(policy.receiveMaxHeight, manualCap);
       policy.sendMaxHeight = Math.min(policy.sendMaxHeight, manualCap);
     }
-    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare', manualCap ?? 'auto' ].join(':');
+    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare', highBandwidth ? 'high-bandwidth' : 'normal-bandwidth', manualCap ?? 'auto' ].join(':');
 
     if (lastAppliedQualityKeyRef.current === key) {
       return;
@@ -776,6 +824,11 @@ export function useJitsiMeeting({
       if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
         console.info('[Toowix network] state changed', { state: next, metrics });
       }
+    } else {
+      // State may remain GOOD while available bandwidth rises or falls. Re-evaluate the
+      // constraint key so a healthy, high-bandwidth call receives 1080p and immediately steps
+      // back to 720p before a sustained bitrate reduction makes video blurry.
+      await applyMediaQualityPolicy(next);
     }
   }, [ applyMediaQualityPolicy ]);
 
@@ -985,6 +1038,11 @@ export function useJitsiMeeting({
     let myAudioTrack: any = null;
     let myVideoTrack: any = null;
     let myAddTrackInterval: any = null;
+    // A connection-established notification must produce exactly one JitsiConference. Without
+    // this per-connection guard, a duplicate connection event can create a second local session;
+    // the first session then appears in the roster as a brief extra participant until the server
+    // cleans it up.
+    let roomInitialized = false;
 
     (async () => {
       try {
@@ -1016,25 +1074,46 @@ export function useJitsiMeeting({
         connection.addEventListener(
           JitsiMeetJS.events.connection.CONNECTION_ESTABLISHED,
           () => {
-            if (isStale()) {
+            if (isStale() || roomInitialized) {
               try {
-                connection.disconnect();
+                if (isStale()) {
+                  connection.disconnect();
+                }
               } catch {
                 // best-effort
               }
 
               return;
             }
+            roomInitialized = true;
             connectionRef.current = connection;
             setConnected(true);
 
             const room = connection.initJitsiConference(roomName.toLowerCase(), {
               ...config,
+              // Keeping every participant on JVB avoids the direct-P2P <-> bridge handover that
+              // happens exactly when a second person joins. That handover was being detected as
+              // a false limited connection and could briefly interrupt media. This deployment
+              // has server capacity, so stable bridge routing is the better call-quality choice.
+              p2p: { ...(config.p2p || {}), enabled: false },
               openBridgeChannel: true
             });
 
             myRoom = room;
             roomRef.current = room;
+
+            const isLocalParticipantEvent = (participantId: string | undefined, participant?: any) => {
+              if (!participantId) {
+                return true;
+              }
+              if (participantId === room.myUserId() || participantId === localConferenceIdRef.current) {
+                return true;
+              }
+
+              const participantUserId = participant?.getIdentity?.()?.user?.id;
+
+              return Boolean(participantUserId && participantUserId === localIdentityUserIdRef.current);
+            };
 
             room.on(JitsiMeetJS.events.conference.TRACK_ADDED, (track: any) => {
               if (track.isLocal()) {
@@ -1042,6 +1121,10 @@ export function useJitsiMeeting({
               }
               const participantId = track.getParticipantId();
               const trackParticipant = room.getParticipantById(participantId);
+
+              if (isLocalParticipantEvent(participantId, trackParticipant)) {
+                return;
+              }
 
               // Same hidden-Jibri guard as USER_JOINED -- a recorder track slipping through here
               // would still create a fake participant tile via patchParticipant's upsert.
@@ -1110,6 +1193,11 @@ export function useJitsiMeeting({
                 return;
               }
               const participantId = track.getParticipantId();
+              const trackParticipant = room.getParticipantById(participantId);
+
+              if (isLocalParticipantEvent(participantId, trackParticipant)) {
+                return;
+              }
               const type = track.getType();
               const videoType = typeof track.getVideoType === 'function' ? track.getVideoType() : 'camera';
 
@@ -1135,6 +1223,12 @@ export function useJitsiMeeting({
               // getBotType(), so skip it here or it shows up as a fake extra participant
               // the moment recording starts.
               if (participant?.isHidden?.() || participant?.getBotType?.()) {
+                return;
+              }
+              // A reconnecting browser can receive presence for its prior Jitsi session before
+              // the server times it out. It is still the same signed-in person, not somebody who
+              // joined the meeting, so never let it create a tile/count/toast.
+              if (isLocalParticipantEvent(id, participant)) {
                 return;
               }
 
@@ -1207,7 +1301,7 @@ export function useJitsiMeeting({
               }
               const moderator = role === 'moderator';
 
-              if (id === room.myUserId()) {
+              if (id === room.myUserId() || id === localConferenceIdRef.current) {
                 setIsModerator(moderator);
 
                 return;
@@ -1249,7 +1343,21 @@ export function useJitsiMeeting({
               if (isStale()) {
                 return;
               }
-              setLocalParticipantId(room.myUserId());
+              const ownConferenceId = room.myUserId();
+              localConferenceIdRef.current = ownConferenceId;
+              setLocalParticipantId(ownConferenceId);
+              // Defensive cleanup for a self-presence event that arrived before
+              // CONFERENCE_JOINED supplied the local Jitsi id.
+              setRemoteParticipants((prev) => {
+                if (!ownConferenceId || !(ownConferenceId in prev)) {
+                  return prev;
+                }
+                const next = { ...prev };
+
+                delete next[ownConferenceId];
+
+                return next;
+              });
               setIsModerator(Boolean(room.isModerator?.()));
               setJoined(true);
             });
@@ -1438,24 +1546,7 @@ export function useJitsiMeeting({
             audioTrack.mute();
             setLocalAudioMuted(true);
           }
-          // The ONLY place localAudioMuted used to update was this hook's own toggleAudio() --
-          // purely optimistic local state, never synced back from the track's real mute status.
-          // That's correct for a self-click, but a moderator's muteParticipant() call mutes this
-          // track from OUTSIDE this app entirely (lib-jitsi-meet applies it internally on
-          // receiving the server-relayed request) -- the actual audio goes silent immediately,
-          // but nothing ever told React, so the toolbar mic button kept showing "unmuted"
-          // indefinitely. Listening to the track's own event is the single source of truth
-          // regardless of who/what caused the change; selfInitiatedMuteRef (set in toggleAudio)
-          // is only used to decide whether to also fire onForceMuted for a toast.
-          audioTrack.addEventListener(JitsiMeetJS.events.track.TRACK_MUTE_CHANGED, () => {
-            const muted = audioTrack.isMuted();
-
-            setLocalAudioMuted(muted);
-            if (muted && !selfInitiatedMuteRef.current) {
-              onForceMutedRef.current?.();
-            }
-            selfInitiatedMuteRef.current = false;
-          });
+          bindLocalAudioTrackState(audioTrack, JitsiMeetJS);
         }
         if (videoTrack) {
           myVideoTrack = videoTrack;
@@ -1541,6 +1632,7 @@ export function useJitsiMeeting({
       }
       if (roomRef.current === myRoom) {
         roomRef.current = null;
+        localConferenceIdRef.current = null;
       }
       if (connectionRef.current === myConnection) {
         connectionRef.current = null;
@@ -1599,7 +1691,7 @@ export function useJitsiMeeting({
       shareAudioTrackRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
+  }, [ bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
 
   // switchDevice is declared further below (after toggleAudio in source order) but toggleAudio
   // needs to call it for stale-mic recovery -- routed through a ref instead of a direct
@@ -2013,6 +2105,7 @@ export function useJitsiMeeting({
       if (isAudio) {
         localAudioTrackRef.current = newTrack;
         attachLocalSpeaking(newTrack);
+        bindLocalAudioTrackState(newTrack, JitsiMeetJS);
         void applyNoiseSuppressionToTrack(newTrack);
       } else {
         localVideoTrackRef.current = newTrack;
@@ -2025,8 +2118,36 @@ export function useJitsiMeeting({
     } finally {
       switchDeviceInFlightRef.current[kind] = false;
     }
-  }, []);
+  }, [ bindLocalAudioTrackState ]);
   switchDeviceRef.current = switchDevice;
+
+  // Some browsers keep a conference connected after the operating system has ended the physical
+  // microphone track (Bluetooth route changes, audio-focus loss, long mobile calls). No Jitsi
+  // mute command is involved, so the old event-only logic could leave the person visibly
+  // unmuted but silent forever. Poll only for an actually ended native track and replace it;
+  // never touch an intentionally muted Jitsi track, including a moderator mute.
+  useEffect(() => {
+    const recoverEndedMicrophone = () => {
+      const track = localAudioTrackRef.current;
+
+      if (!joined || !track || track.isMuted?.() || switchDeviceInFlightRef.current.audioInput) {
+        return;
+      }
+      const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
+
+      if (nativeTrack?.readyState !== 'ended') {
+        return;
+      }
+      void switchDevice('audioInput', deviceIdsRef.current.audioDeviceId || '').catch(() => {
+        // The normal mic button remains available if the OS is still holding the device.
+      });
+    };
+
+    recoverEndedMicrophone();
+    const timer = window.setInterval(recoverEndedMicrophone, 5000);
+
+    return () => window.clearInterval(timer);
+  }, [ joined, switchDevice ]);
 
   // Mobile browsers can silently take the microphone away when the tab is backgrounded --
   // switching apps, or another app briefly grabbing audio focus (a phone call, another app

@@ -98,6 +98,7 @@ const templateFileMap: Record<string, string> = {
   E8_INVITE_MEMBER: 'e8_invite_member.html',
   E9_MEETING_INVITE: 'e9_meeting_invite.html',
   E10_2FA_ENABLED: 'e10_2fa_enabled.html',
+  E11_CONVERSATION_INVITE: 'e11_conversation_invite.html',
 };
 
 const templateCache: Map<string, string> = new Map();
