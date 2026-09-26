@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getCameraCaptureIdeal } from './networkQuality';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
   if (!(error instanceof Error)) {
@@ -243,6 +244,7 @@ export function useMediaPreview(
 
     const startVideo = async () => {
       try {
+        const captureIdeal = getCameraCaptureIdeal();
         let media: MediaStream;
         const constraints: MediaTrackConstraints = videoId
           ? { deviceId: { ideal: videoId } }
@@ -250,11 +252,11 @@ export function useMediaPreview(
 
         try {
           media = await navigator.mediaDevices.getUserMedia({
-            video: Object.keys(constraints).length ? { ...constraints, width: { ideal: 1280 }, height: { ideal: 720 } } : true,
+            video: { ...constraints, width: { ideal: captureIdeal.width }, height: { ideal: captureIdeal.height }, frameRate: { ideal: captureIdeal.frameRate, max: captureIdeal.frameRate } },
           });
         } catch (err: any) {
           // If ideal device failed, fallback to default video
-          if (videoId && err?.name === 'OverconstrainedError') {
+          if (err?.name === 'OverconstrainedError') {
             media = await navigator.mediaDevices.getUserMedia({ video: true });
           } else {
             throw err;

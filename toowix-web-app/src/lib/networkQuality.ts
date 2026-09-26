@@ -122,6 +122,36 @@ export function getMediaQualityPolicy(
   };
 }
 
+const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
+// so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
+// SENT is still capped by what the other participants ask the bridge for (see
+// getReceiveMaxHeightForCallSize) and by the bandwidth estimate. Phones stay at 1080p to keep the
+// encoder, battery and heat in check.
+export function getCameraCaptureIdeal(): { frameRate: number; height: number; width: number } {
+  return isMobileBrowser()
+    ? { frameRate: 30, height: 1080, width: 1920 }
+    : { frameRate: 30, height: 2160, width: 3840 };
+}
+
+// Highest video height this client asks the bridge for, by call size. A one-to-one call can use
+// the whole (large) tile so it may go up to 4K when the sender's camera and the network allow it;
+// as the grid fills the tiles shrink so the request drops. Phones never ask for more than 720p
+// (small screen). The bridge still decides per stream from the real bandwidth estimate.
+export function getReceiveMaxHeightForCallSize(totalParticipants: number, screenShareActive = false): number {
+  const mobileCap = isMobileBrowser() ? 720 : Infinity;
+  let height: number;
+
+  if (screenShareActive) height = 1080;
+  else if (totalParticipants <= 2) height = 2160;
+  else if (totalParticipants <= 4) height = 1080;
+  else if (totalParticipants <= 8) height = 720;
+  else height = 360;
+
+  return Math.min(height, mobileCap);
+}
+
 export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): string {
   if (mode === 'audio-only') return 'Audio priority mode';
   if (state === 'POOR') return 'Limited connection';

@@ -12,7 +12,9 @@ import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/c
 import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
 import {
   classifyNetwork,
+  getCameraCaptureIdeal,
   getMediaQualityPolicy,
+  getReceiveMaxHeightForCallSize,
   type INetworkMetrics,
   type LowDataMode,
   NETWORK_RECOVERY_STABLE_MS,
@@ -1098,6 +1100,18 @@ export function useJitsiMeeting({
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;
+        const capture = getCameraCaptureIdeal();
+
+        // Tracks lib-jitsi-meet acquires itself (device switch, camera retry) must request the
+        // same high ideal as the prejoin preview, not the server config's 720p cap.
+        config.resolution = capture.height;
+        config.constraints = {
+          video: {
+            frameRate: { ideal: capture.frameRate, max: capture.frameRate },
+            height: { ideal: capture.height, max: capture.height, min: 180 },
+            width: { ideal: capture.width, max: capture.width, min: 320 }
+          }
+        };
 
         JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.ERROR);
         JitsiMeetJS.init({ disableAudioLevels: false });
@@ -1797,11 +1811,9 @@ export function useJitsiMeeting({
     const screenShareActive = isScreenSharing || Object.keys(remoteDesktopTracksRef.current).length > 0;
     const policy = getMediaQualityPolicy('auto', 'GOOD', remoteParticipantCount + 1, screenShareActive);
 
-    // Tiles get small as the grid fills up, so ask for less resolution per stream once more than
-    // four people are in the call (screen shares keep their full-size cap).
-    const height = !screenShareActive && remoteParticipantCount + 1 > 4
-      ? Math.min(policy.receiveMaxHeight, 360)
-      : policy.receiveMaxHeight;
+    // Ask for as much as the call size justifies (up to 4K one-to-one, less as tiles shrink);
+    // the bridge still picks what the sender's camera and the bandwidth estimate can deliver.
+    const height = getReceiveMaxHeightForCallSize(remoteParticipantCount + 1, screenShareActive);
 
     try {
       // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the

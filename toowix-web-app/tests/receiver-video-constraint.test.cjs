@@ -2,10 +2,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'useJitsiMeeting.ts'), 'utf8');
+const hook = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'useJitsiMeeting.ts'), 'utf8');
+const preview = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'useMediaPreview.ts'), 'utf8');
+const quality = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'networkQuality.ts'), 'utf8');
 
-assert.match(source, /lowDataMode !== 'auto' \|\| manualMaxHeightRef\.current !== null/, 'baseline only in auto mode without a manual cap');
-assert.match(source, /room\.setReceiverConstraints\(\{ lastN: policy\.lastN, defaultConstraints: \{ maxHeight: height \} \}\)/, 'defaultConstraints.maxHeight must reach the bridge');
-assert.match(source, /getMediaQualityPolicy\('auto', 'GOOD', remoteParticipantCount \+ 1/, 'baseline uses the auto/GOOD policy');
+assert.match(hook, /lowDataMode !== 'auto' \|\| manualMaxHeightRef\.current !== null/, 'baseline only in auto mode without a manual cap');
+assert.match(hook, /room\.setReceiverConstraints\(\{ lastN: policy\.lastN, defaultConstraints: \{ maxHeight: height \} \}\)/, 'defaultConstraints.maxHeight must reach the bridge');
+assert.match(hook, /getReceiveMaxHeightForCallSize\(remoteParticipantCount \+ 1, screenShareActive\)/);
+assert.match(preview, /height: \{ ideal: captureIdeal\.height \}/, 'prejoin camera must request the highest ideal, not the browser default');
+assert.match(quality, /height: 2160, width: 3840/, 'desktop camera ideal is 4K (clamped by the camera itself)');
+assert.match(quality, /totalParticipants <= 2\) height = 2160/, 'one-to-one may go up to 4K');
+assert.match(quality, /totalParticipants <= 4\) height = 1080/, 'small calls up to 1080p');
 
-console.log('PASS normal mode asks the bridge for a real max video height (not the 180p default)');
+console.log('PASS video quality can scale from 720p up to 1080p/4K with the camera and call size');
