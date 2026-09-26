@@ -1779,6 +1779,32 @@ export function useJitsiMeeting({
   // switchDevice is declared further below (after toggleAudio in source order) but toggleAudio
   // needs to call it for stale-mic recovery -- routed through a ref instead of a direct
   // reference so this useCallback doesn't have to sit below switchDevice's declaration.
+  // Tell the bridge how much video we actually want to receive. Without any receiver constraint
+  // JVB falls back to its default of 180p per stream -- which is exactly the 240x180 video that
+  // never sharpened (and, because senders only send what receivers ask for, kept every uplink
+  // and the bandwidth estimator stuck near 250 kbps, so the call also looked "limited").
+  // The stock Jitsi UI sends these constraints from its tile layout; this app never did once the
+  // polling controller was removed. Normal (auto) mode only: low-data / audio-only / a manual
+  // Performance choice each set their own constraints and are left alone.
+  const remoteParticipantCount = Object.keys(remoteParticipants).length;
+
+  useEffect(() => {
+    const room = roomRef.current;
+
+    if (!joined || !room || lowDataMode !== 'auto' || manualMaxHeightRef.current !== null) {
+      return;
+    }
+    const screenShareActive = isScreenSharing || Object.keys(remoteDesktopTracksRef.current).length > 0;
+    const policy = getMediaQualityPolicy('auto', 'GOOD', remoteParticipantCount + 1, screenShareActive);
+
+    try {
+      room.setLastN?.(policy.lastN);
+      room.setReceiverVideoConstraint?.(policy.receiveMaxHeight);
+    } catch {
+      // A bridge that rejects a hint just keeps Jitsi's defaults.
+    }
+  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing ]);
+
   const switchDeviceRef = useRef<typeof switchDevice | null>(null);
 
   const toggleAudio = useCallback(async () => {
