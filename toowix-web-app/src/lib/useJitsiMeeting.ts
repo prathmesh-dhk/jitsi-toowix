@@ -148,6 +148,17 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
+
+// Every browser sends its camera as three simulcast layers, advertised to the room as the SSRC
+// groups FID(main) -> SIM -> FID -> FID. When a THIRD participant joins, Jicofo hands them all
+// existing participants' sources in the initial offer, and this lib-jitsi-meet build pairs each
+// SSRC with only the first group that contains it -- so with SIM sitting between the FID groups
+// it emits the same SSRC in several m-lines and Chrome rejects the whole description
+// ("Duplicate a=msid lines detected" -> "Conference failed: conference.offerAnswerFailed").
+// Reproduced with three plain Chrome clients against production: fails with simulcast, works
+// with a single layer (only an FID group is advertised). One layer is also a third of the
+// encoder CPU/uplink, which is what small Toowix calls and phones want anyway.
+const SEND_SINGLE_VIDEO_LAYER = true;
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -1093,6 +1104,8 @@ export function useJitsiMeeting({
 
         const connection = new JitsiMeetJS.JitsiConnection(null, jwt, {
           ...config,
+          // See SEND_SINGLE_VIDEO_LAYER below.
+          disableSimulcast: SEND_SINGLE_VIDEO_LAYER,
           hosts: config.hosts,
           serviceUrl: config.websocket || config.bosh
         });
@@ -1119,6 +1132,7 @@ export function useJitsiMeeting({
 
             const room = connection.initJitsiConference(roomName.toLowerCase(), {
               ...config,
+              disableSimulcast: SEND_SINGLE_VIDEO_LAYER,
               // Keep every call on JVB. The P2P-to-JVB renegotiation when a third participant
               // joined produced offer/answer failures in production, so a stable media route is
               // preferred over the small direct-route saving for two-person calls.
