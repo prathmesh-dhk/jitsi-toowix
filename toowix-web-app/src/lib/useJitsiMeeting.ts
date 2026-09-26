@@ -1797,9 +1797,22 @@ export function useJitsiMeeting({
     const screenShareActive = isScreenSharing || Object.keys(remoteDesktopTracksRef.current).length > 0;
     const policy = getMediaQualityPolicy('auto', 'GOOD', remoteParticipantCount + 1, screenShareActive);
 
+    // Tiles get small as the grid fills up, so ask for less resolution per stream once more than
+    // four people are in the call (screen shares keep their full-size cap).
+    const height = !screenShareActive && remoteParticipantCount + 1 > 4
+      ? Math.min(policy.receiveMaxHeight, 360)
+      : policy.receiveMaxHeight;
+
     try {
-      room.setLastN?.(policy.lastN);
-      room.setReceiverVideoConstraint?.(policy.receiveMaxHeight);
+      // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the
+      // ReceiverVideoConstraints message it produces carries only lastN, no maxHeight (seen on
+      // the bridge channel), so JVB kept its 180p default. defaultConstraints is what carries it.
+      if (typeof room.setReceiverConstraints === 'function') {
+        room.setReceiverConstraints({ lastN: policy.lastN, defaultConstraints: { maxHeight: height } });
+      } else {
+        room.setLastN?.(policy.lastN);
+        room.setReceiverVideoConstraint?.(height);
+      }
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
