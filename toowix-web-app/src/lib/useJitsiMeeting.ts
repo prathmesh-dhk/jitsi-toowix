@@ -1110,10 +1110,10 @@ export function useJitsiMeeting({
 
             const room = connection.initJitsiConference(roomName.toLowerCase(), {
               ...config,
-              // Jitsi manages this transport transition natively: two participants can use a
-              // direct P2P WebRTC connection and it immediately returns to JVB when a third
-              // participant joins. Do not implement a second participant-count controller here.
-              p2p: { ...(config.p2p || {}), enabled: true },
+              // Keep every call on JVB. The P2P-to-JVB renegotiation when a third participant
+              // joined produced offer/answer failures in production, so a stable media route is
+              // preferred over the small direct-route saving for two-person calls.
+              p2p: { ...(config.p2p || {}), enabled: false },
               openBridgeChannel: true
             });
 
