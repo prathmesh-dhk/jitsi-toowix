@@ -32,6 +32,11 @@ test('still detects a verified low positive bandwidth estimate', () => {
   assert.equal(exportsObject.classifyNetwork(healthy({ availableOutgoingBitrateKbps: 149 })), 'POOR');
 });
 
+test('a tiny bandwidth estimate is ignored while no video is being sent (camera off)', () => {
+  assert.equal(exportsObject.classifyNetwork(healthy({ availableOutgoingBitrateKbps: 60, videoBitrateKbps: 0 })), 'GOOD');
+  assert.equal(exportsObject.classifyNetwork(healthy({ availableOutgoingBitrateKbps: 60, videoBitrateKbps: null })), 'GOOD');
+});
+
 test('still detects real loss, latency, and connection failures', () => {
   assert.equal(exportsObject.classifyNetwork(healthy({ packetLossPercent: 6 })), 'POOR');
   assert.equal(exportsObject.classifyNetwork(healthy({ rttMs: 301 })), 'POOR');

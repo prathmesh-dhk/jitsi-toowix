@@ -12,6 +12,7 @@ import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/c
 import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
 import {
   classifyNetwork,
+  getAudioMaxBitrateBps,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
   type INetworkMetrics,
@@ -1798,24 +1799,49 @@ export function useJitsiMeeting({
     const screenShareActive = isScreenSharing || Object.keys(remoteDesktopTracksRef.current).length > 0;
     const policy = getMediaQualityPolicy('auto', 'GOOD', remoteParticipantCount + 1, screenShareActive);
 
-    // Ask for as much as the call size justifies (up to 4K one-to-one, less as tiles shrink);
-    // the bridge still picks what the sender's camera and the bandwidth estimate can deliver.
-    const height = getReceiveMaxHeightForCallSize(remoteParticipantCount + 1, screenShareActive);
+    // Ask for as much as the call size justifies (up to 4K one-to-one, less as tiles shrink) and
+    // step it down / back up as the measured network state changes, so quality follows the
+    // network in both directions. The bridge still picks what the bandwidth estimate can carry.
+    const base = getReceiveMaxHeightForCallSize(remoteParticipantCount + 1, screenShareActive);
+    const height = networkState === 'POOR' ? Math.min(base, 180)
+      : networkState === 'DEGRADED' || networkState === 'RECOVERING' ? Math.min(base, 360)
+        : base;
+    const lastN = networkState === 'POOR' ? Math.min(policy.lastN, 2) : policy.lastN;
 
     try {
       // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the
       // ReceiverVideoConstraints message it produces carries only lastN, no maxHeight (seen on
       // the bridge channel), so JVB kept its 180p default. defaultConstraints is what carries it.
       if (typeof room.setReceiverConstraints === 'function') {
-        room.setReceiverConstraints({ lastN: policy.lastN, defaultConstraints: { maxHeight: height } });
+        room.setReceiverConstraints({ lastN, defaultConstraints: { maxHeight: height } });
       } else {
-        room.setLastN?.(policy.lastN);
+        room.setLastN?.(lastN);
         room.setReceiverVideoConstraint?.(height);
       }
+      // Our own uplink follows the same state: cap what we send when the network is weak and lift
+      // the cap again (to the call-size ceiling) once it has recovered.
+      void Promise.resolve(room.setSenderVideoConstraint?.(networkState === 'GOOD' ? Math.max(base, 720) : height)).catch(() => undefined);
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
-  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing ]);
+
+    // Voice bitrate follows the network too.
+    const audioBitrate = getAudioMaxBitrateBps(networkState);
+    const peerConnection = room.getActivePeerConnection?.()?.peerconnection;
+
+    peerConnection?.getSenders?.().forEach((sender: RTCRtpSender) => {
+      if (sender.track?.kind !== 'audio') {
+        return;
+      }
+      const parameters = sender.getParameters();
+
+      if (!parameters.encodings?.length) {
+        return;
+      }
+      parameters.encodings[0].maxBitrate = audioBitrate;
+      void sender.setParameters(parameters).catch(() => undefined);
+    });
+  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, networkState ]);
 
   const switchDeviceRef = useRef<typeof switchDevice | null>(null);
 

@@ -24,8 +24,8 @@ export interface IMediaQualityPolicy {
 // Jitsi/WebRTC already runs transport congestion control continuously. These samples are only
 // lightweight UI telemetry, so collecting them every five seconds avoids a second high-frequency
 // controller competing for browser time during a call.
-export const NETWORK_STATS_INTERVAL_MS = 5000;
-export const NETWORK_RECOVERY_STABLE_MS = 10000;
+export const NETWORK_STATS_INTERVAL_MS = 3000;
+export const NETWORK_RECOVERY_STABLE_MS = 6000;
 export const NETWORK_THRESHOLDS = {
   degradedLossPercent: 2,
   degradedRttMs: 150,
@@ -45,7 +45,12 @@ export function classifyNetwork(metrics: INetworkMetrics): Exclude<NetworkState,
     || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent > NETWORK_THRESHOLDS.poorLossPercent)
     // Edge may report 0 (or omit this field) for a healthy selected ICE pair.
     // A non-positive estimate is "unknown", not proof that the call is limited.
+    // The estimate is also only meaningful while we are actually SENDING video: with the camera
+    // off (or no camera) the sender has nothing to probe with, so Chrome leaves the estimate
+    // tiny even on a perfect ethernet link -- that read as a false "Limited connection".
     || (isNumber(metrics.availableOutgoingBitrateKbps)
+      && isNumber(metrics.videoBitrateKbps)
+      && metrics.videoBitrateKbps > 20
       && metrics.availableOutgoingBitrateKbps > 0
       && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps)
   ) {
@@ -150,6 +155,15 @@ export function getReceiveMaxHeightForCallSize(totalParticipants: number, screen
   else height = 360;
 
   return Math.min(height, mobileCap);
+}
+
+// Opus voice bitrate per network state. Voice stays intelligible far below the default, so on a
+// weak link it is lowered to protect the connection and raised again when the network recovers.
+export function getAudioMaxBitrateBps(state: NetworkState): number {
+  if (state === 'POOR') return 16000;
+  if (state === 'DEGRADED' || state === 'RECOVERING') return 24000;
+
+  return 40000;
 }
 
 export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): string {
