@@ -51,6 +51,7 @@ import {
   persistChatMessage,
   resolveChatAudioUrl,
   resolveChatImageUrl,
+  updateMeetingPrivacy,
   uploadChatAudio,
   uploadChatImage,
 } from '../lib/chatApi';
@@ -334,6 +335,10 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
   const [showSearchInChat, setShowSearchInChat] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [showInfoDrawer, setShowInfoDrawer] = useState(false);
+  const [privacyChoice, setPrivacyChoice] = useState<'Guest' | 'Private'>('Guest');
+  const [privacyPassword, setPrivacyPassword] = useState('');
+  const [savingPrivacy, setSavingPrivacy] = useState(false);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [showMembersDrawer, setShowMembersDrawer] = useState(false);
   const [conversationMembers, setConversationMembers] = useState<IConversationMember[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
@@ -608,6 +613,36 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
   const handleStartConversationCall = () => {
     if (!selectedConversation?.roomSlug) return;
     navigate(`/meet/${encodeURIComponent(selectedConversation.roomSlug)}?fromConversation=1`);
+  };
+
+  // Reset the privacy form to match the conversation's actual current state whenever the info
+  // drawer is (re)opened -- the existing password itself is never sent to the client, so this
+  // only pre-selects Public/Private, never pre-fills a password field.
+  useEffect(() => {
+    if (!showInfoDrawer || !selectedConversation) return;
+    setPrivacyChoice(selectedConversation.type === 'Private' ? 'Private' : 'Guest');
+    setPrivacyPassword('');
+    setPrivacyError(null);
+  }, [showInfoDrawer, selectedConversation?.id, selectedConversation?.type]);
+
+  const saveMeetingPrivacy = async () => {
+    if (!selectedConversation) return;
+    if (privacyChoice === 'Private' && !privacyPassword.trim()) {
+      setPrivacyError('Enter a password to make this meeting private.');
+      return;
+    }
+    setSavingPrivacy(true);
+    setPrivacyError(null);
+    try {
+      await updateMeetingPrivacy(selectedConversation.id, privacyChoice, privacyPassword.trim());
+      setSelectedConversation((prev) => (prev ? { ...prev, type: privacyChoice } : prev));
+      setConversations((prev) => prev.map((c) => (c.id === selectedConversation.id ? { ...c, type: privacyChoice } : c)));
+      setPrivacyPassword('');
+    } catch (err) {
+      setPrivacyError(err instanceof Error ? err.message : 'Failed to update meeting privacy');
+    } finally {
+      setSavingPrivacy(false);
+    }
   };
 
   const beginLeaveConversation = async () => {
@@ -1698,6 +1733,91 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
               <div className="tm-info-item">
                 <label>Status</label>
                 <span className="tm-info-status-pill">{selectedConversation.status || 'Ended'}</span>
+              </div>
+              <div className="tm-info-item">
+                <label>Meeting privacy</label>
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setPrivacyChoice('Guest'); setPrivacyError(null); }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: privacyChoice === 'Guest' ? '1px solid #6366F1' : '1px solid #334155',
+                      background: privacyChoice === 'Guest' ? 'rgba(99, 102, 241, .16)' : 'transparent',
+                      color: privacyChoice === 'Guest' ? '#A5B4FC' : '#94A3B8',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Public
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPrivacyChoice('Private'); setPrivacyError(null); }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: privacyChoice === 'Private' ? '1px solid #6366F1' : '1px solid #334155',
+                      background: privacyChoice === 'Private' ? 'rgba(99, 102, 241, .16)' : 'transparent',
+                      color: privacyChoice === 'Private' ? '#A5B4FC' : '#94A3B8',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Private
+                  </button>
+                </div>
+                <p style={{ margin: '6px 0 0', fontSize: 11, color: '#64748B' }}>
+                  {privacyChoice === 'Guest'
+                    ? 'Anyone with the link can join.'
+                    : 'A password is required to join -- set one below.'}
+                </p>
+                {privacyChoice === 'Private' && (
+                  <input
+                    type="password"
+                    value={privacyPassword}
+                    onChange={(e) => setPrivacyPassword(e.target.value)}
+                    placeholder={selectedConversation.type === 'Private' ? 'Enter a new password to change it' : 'Set a meeting password'}
+                    style={{
+                      width: '100%',
+                      marginTop: 8,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #334155',
+                      background: '#0F172A',
+                      color: '#E2E8F0',
+                      fontSize: 12,
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                )}
+                {privacyError && (
+                  <p style={{ margin: '6px 0 0', fontSize: 11, color: '#F87171' }}>{privacyError}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void saveMeetingPrivacy()}
+                  disabled={savingPrivacy || (privacyChoice === selectedConversation.type && privacyChoice === 'Guest')}
+                  style={{
+                    marginTop: 8,
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: 'none',
+                    background: savingPrivacy ? '#334155' : '#4F46E5',
+                    color: '#FFFFFF',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: savingPrivacy ? 'wait' : 'pointer',
+                  }}
+                >
+                  {savingPrivacy ? 'Saving…' : 'Save privacy setting'}
+                </button>
               </div>
               {selectedConversation.sharedFiles && selectedConversation.sharedFiles.length > 0 && (
                 <div className="tm-info-item">

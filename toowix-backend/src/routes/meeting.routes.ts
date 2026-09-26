@@ -33,8 +33,11 @@ import {
   announceLobbyHandler,
   endMeetingForEveryoneHandler,
   getLiveMeetingStatusHandler,
+  createLobbyStreamTicketHandler,
   postSignalHandler,
   getSignalsHandler,
+  streamLobbyHandler,
+  streamSignalsHandler,
   lockMeetingHandler,
   unlockMeetingHandler,
 } from '../meetings/waitingRoom';
@@ -50,6 +53,7 @@ router.post('/room/:roomSlug/admission', meetingAccessRateLimiter, optionalAccou
 
 // Real-time WebRTC Signaling routes
 router.post('/room/:roomSlug/signal', optionalAccount, postSignalHandler);
+router.get('/room/:roomSlug/signal/stream', optionalAccount, streamSignalsHandler);
 router.get('/room/:roomSlug/signal', optionalAccount, getSignalsHandler);
 
 // Google Meet Waiting Room & Host Admission routes
@@ -58,6 +62,8 @@ router.post('/room/:roomSlug/lock', meetingAccessRateLimiter, optionalAccount, l
 router.post('/room/:roomSlug/unlock', meetingAccessRateLimiter, optionalAccount, unlockMeetingHandler);
 router.post('/room/:roomSlug/lobby/knock', meetingAccessRateLimiter, optionalAccount, knockLobbyHandler);
 router.get('/room/:roomSlug/lobby/status', optionalAccount, getLobbyStatusHandler);
+router.post('/room/:roomSlug/lobby/stream-ticket', optionalAccount, createLobbyStreamTicketHandler);
+router.get('/room/:roomSlug/lobby/stream', optionalAccount, streamLobbyHandler);
 router.post('/room/:roomSlug/lobby/cancel', optionalAccount, cancelLobbyHandler);
 router.get('/room/:roomSlug/lobby/pending', optionalAccount, listPendingLobbyHandler);
 router.post('/room/:roomSlug/lobby/admit', optionalAccount, admitLobbyHandler);

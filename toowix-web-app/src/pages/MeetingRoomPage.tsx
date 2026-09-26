@@ -1941,11 +1941,12 @@ export function MeetingRoomPage() {
     drawPipToolbar(ctx, W, H, localMuted, isVideoOn, localHandRaised);
   };
 
-  // Continuous draw loop using rock-solid setInterval so browser backgrounding never freezes stream
+  // PiP is a secondary view. Ten frames per second keeps names/active-video transitions smooth
+  // while leaving more CPU/GPU headroom for the actual WebRTC encode/decode pipeline.
   const startPipDraw = () => {
     if (pipTimerRef.current) return;
     drawPipFrame();
-    pipTimerRef.current = setInterval(drawPipFrame, 66); // ~15fps
+    pipTimerRef.current = setInterval(drawPipFrame, 100); // 10fps
   };
 
   const stopPipDraw = () => {
@@ -2942,37 +2943,33 @@ export function MeetingRoomPage() {
   }, [shouldAutoRejoin, isFromConversation, meetingInfo, joining, videoEnabled, micEnabled, media.stream]);
 
   // ---------------------------------------------------------------------------
-  // Waiting Room Polling (when attendee is waiting for admission)
+  // Waiting room stream (when attendee is waiting for admission)
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!inWaitingRoom || !waitingRequestId || hasJoined) return;
 
     let active = true;
-    const interval = setInterval(async () => {
+    // requestId is an unguessable capability issued by the admission endpoint. The server sends
+    // only this guest's status/token on this stream, never another guest's admission details.
+    const stream = new EventSource(
+      `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/stream?requestId=${encodeURIComponent(waitingRequestId)}`
+    );
+    stream.addEventListener('message', (event) => {
       try {
-        const res = await fetch(
-          `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/status?requestId=${encodeURIComponent(
-            waitingRequestId
-          )}`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
+        const eventData = JSON.parse(event.data);
         if (!active) return;
 
-        if (data.status === 'ADMITTED' && data.jitsiToken) {
-          clearInterval(interval);
-          setJwtToken(data.jitsiToken);
-          attendanceTokenRef.current = data.attendanceToken;
-          attendanceEntryIdRef.current = data.participantEntryId;
+        if (eventData?.type === 'LOBBY_STATUS' && eventData.payload?.status === 'ADMITTED' && eventData.payload?.jitsiToken) {
+          setJwtToken(eventData.payload.jitsiToken);
+          attendanceTokenRef.current = eventData.payload.attendanceToken;
+          attendanceEntryIdRef.current = eventData.payload.participantEntryId;
           // Same as the direct-admission path above -- leave the prejoin stream alone, it gets
           // adopted by useJitsiMeeting.
           setInWaitingRoom(false);
           setHasJoined(true);
-        } else if (data.status === 'DENIED') {
-          clearInterval(interval);
+        } else if (eventData?.type === 'LOBBY_STATUS' && eventData.payload?.status === 'DENIED') {
           setWaitingDenied(true);
-        } else if (data.status === 'ENDED') {
-          clearInterval(interval);
+        } else if (eventData?.type === 'LOBBY_ENDED') {
           // This person never actually joined the conference (still in the waiting room), so
           // this bypasses leaveMeeting() entirely and is a separate exit path -- must fire the
           // same end-of-call tone itself, or "meeting ended" would silently have no sound for
@@ -2984,15 +2981,19 @@ export function MeetingRoomPage() {
           });
         }
 
-        if (data.hostAnnouncement !== undefined) {
-          setHostAnnouncement(data.hostAnnouncement);
+        if (eventData?.type === 'LOBBY_STATUS' && eventData.payload?.hostAnnouncement !== undefined) {
+          setHostAnnouncement(eventData.payload.hostAnnouncement);
+        } else if (eventData?.type === 'LOBBY_ANNOUNCEMENT') {
+          setHostAnnouncement(eventData.payload?.hostAnnouncement || null);
         }
-      } catch { }
-    }, 2000);
+      } catch {
+        // EventSource reconnects automatically; the lobby remains open while it retries.
+      }
+    });
 
     return () => {
       active = false;
-      clearInterval(interval);
+      stream.close();
     };
   }, [inWaitingRoom, waitingRequestId, hasJoined, roomId, navigate]);
 
@@ -3010,31 +3011,45 @@ export function MeetingRoomPage() {
   };
 
   // ---------------------------------------------------------------------------
-  // Moderator Polling (fetch waiting queue when in call)
+  // Moderator waiting-room stream. EventSource cannot attach Authorization headers, so one
+  // authenticated request creates a short-lived opaque ticket; the stream itself then pushes
+  // only the host's queue. This replaces the old 3-second pending-queue poll.
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!hasJoined || !isModerator) return;
     let active = true;
+    let stream: EventSource | null = null;
 
-    const pollQueue = async () => {
+    void (async () => {
       try {
         const headers = await accountHeaders();
-        const res = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/pending`, {
+        const ticketResponse = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/stream-ticket`, {
+          method: 'POST',
           headers,
         });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (active && Array.isArray(data.waiting)) {
-          setPendingQueue(data.waiting);
-        }
-      } catch { }
-    };
-
-    pollQueue();
-    const interval = setInterval(pollQueue, 3000);
+        if (!ticketResponse.ok || !active) return;
+        const { ticket } = await ticketResponse.json();
+        if (!active || typeof ticket !== 'string' || !ticket) return;
+        stream = new EventSource(
+          `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/stream?ticket=${encodeURIComponent(ticket)}`
+        );
+        stream.addEventListener('message', (event) => {
+          try {
+            const eventData = JSON.parse(event.data);
+            if (active && eventData?.type === 'LOBBY_QUEUE' && Array.isArray(eventData.payload?.waiting)) {
+              setPendingQueue(eventData.payload.waiting);
+            }
+          } catch {
+            // EventSource automatically reconnects after a temporary network interruption.
+          }
+        });
+      } catch {
+        // The admission controls remain available; a reconnect/remount obtains a fresh stream.
+      }
+    })();
     return () => {
       active = false;
-      clearInterval(interval);
+      stream?.close();
     };
   }, [hasJoined, isModerator, roomId, accountHeaders]);
 
@@ -3458,7 +3473,8 @@ export function MeetingRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined]);
 
-  // Periodic check if meeting was ended for everyone by host (fast 1-second interval)
+  // This is only a product-state check; media signalling handles real connection state. A
+  // ten-second cadence avoids a per-participant API request every three seconds during calls.
   useEffect(() => {
     if (!hasJoined) return;
     const interval = setInterval(async () => {
@@ -3470,7 +3486,7 @@ export function MeetingRoomPage() {
           leaveMeeting('The host has ended the meeting for everyone.');
         }
       } catch { }
-    }, 3000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [hasJoined, roomId, leaveMeeting]);
 
@@ -3699,13 +3715,21 @@ export function MeetingRoomPage() {
     let sourceTrack: MediaStreamTrack | null = null;
     let output: MediaStream | null = null;
     let starting = false;
+    let retryTimer: number | null = null;
+    let attempts = 0;
 
     const tick = async () => {
       const stream = media.stream.current;
       const el = media.preview.current;
       const track = stream?.getVideoTracks()[0] || null;
 
-      if (cancelled || !stream || !el || !track || track.readyState !== 'live') return;
+      if (cancelled) return;
+      if (!stream || !el || !track || track.readyState !== 'live') {
+        // The preview track may arrive just after this effect starts. Retry only during startup;
+        // once the effect is attached there is no permanent polling loop.
+        if (attempts++ < 10) retryTimer = window.setTimeout(() => void tick(), 250);
+        return;
+      }
       if (output && sourceTrack === track) {
         if (el.srcObject !== output) {
           el.srcObject = output;
@@ -3735,11 +3759,10 @@ export function MeetingRoomPage() {
     };
 
     void tick();
-    const interval = window.setInterval(() => void tick(), 600);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       try { effect?.stopEffect(); } catch { /* already stopped */ }
       const el = media.preview.current;
 
@@ -4153,26 +4176,45 @@ export function MeetingRoomPage() {
 
     handleIncomingSignalRef.current = handleIncomingSignal;
 
-    const interval = setInterval(async () => {
+    // One persistent SSE connection replaces repeated 1.5-second HTTP polls. Existing Jitsi
+    // data-channel delivery remains an extra fast path; duplicate messages are safely ignored
+    // by msgId. EventSource reconnects itself after a network change and the `since` replay
+    // prevents a gap while it reconnects.
+    const stream = typeof EventSource !== 'undefined'
+      ? new EventSource(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal/stream?since=${lastSignalTimestampRef.current}`)
+      : null;
+    stream?.addEventListener('message', (event) => {
+      try {
+        const signal = JSON.parse(event.data);
+        if (typeof signal?.timestamp === 'number') {
+          lastSignalTimestampRef.current = Math.max(lastSignalTimestampRef.current, signal.timestamp);
+        }
+        void handleIncomingSignal(signal);
+      } catch {
+        // Ignore a malformed stream event; EventSource continues receiving later events.
+      }
+    });
+    // EventSource is supported by the browsers we target, including Safari. Keep the previous
+    // reliable polling path only for an unusual browser that has no EventSource at all.
+    const fallbackInterval = stream ? null : window.setInterval(async () => {
       try {
         const res = await fetch(
           `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal?since=${lastSignalTimestampRef.current}`
         );
         if (!res.ok) return;
         const data = await res.json();
-        if (data.timestamp) {
-          lastSignalTimestampRef.current = data.timestamp;
-        }
+        if (typeof data.timestamp === 'number') lastSignalTimestampRef.current = data.timestamp;
         if (Array.isArray(data.signals)) {
-          for (const sig of data.signals) {
-            handleIncomingSignal(sig);
-          }
+          for (const signal of data.signals) await handleIncomingSignal(signal);
         }
-      } catch { }
-    }, 600);
+      } catch {
+        // A later interval may recover; the meeting media path does not depend on this stream.
+      }
+    }, 1500);
 
     return () => {
-      clearInterval(interval);
+      stream?.close();
+      if (fallbackInterval !== null) window.clearInterval(fallbackInterval);
       handleIncomingSignalRef.current = null;
     };
   }, [hasJoined, roomId, isScreenSharing, postRoomSignal, jitsiMeeting.localParticipantId]);

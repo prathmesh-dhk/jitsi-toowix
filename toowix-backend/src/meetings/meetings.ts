@@ -633,7 +633,7 @@ export const updateMeetingHandler = async (req: AuthenticatedRequest, res: Respo
       return;
     }
 
-    const { name, scheduledAt, durationMinutes, type, description, invitees, notes, sharedFiles, resources } = req.body;
+    const { name, scheduledAt, durationMinutes, type, passcode, description, invitees, notes, sharedFiles, resources } = req.body;
     if (scheduledAt) {
       const parsedScheduledAt = new Date(scheduledAt);
       if (Number.isNaN(parsedScheduledAt.getTime()) || parsedScheduledAt.getTime() < Date.now()) {
@@ -641,11 +641,25 @@ export const updateMeetingHandler = async (req: AuthenticatedRequest, res: Respo
         return;
       }
     }
+    // Same rule as creating a meeting (createMeetingHandler) -- Private always needs a password.
+    // Resolve against the INCOMING type when it's part of this request, otherwise the meeting's
+    // current type, so switching Guest -> Private without also sending a passcode is rejected
+    // the same way an initial creation would be.
+    const resolvedType = type !== undefined && ['Internal', 'Guest', 'Private'].includes(type) ? type : meeting.type;
+    const resolvedPasscode = passcode !== undefined ? passcode : meeting.passcode;
+    if (resolvedType === 'Private' && (typeof resolvedPasscode !== 'string' || !resolvedPasscode.trim())) {
+      res.status(400).json({ error: 'A password is required for private meetings.' });
+      return;
+    }
     const scheduleChanged = scheduledAt !== undefined && new Date(scheduledAt).getTime() !== (meeting.scheduledAt ? new Date(meeting.scheduledAt).getTime() : null);
     if (name !== undefined) meeting.name = String(name).trim();
     if (scheduledAt !== undefined) meeting.scheduledAt = scheduledAt ? new Date(scheduledAt) : null;
     if (durationMinutes !== undefined) meeting.durationMinutes = durationMinutes || null;
     if (type !== undefined && ['Internal', 'Guest', 'Private'].includes(type)) meeting.type = type;
+    // Switching away from Private clears any leftover password -- a Guest/public meeting should
+    // never still carry a stale passcode that a stray client could try to enforce.
+    if (passcode !== undefined) meeting.passcode = typeof passcode === 'string' && passcode.trim() ? passcode.trim() : null;
+    else if (type !== undefined && type !== 'Private') meeting.passcode = null;
     if (description !== undefined) meeting.description = typeof description === 'string' && description.trim() ? description.trim().slice(0, 2000) : null;
     if (invitees !== undefined) {
       meeting.invitees = meeting.type === 'Private' && Array.isArray(invitees)
@@ -661,7 +675,12 @@ export const updateMeetingHandler = async (req: AuthenticatedRequest, res: Respo
       };
     }
 
-    await meeting.save();
+    // Full-document validation can fail here against pre-existing data this handler never
+    // touched -- e.g. a guest participant recorded with no email (legitimate: a guest can join
+    // with just a name). Every other place in this codebase that saves a Meeting document
+    // already skips it for the same reason; this endpoint's own field updates above are already
+    // validated by hand (the Private/password check), so nothing real is lost by matching that.
+    await meeting.save({ validateBeforeSave: false });
 
     if (scheduleChanged && meeting.companyId) {
       notifyCompany(

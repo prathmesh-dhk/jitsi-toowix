@@ -21,7 +21,10 @@ export interface IMediaQualityPolicy {
   sendMaxHeight: number;
 }
 
-export const NETWORK_STATS_INTERVAL_MS = 2500;
+// Jitsi/WebRTC already runs transport congestion control continuously. These samples are only
+// lightweight UI telemetry, so collecting them every five seconds avoids a second high-frequency
+// controller competing for browser time during a call.
+export const NETWORK_STATS_INTERVAL_MS = 5000;
 export const NETWORK_RECOVERY_STABLE_MS = 10000;
 export const NETWORK_THRESHOLDS = {
   degradedLossPercent: 2,

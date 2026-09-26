@@ -145,7 +145,6 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
-const HIGH_BANDWIDTH_VIDEO_KBPS = 2500;
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -159,6 +158,11 @@ const EMPTY_NETWORK_METRICS: INetworkMetrics = {
 interface IPreviousVideoStats {
   bytesSent: number;
   timestamp: number;
+}
+
+interface IPreviousPacketStats {
+  packetsLost: number;
+  packetsReceived: number;
 }
 
 function readLowDataMode(): LowDataMode {
@@ -526,10 +530,14 @@ export function useJitsiMeeting({
   const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
   const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
   const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
+  const previousPacketStatsRef = useRef<IPreviousPacketStats | null>(null);
   const poorSampleCountRef = useRef(0);
   const degradedSampleCountRef = useRef(0);
   const goodSinceRef = useRef<number | null>(null);
-  const lastAppliedQualityKeyRef = useRef<string | null>(null);
+  // True only while Toowix has an explicit low-data policy active. In normal mode, Jitsi/WebRTC
+  // owns adaptation (simulcast layer selection, TCC, and receiver feedback) without our app
+  // repeatedly pushing competing sender/receiver limits.
+  const lowDataPolicyActiveRef = useRef(false);
   // Set by the user's own "Performance settings" choice. Without this, the periodic automatic
   // network-quality check (below) had no idea a manual choice had ever been made, so the very
   // next time it ran with a different key (someone joins/leaves, screen share starts/stops, a
@@ -675,10 +683,10 @@ export function useJitsiMeeting({
     });
   }, []);
 
-  // Applies only public lib-jitsi-meet receiver/sender controls. This does not acquire a new
-  // camera/microphone stream and does not manipulate individual video frames.
+  // Applies an explicit user-selected data-saving policy. Normal mode deliberately does not
+  // continuously set media constraints: lib-jitsi-meet/WebRTC is the primary adaptive-quality
+  // controller and reacts much faster than a React polling loop can.
   const applyMediaQualityPolicy = useCallback(async (
-    requestedState = networkStateRef.current,
     requestedMode = lowDataModeRef.current
   ) => {
     const room = roomRef.current;
@@ -686,25 +694,31 @@ export function useJitsiMeeting({
     if (!room) {
       return;
     }
-    const participantCount = room.getParticipants?.().length || 0;
-    const screenShareActive = Boolean(localDesktopTrackRef.current) || Object.keys(remoteDesktopTracksRef.current).length > 0;
-    const highBandwidth = requestedMode === 'auto'
-      && requestedState === 'GOOD'
-      && (networkMetricsRef.current.availableOutgoingBitrateKbps || 0) >= HIGH_BANDWIDTH_VIDEO_KBPS;
-    const policy = getMediaQualityPolicy(requestedMode, requestedState, participantCount, screenShareActive, highBandwidth);
     const manualCap = manualMaxHeightRef.current;
+    if (requestedMode === 'auto') {
+      if (!lowDataPolicyActiveRef.current) {
+        return;
+      }
+      // Restore a conservative baseline once after leaving a deliberate low-data mode. From
+      // here Jitsi chooses simulcast layers and adapts bitrate itself; this is not a poll-driven
+      // quality controller. A manual performance selection remains the user's ceiling.
+      const restoredHeight = manualCap ?? 720;
+      try {
+        room.setLastN?.(-1);
+        room.setReceiverVideoConstraint?.(restoredHeight);
+        await Promise.resolve(room.setSenderVideoConstraint?.(restoredHeight));
+        lowDataPolicyActiveRef.current = false;
+      } catch {
+        // A bridge that does not support one of these hints should keep Jitsi defaults flowing.
+      }
+      return;
+    }
 
+    const participantCount = room.getParticipants?.().length || 0;
+    const policy = getMediaQualityPolicy(requestedMode, 'GOOD', participantCount, Boolean(localDesktopTrackRef.current));
     if (manualCap !== null) {
-      // The manual choice is a ceiling, not a floor -- a genuinely poor connection can still drop
-      // below it, but nothing here is ever allowed to raise quality back above what the user
-      // deliberately picked to save bandwidth.
       policy.receiveMaxHeight = Math.min(policy.receiveMaxHeight, manualCap);
       policy.sendMaxHeight = Math.min(policy.sendMaxHeight, manualCap);
-    }
-    const key = [ requestedMode, requestedState, participantCount >= 8 ? 'large' : 'normal', screenShareActive ? 'share' : 'noshare', highBandwidth ? 'high-bandwidth' : 'normal-bandwidth', manualCap ?? 'auto' ].join(':');
-
-    if (lastAppliedQualityKeyRef.current === key) {
-      return;
     }
     try {
       room.setLastN?.(policy.lastN);
@@ -729,10 +743,10 @@ export function useJitsiMeeting({
         // off Audio-only mode not turning the camera back on "directly."
         setLocalCameraStream(trackToStream(cameraTrack));
       }
-      lastAppliedQualityKeyRef.current = key;
+      lowDataPolicyActiveRef.current = true;
       if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
         // Do not include meeting, token, or participant data in diagnostics.
-        console.info('[Toowix network] media quality applied', { mode: requestedMode, state: requestedState, policy });
+        console.info('[Toowix network] explicit media policy applied', { mode: requestedMode, policy });
       }
     } catch (err) {
       // A particular older bridge/browser can reject a quality preference. Media must keep
@@ -746,7 +760,6 @@ export function useJitsiMeeting({
   const setLowDataMode = useCallback(async (mode: LowDataMode) => {
     lowDataModeRef.current = mode;
     setLowDataModeState(mode);
-    lastAppliedQualityKeyRef.current = null;
     try {
       localStorage.setItem(LOW_DATA_MODE_STORAGE_KEY, mode);
     } catch {
@@ -754,7 +767,7 @@ export function useJitsiMeeting({
     }
 
     // Apply network constraints immediately, while background cleanup runs independently.
-    const qualityChange = applyMediaQualityPolicy(networkStateRef.current, mode);
+    const qualityChange = applyMediaQualityPolicy(mode);
     // Segmentation effects are intentionally disabled for data-saving modes. They consume
     // local CPU/GPU and can worsen encode stability on weak devices.
     if (mode !== 'auto' && virtualBackgroundRef.current) {
@@ -780,14 +793,11 @@ export function useJitsiMeeting({
       degradedSampleCountRef.current = 0;
       goodSinceRef.current = null;
       // This used to act on a single disconnected/failed/closed reading immediately, on the
-      // theory that a real connection loss shouldn't wait. But Jitsi switches a call between the
-      // server-relayed connection and a direct peer-to-peer one right at the two-participant
-      // mark (this deployment has P2P enabled), and that switch can itself report the old
-      // connection as briefly "disconnected"/"closed" while the new one takes over -- a totally
-      // normal handover, not a real problem. Reacting to that instantly is exactly what made the
-      // connection look "Limited" and the video freeze the moment a second person joined. Always
-      // require the same two-consecutive-samples confirmation, so a real failure is still caught
-      // within a few seconds, but a routine handover blip no longer collapses video quality.
+      // theory that a real connection loss shouldn't wait. A browser can briefly report an old
+      // ICE transport as disconnected while the bridge route is settling, especially when a
+      // second participant joins. Treating one sample as a failure made the UI show "Limited"
+      // and used to force lower video quality during an otherwise normal call. Two consecutive
+      // samples keep the warning meaningful without making a one-off transport blip disruptive.
       if (poorSampleCountRef.current >= 2) {
         next = 'POOR';
       }
@@ -819,16 +829,18 @@ export function useJitsiMeeting({
     if (next !== current) {
       networkStateRef.current = next;
       setNetworkState(next);
-      lastAppliedQualityKeyRef.current = null;
-      await applyMediaQualityPolicy(next);
+      // In automatic mode this only updates UI/telemetry. Jitsi/WebRTC retains sole ownership
+      // of real-time congestion and simulcast adaptation. An explicit Low Data choice is still
+      // honoured, but it is stable rather than oscillating with every sample.
+      if (lowDataModeRef.current !== 'auto') {
+        await applyMediaQualityPolicy(lowDataModeRef.current);
+      }
       if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
         console.info('[Toowix network] state changed', { state: next, metrics });
       }
     } else {
-      // State may remain GOOD while available bandwidth rises or falls. Re-evaluate the
-      // constraint key so a healthy, high-bandwidth call receives 1080p and immediately steps
-      // back to 720p before a sustained bitrate reduction makes video blurry.
-      await applyMediaQualityPolicy(next);
+      // Keep collecting lightweight telemetry, but do not turn it into a second media-quality
+      // controller. Jitsi's TCC/simulcast logic reacts directly to RTP feedback.
     }
   }, [ applyMediaQualityPolicy ]);
 
@@ -893,7 +905,11 @@ export function useJitsiMeeting({
         const localCandidate = selectedPair?.localCandidateId ? localCandidates.get(selectedPair.localCandidateId) : null;
         const availableOutgoingBitrate = selectedPair?.availableOutgoingBitrate;
         const currentRoundTripTime = selectedPair?.currentRoundTripTime;
-        const packetTotal = packetsLost + packetsReceived;
+        const previousPackets = previousPacketStatsRef.current;
+        const lostDelta = previousPackets ? Math.max(0, packetsLost - previousPackets.packetsLost) : 0;
+        const receivedDelta = previousPackets ? Math.max(0, packetsReceived - previousPackets.packetsReceived) : 0;
+        const packetTotal = lostDelta + receivedDelta;
+        previousPacketStatsRef.current = { packetsLost, packetsReceived };
 
         await updateNetworkStateFromMetrics({
           // Number(null) is 0. Edge often uses null/0 when it has no bandwidth
@@ -906,7 +922,9 @@ export function useJitsiMeeting({
           candidateType: localCandidate?.candidateType || null,
           connectionState,
           jitterMs: jitterSeconds === null ? null : jitterSeconds * 1000,
-          packetLossPercent: packetTotal > 0 ? (packetsLost / packetTotal) * 100 : null,
+          // Lifetime loss makes a recovered call look degraded forever. Use the delta between
+          // samples so the status represents the current network window.
+          packetLossPercent: previousPackets && packetTotal > 0 ? (lostDelta / packetTotal) * 100 : null,
           rttMs: typeof currentRoundTripTime === 'number' && Number.isFinite(currentRoundTripTime)
             ? currentRoundTripTime * 1000
             : null,
@@ -919,7 +937,7 @@ export function useJitsiMeeting({
       }
     };
 
-    void applyMediaQualityPolicy();
+    void applyMediaQualityPolicy(lowDataModeRef.current);
     void collectNetworkMetrics();
     const timer = window.setInterval(() => void collectNetworkMetrics(), NETWORK_STATS_INTERVAL_MS);
 
@@ -927,6 +945,7 @@ export function useJitsiMeeting({
       disposed = true;
       window.clearInterval(timer);
       previousVideoStatsRef.current = null;
+      previousPacketStatsRef.current = null;
     };
   }, [ applyMediaQualityPolicy, joined, updateNetworkStateFromMetrics ]);
 
@@ -1091,11 +1110,10 @@ export function useJitsiMeeting({
 
             const room = connection.initJitsiConference(roomName.toLowerCase(), {
               ...config,
-              // Keeping every participant on JVB avoids the direct-P2P <-> bridge handover that
-              // happens exactly when a second person joins. That handover was being detected as
-              // a false limited connection and could briefly interrupt media. This deployment
-              // has server capacity, so stable bridge routing is the better call-quality choice.
-              p2p: { ...(config.p2p || {}), enabled: false },
+              // Jitsi manages this transport transition natively: two participants can use a
+              // direct P2P WebRTC connection and it immediately returns to JVB when a third
+              // participant joins. Do not implement a second participant-count controller here.
+              p2p: { ...(config.p2p || {}), enabled: true },
               openBridgeChannel: true
             });
 
@@ -1666,7 +1684,7 @@ export function useJitsiMeeting({
       poorSampleCountRef.current = 0;
       degradedSampleCountRef.current = 0;
       goodSinceRef.current = null;
-      lastAppliedQualityKeyRef.current = null;
+      lowDataPolicyActiveRef.current = false;
       audioOnlyMutedVideoRef.current = false;
       setLocalCameraStream(null);
       setLocalScreenStream(null);
@@ -2373,7 +2391,6 @@ export function useJitsiMeeting({
     // Remember this as the user's own ceiling so the automatic network-quality check (which runs
     // every few seconds regardless) stops silently overriding it back up the next time it fires.
     manualMaxHeightRef.current = maxHeight;
-    lastAppliedQualityKeyRef.current = null;
     try {
       const constraints: Record<string, any> = {
         defaultConstraints: { maxHeight }

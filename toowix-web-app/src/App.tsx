@@ -1,6 +1,6 @@
 import { AccountGuard } from './components/AccountGuard';
 import { MeetingEndedPage } from './pages/MeetingEndedPage';
-import React, { useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useNavigate, Navigate } from 'react-router-dom';
 import { Video, Plus, Keyboard, ShieldCheck, Users, Sparkles } from 'lucide-react';
 import { generateUniqueMeetingId, sanitizeCustomMeetingId } from './lib/meeting-id';
@@ -269,8 +269,6 @@ function HomePage() {
   );
 }
 
-import { MeetingRoomPage } from './pages/MeetingRoomPage';
-import { DirectMeetingRoomPage } from './pages/DirectMeetingRoomPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
@@ -288,6 +286,16 @@ import { StorageSection } from './components/settings/StorageSection';
 import { RsvpPage } from './pages/RsvpPage';
 import { RecordingWatchPage } from './pages/RecordingWatchPage';
 
+// The meeting implementation includes media previews, call controls, and optional meeting
+// features. Loading it only on a /meet route keeps the marketing, auth, dashboard and RSVP
+// routes light without delaying the actual meeting code once a participant opens a call.
+const MeetingRoomPage = lazy(() => import('./pages/MeetingRoomPage').then(module => ({ default: module.MeetingRoomPage })));
+const DirectMeetingRoomPage = lazy(() => import('./pages/DirectMeetingRoomPage').then(module => ({ default: module.DirectMeetingRoomPage })));
+
+function MeetingRouteLoader() {
+  return <main aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--color-text-secondary)' }}>Preparing meeting…</main>;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -301,10 +309,10 @@ export default function App() {
           <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/meeting-link-expired" element={<MeetingLinkExpiredPage />} />
           <Route path="/home" element={<HomePage />} />
-          <Route path="/meet/:roomId" element={<MeetingRoomPage />} />
+          <Route path="/meet/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><MeetingRoomPage /></Suspense>} />
           {/* New direct lib-jitsi-meet path -- no iframe, real tracks in real <video>
               elements. Separate route, zero risk to the working /meet/:roomId iframe flow. */}
-          <Route path="/meet-direct/:roomId" element={<DirectMeetingRoomPage />} />
+          <Route path="/meet-direct/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><DirectMeetingRoomPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signin" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />

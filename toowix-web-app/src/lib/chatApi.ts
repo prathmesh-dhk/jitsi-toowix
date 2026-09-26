@@ -149,6 +149,24 @@ export async function inviteConversationMember(
 }
 
 /**
+ * Switches a conversation's underlying meeting between Public (Guest, anyone with the link) and
+ * Private (password required to join). Same rule the backend enforces on creation: a password is
+ * required to switch to (or stay) Private; switching to Public clears any existing password.
+ */
+export async function updateMeetingPrivacy(meetingId: string, type: 'Guest' | 'Private', passcode?: string): Promise<void> {
+  const response = await fetch(`${BACKEND_URL}/api/meetings/${encodeURIComponent(meetingId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ type, passcode: type === 'Private' ? passcode : null }),
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data?.error || 'Failed to update meeting privacy');
+  }
+}
+
+/**
  * Fetches members and workspace participants for a conversation (for @ mentions & member list).
  */
 export async function fetchRoomConversationMembers(roomSlug: string): Promise<IConversationMember[]> {
