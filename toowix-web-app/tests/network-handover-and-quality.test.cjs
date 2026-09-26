@@ -7,6 +7,7 @@ const hook = fs.readFileSync(path.join(root, 'useJitsiMeeting.ts'), 'utf8');
 const policy = fs.readFileSync(path.join(root, 'networkQuality.ts'), 'utf8');
 
 assert.match(hook, /p2p: \{ \.\.\.\(config\.p2p \|\| \{\}\), enabled: false \}/, 'calls must stay JVB-routed to avoid P2P-to-JVB renegotiation failures');
+assert.match(hook, /https:\/\/\$\{jitsiDomain\}\/libs\/lib-jitsi-meet\.min\.js/, 'meeting client must load lib-jitsi-meet from the active Jitsi server release');
 assert.match(hook, /runSerializedRoomOperation\(async \(\) => \{[\s\S]*?await myRoom\.addTrack\(track\)/, 'initial audio and camera tracks must use the serialized SDP negotiation queue');
 assert.match(hook, /normalizedError\.includes\('offeranswerfailed'\)/, 'offer/answer failures must receive one controlled recovery attempt');
 assert.match(hook, /if \(requestedMode === 'auto'\)/, 'normal calls must leave automatic quality adaptation to Jitsi/WebRTC');

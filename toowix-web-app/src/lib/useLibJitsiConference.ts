@@ -67,7 +67,9 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
       // from the real deployment rather than hardcoded here, so it can never drift from what
       // the server actually has configured.
       await loadScript(`https://${jitsiDomain}/config.js`);
-      await loadScript('/lib-jitsi-meet.min.js');
+      // Keep this legacy/direct-meeting hook aligned with the Jitsi deployment as well. A local
+      // copied library can drift from Jicofo/JVB and fail source negotiation in larger rooms.
+      await loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`);
     })();
   }
 

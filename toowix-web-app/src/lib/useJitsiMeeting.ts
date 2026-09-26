@@ -135,7 +135,10 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
   if (!scriptLoadPromise) {
     scriptLoadPromise = (async () => {
       await loadScript(`https://${jitsiDomain}/config.js`);
-      await loadScript('/lib-jitsi-meet.min.js');
+      // The browser library and the Jitsi deployment must be the same release. A copied local
+      // lib-jitsi-meet build had drifted from Jicofo/JVB and rejected valid simulcast SDP from
+      // a third participant as duplicate SSRC lines. Always use the active server's own build.
+      await loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`);
     })();
   }
 
