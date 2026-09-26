@@ -12,7 +12,6 @@ import { PLAYBACK_START, PLAYBACK_STATUSES, SHARED_VIDEO } from './sharedVideo/c
 import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './sharedVideo/functions';
 import {
   classifyNetwork,
-  getCameraCaptureIdeal,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
   type INetworkMetrics,
@@ -1100,18 +1099,6 @@ export function useJitsiMeeting({
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;
-        const capture = getCameraCaptureIdeal();
-
-        // Tracks lib-jitsi-meet acquires itself (device switch, camera retry) must request the
-        // same high ideal as the prejoin preview, not the server config's 720p cap.
-        config.resolution = capture.height;
-        config.constraints = {
-          video: {
-            frameRate: { ideal: capture.frameRate, max: capture.frameRate },
-            height: { ideal: capture.height, max: capture.height, min: 180 },
-            width: { ideal: capture.width, max: capture.width, min: 320 }
-          }
-        };
 
         JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.ERROR);
         JitsiMeetJS.init({ disableAudioLevels: false });

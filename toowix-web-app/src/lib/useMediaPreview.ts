@@ -250,17 +250,30 @@ export function useMediaPreview(
           ? { deviceId: { ideal: videoId } }
           : {};
 
-        try {
-          media = await navigator.mediaDevices.getUserMedia({
-            video: { ...constraints, width: { ideal: captureIdeal.width }, height: { ideal: captureIdeal.height }, frameRate: { ideal: captureIdeal.frameRate, max: captureIdeal.frameRate } },
-          });
-        } catch (err: any) {
-          // If ideal device failed, fallback to default video
-          if (err?.name === 'OverconstrainedError') {
-            media = await navigator.mediaDevices.getUserMedia({ video: true });
-          } else {
-            throw err;
+        // Highest quality first, then progressively safer requests. A camera or driver that
+        // rejects the high request (or a stricter frame-rate) must never end up with no camera
+        // at all, so every non-permission failure falls through to the next, simpler request.
+        const attempts: MediaStreamConstraints[] = [
+          { video: { ...constraints, width: { ideal: captureIdeal.width }, height: { ideal: captureIdeal.height }, frameRate: { ideal: captureIdeal.frameRate } } },
+          { video: { ...constraints, width: { ideal: 1280 }, height: { ideal: 720 } } },
+          { video: true }
+        ];
+        let lastError: any = null;
+
+        for (const attempt of attempts) {
+          try {
+            media = await navigator.mediaDevices.getUserMedia(attempt);
+            lastError = null;
+            break;
+          } catch (err: any) {
+            lastError = err;
+            if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+              throw err;
+            }
           }
+        }
+        if (lastError || !media!) {
+          throw lastError || new Error('No video stream returned');
         }
 
         if (!active) {
