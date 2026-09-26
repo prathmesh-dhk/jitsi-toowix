@@ -1,3 +1,4 @@
+import { PARTICIPANT_JOINED_SOUND_URL } from '../lib/notificationSounds';
 import { useState, type ReactNode } from 'react';
 import { X, Volume2, Video, Settings, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { useMeetingPref, notifyDesktop } from '../lib/meetingPrefs';
@@ -97,7 +98,7 @@ export function MeetingSettingsDialog(props: IProps) {
 
   const testSpeaker = async () => {
     try {
-      const audio = new Audio('/sounds/participant-joined.wav');
+      const audio = new Audio(PARTICIPANT_JOINED_SOUND_URL);
 
       if (props.outputId && (audio as any).setSinkId) {
         await (audio as any).setSinkId(props.outputId);

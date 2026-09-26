@@ -602,7 +602,9 @@ export function useJitsiMeeting({
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
   const onKickedRef = useRef(onKicked);
   const onForceMutedRef = useRef(onForceMuted);
-  const selfInitiatedMuteRef = useRef(false);
+  const selfInitiatedMuteRef = useRef(0);
+  const audioToggleChainRef = useRef<Promise<void>>(Promise.resolve());
+  const lastRemoteSpokeRef = useRef<Record<string, number>>({});
   const existingStreamRef = useRef(existingStream);
   const cameraRetryInFlightRef = useRef(false);
   const deviceIdsRef = useRef({ audioDeviceId, videoDeviceId });
@@ -698,10 +700,15 @@ export function useJitsiMeeting({
       const muted = audioTrack.isMuted();
 
       setLocalAudioMuted(muted);
-      if (muted && !selfInitiatedMuteRef.current) {
-        onForceMutedRef.current?.();
+      if (muted) {
+        // Each self-initiated mute() is counted, so rapid mic on/off clicks (several mute
+        // events in a row) are never mistaken for a moderator mute.
+        if (selfInitiatedMuteRef.current > 0) {
+          selfInitiatedMuteRef.current--;
+        } else {
+          onForceMutedRef.current?.();
+        }
       }
-      selfInitiatedMuteRef.current = false;
     });
   }, []);
 
@@ -1186,6 +1193,7 @@ export function useJitsiMeeting({
                     // Someone whose audio is actually coming through is not muted -- correct a
                     // stale "muted" flag instead of showing a muted mic on a talking person.
                     if (level > 0.06) {
+                      lastRemoteSpokeRef.current[participantId] = Date.now();
                       setRemoteParticipants((prev) => (
                         prev[participantId]?.muted
                           ? { ...prev, [participantId]: { ...prev[participantId], muted: false } }
@@ -1229,6 +1237,20 @@ export function useJitsiMeeting({
                   patchParticipant(participantId, { video: !track.isMuted() });
                 }
               });
+            });
+
+            // Conference-level mute signal for remote audio: keeps the participant card badge in
+            // lockstep with the participant's own mic toolbar state (muted <-> unmuted) even if
+            // the per-track listener was attached to a since-replaced track.
+            room.on(JitsiMeetJS.events.conference.TRACK_MUTE_CHANGED, (track: any) => {
+              if (isStale() || !track || track.isLocal?.() || track.getType?.() !== 'audio') {
+                return;
+              }
+              const participantId = track.getParticipantId?.();
+
+              if (participantId) {
+                patchParticipant(participantId, { muted: track.isMuted() });
+              }
             });
 
             room.on(JitsiMeetJS.events.conference.TRACK_REMOVED, (track: any) => {
@@ -1420,6 +1442,7 @@ export function useJitsiMeeting({
               // a remote participant is speaking, an earlier track-level muted flag is stale;
               // never show a red muted badge on somebody who is actively speaking.
               if (id && id !== room.myUserId()) {
+                lastRemoteSpokeRef.current[id] = Date.now();
                 setRemoteParticipants((prev) => (
                   prev[id]?.muted
                     ? { ...prev, [id]: { ...prev[id], muted: false } }
@@ -1843,43 +1866,99 @@ export function useJitsiMeeting({
     });
   }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, networkState ]);
 
+  // Source of truth for the participant-card mic badge: the remote audio track's own mute state,
+  // re-read on a short interval. Event-only updates could be missed (track replaced, presence
+  // arriving out of order) and left a talking participant flagged as muted.
+  useEffect(() => {
+    if (!joined) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      const room = roomRef.current;
+
+      if (!room?.getParticipants) {
+        return;
+      }
+      const truth: Record<string, boolean> = {};
+
+      for (const p of room.getParticipants()) {
+        if (p.isHidden?.() || p.getBotType?.()) {
+          continue;
+        }
+        const audio = (p.getTracks?.() || []).find((t: any) => t.getType() === 'audio');
+
+        truth[p.getId()] = audio ? Boolean(audio.isMuted()) : true;
+      }
+      setRemoteParticipants(prev => {
+        let changed = false;
+        const next = { ...prev };
+
+        for (const id of Object.keys(prev)) {
+          // Audio actually arriving in the last 1.5s beats a stale muted flag.
+          const spokeRecently = Date.now() - (lastRemoteSpokeRef.current[id] || 0) < 1500;
+
+          if (id in truth && prev[id].muted !== truth[id] && !(truth[id] && spokeRecently)) {
+            next[id] = { ...prev[id], muted: truth[id] };
+            changed = true;
+          }
+        }
+
+        return changed ? next : prev;
+      });
+    }, 500);
+
+    return () => clearInterval(timer);
+  }, [ joined ]);
+
   const switchDeviceRef = useRef<typeof switchDevice | null>(null);
 
-  const toggleAudio = useCallback(async () => {
-    const track = localAudioTrackRef.current;
+  const toggleAudio = useCallback((): Promise<void> => {
+    // Serialized: mute()/unmute() are async, so overlapping clicks used to interleave and leave
+    // React's mic state (and the participant-card badge) out of sync with the real track.
+    const run = async () => {
+      const track = localAudioTrackRef.current;
 
-    if (!track) {
-      return;
-    }
-    if (track.isMuted()) {
-      // On iOS Safari the OS can quietly kill the underlying hardware track while it sits
-      // muted (background audio session reclaimed, another app grabs the mic, etc). Calling
-      // unmute() on that dead JitsiLocalTrack object succeeds but produces silence -- same
-      // class of bug as the stale-camera-track case handled in toggleVideo above. Detect it
-      // and reacquire a fresh mic track instead of unmuting a corpse.
-      const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
-      const looksDead = !nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true;
-
-      if (looksDead && switchDeviceRef.current && !switchDeviceInFlightRef.current.audioInput) {
-        try {
-          await switchDeviceRef.current('audioInput', deviceIdsRef.current.audioDeviceId || '');
-          localAudioTrackRef.current?.unmute();
-          setLocalAudioMuted(false);
-          return;
-        } catch {
-          // Fall through and try the normal unmute path as a best-effort below.
-        }
+      if (!track) {
+        return;
       }
-      track.unmute();
-      setLocalAudioMuted(false);
-    } else {
-      // Marks this specific mute as self-initiated so the TRACK_MUTE_CHANGED listener (set up
-      // where the track was created) doesn't fire onForceMuted for a click the user made
-      // themselves -- that toast/sound is only for a moderator muting them from outside.
-      selfInitiatedMuteRef.current = true;
-      track.mute();
-      setLocalAudioMuted(true);
-    }
+      if (track.isMuted()) {
+        // On iOS Safari the OS can quietly kill the underlying hardware track while it sits
+        // muted. unmute() on that dead JitsiLocalTrack succeeds but produces silence, so detect
+        // it and reacquire a fresh mic track instead of unmuting a corpse.
+        const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
+        const looksDead = !nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true;
+
+        if (looksDead && switchDeviceRef.current && !switchDeviceInFlightRef.current.audioInput) {
+          try {
+            await switchDeviceRef.current('audioInput', deviceIdsRef.current.audioDeviceId || '');
+            await Promise.resolve(localAudioTrackRef.current?.unmute());
+            setLocalAudioMuted(Boolean(localAudioTrackRef.current?.isMuted()));
+
+            return;
+          } catch {
+            // Fall through and try the normal unmute path as a best-effort below.
+          }
+        }
+        try {
+          await Promise.resolve(track.unmute());
+        } catch { /* state is re-read from the track below */ }
+      } else {
+        selfInitiatedMuteRef.current++;
+        try {
+          await Promise.resolve(track.mute());
+        } catch { /* state is re-read from the track below */ }
+        // Toggles are serialized and the mute event has fired by now, so nothing self-initiated
+        // is pending; clearing avoids masking a later real moderator mute.
+        selfInitiatedMuteRef.current = 0;
+      }
+      // Always report what the track really is, not what the click intended.
+      setLocalAudioMuted(Boolean(localAudioTrackRef.current?.isMuted()));
+    };
+    const next = audioToggleChainRef.current.then(run, run);
+
+    audioToggleChainRef.current = next.catch(() => undefined);
+
+    return next;
   }, []);
 
   // Doubles as the manual "retry camera" action when no video track exists yet (e.g. the

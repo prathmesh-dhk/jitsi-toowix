@@ -3,6 +3,11 @@
 // distinct, small waveform generated at runtime rather than a shipped audio asset.
 
 import { getPref } from './meetingPrefs';
+import joinedUrl from '../assets/sounds/participant-joined.wav?url';
+import leftUrl from '../assets/sounds/participant-left.wav?url';
+import recordingStartedUrl from '../assets/sounds/recording-started.wav?url';
+
+export const PARTICIPANT_JOINED_SOUND_URL = joinedUrl;
 
 type ToneStep = { freq: number; startMs: number; durationMs: number; gain?: number; type?: OscillatorType };
 
@@ -18,6 +23,26 @@ function playAsset(src: string) {
   // unloaded asset prevents it from playing.
   audio.volume = 0.75;
   audio.play().catch(() => { });
+}
+
+// Browsers keep an AudioContext suspended until a user gesture. Notification cues often fire
+// from timers/polls (no gesture), so unlock once on the first click/key/touch and reuse it.
+function unlockAudio() {
+  const ctx = getContext();
+
+  if (ctx && ctx.state === 'running') {
+    removeUnlockListeners();
+  }
+}
+
+const UNLOCK_EVENTS = [ 'pointerdown', 'keydown', 'touchstart' ];
+
+function removeUnlockListeners() {
+  UNLOCK_EVENTS.forEach(e => window.removeEventListener(e, unlockAudio, true));
+}
+
+if (typeof window !== 'undefined') {
+  UNLOCK_EVENTS.forEach(e => window.addEventListener(e, unlockAudio, true));
 }
 
 function getContext(): AudioContext | null {
@@ -71,7 +96,7 @@ export function playParticipantJoinedTone() {
   if (!getPref('joinLeaveSounds')) {
     return;
   }
-  playAsset('/sounds/participant-joined.wav');
+  playAsset(joinedUrl);
 }
 
 // User-provided soft logout cue -- someone leaving.
@@ -79,13 +104,13 @@ export function playParticipantLeftTone() {
   if (!getPref('joinLeaveSounds')) {
     return;
   }
-  playAsset('/sounds/participant-left.wav');
+  playAsset(leftUrl);
 }
 
 // A distinct three-note rising arpeggio -- recording is a higher-stakes event, gets a more
 // deliberate/attention-grabbing cue than a plain join/leave blip.
 export function playRecordingStartedTone() {
-  playAsset('/sounds/recording-started.wav');
+  playAsset(recordingStartedUrl);
 }
 
 // Exact descending mirror of the recording-started arpeggio (same three pitches, reverse order)
