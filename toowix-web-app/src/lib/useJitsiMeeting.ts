@@ -473,6 +473,12 @@ export function useJitsiMeeting({
   // Debounced so a quick re-share right after stopping isn't torn down by a reconnect meant for
   // the PREVIOUS stop -- cleared whenever a new share starts, scheduled fresh on every stop.
   const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A remote participant joining can trigger a source-update offer while this browser is
+  // finishing a local media operation. Recover once from that exact, transient negotiation
+  // failure rather than leaving the participant in a broken conference. The rate limit prevents
+  // an unstable browser or network from entering an endless leave/rejoin loop.
+  const offerAnswerRecoveryRef = useRef({ windowStartedAt: 0, attempts: 0 });
+  const offerAnswerRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [ localVideoMuted, setLocalVideoMuted ] = useState(startWithVideoMuted);
   const [ hasVideoTrack, setHasVideoTrack ] = useState(false);
   const [ localCameraStream, setLocalCameraStream ] = useState<MediaStream | null>(null);
@@ -1056,7 +1062,7 @@ export function useJitsiMeeting({
     let myRoom: any = null;
     let myAudioTrack: any = null;
     let myVideoTrack: any = null;
-    let myAddTrackInterval: any = null;
+    const myAddTrackIntervals = new Set<ReturnType<typeof setInterval>>();
     // A connection-established notification must produce exactly one JitsiConference. Without
     // this per-connection guard, a duplicate connection event can create a second local session;
     // the first session then appears in the roster as a brief extra participant until the server
@@ -1495,6 +1501,32 @@ export function useJitsiMeeting({
               if (isStale()) {
                 return;
               }
+
+              const normalizedError = String(errorType || '').toLowerCase();
+
+              if (normalizedError.includes('offeranswerfailed')) {
+                const now = Date.now();
+                const recovery = offerAnswerRecoveryRef.current;
+
+                if (now - recovery.windowStartedAt > 60_000) {
+                  recovery.windowStartedAt = now;
+                  recovery.attempts = 0;
+                }
+
+                if (recovery.attempts < 1 && !offerAnswerRecoveryTimerRef.current) {
+                  recovery.attempts += 1;
+                  setError('Refreshing the media connection…');
+                  offerAnswerRecoveryTimerRef.current = setTimeout(() => {
+                    offerAnswerRecoveryTimerRef.current = null;
+                    if (!isStale()) {
+                      setReconnectEpoch(epoch => epoch + 1);
+                    }
+                  }, 300);
+
+                  return;
+                }
+              }
+
               setError(`Conference failed: ${errorType}`);
             });
 
@@ -1592,7 +1624,19 @@ export function useJitsiMeeting({
 
         const tryAddTrack = (track: any) => {
           if (roomRef.current === myRoom && myRoom && !isStale()) {
-            myRoom.addTrack(track).catch(() => {});
+            // Audio and camera acquisition resolve independently. Adding both directly can
+            // start two SDP offer/answer exchanges at once; a third participant's source update
+            // can then collide with them. Keep initial media on the same queue as device changes
+            // and screen-share operations.
+            void runSerializedRoomOperation(async () => {
+              if (roomRef.current !== myRoom || isStale()) {
+                return;
+              }
+              await myRoom.addTrack(track);
+            }).catch((err) => {
+              // eslint-disable-next-line no-console
+              console.warn('[useJitsiMeeting] initial media track could not be added:', err);
+            });
 
             return true;
           }
@@ -1605,10 +1649,11 @@ export function useJitsiMeeting({
             const interval = setInterval(() => {
               if (tryAddTrack(track) || isStale()) {
                 clearInterval(interval);
+                myAddTrackIntervals.delete(interval);
               }
             }, 200);
 
-            myAddTrackInterval = interval;
+            myAddTrackIntervals.add(interval);
           }
         });
       } catch (err: any) {
@@ -1625,9 +1670,8 @@ export function useJitsiMeeting({
       // racing a newer invocation's setup.
       generationRef.current++;
 
-      if (myAddTrackInterval) {
-        clearInterval(myAddTrackInterval);
-      }
+      myAddTrackIntervals.forEach(interval => clearInterval(interval));
+      myAddTrackIntervals.clear();
       try {
         myAudioTrack?.dispose();
         myVideoTrack?.dispose();
@@ -1658,6 +1702,10 @@ export function useJitsiMeeting({
       if (pendingReconnectTimerRef.current) {
         clearTimeout(pendingReconnectTimerRef.current);
         pendingReconnectTimerRef.current = null;
+      }
+      if (offerAnswerRecoveryTimerRef.current) {
+        clearTimeout(offerAnswerRecoveryTimerRef.current);
+        offerAnswerRecoveryTimerRef.current = null;
       }
       if (localDesktopTrackRef.current) {
         try {
