@@ -241,24 +241,30 @@ export default class JitsiStreamBackgroundEffect {
     // @ts-ignore
     this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, outWidth, outHeight);
 
-    // Draw the background behind everything else.
+    // Draw the background behind everything else. Blur destroys fine detail, so drawing the full
+    // native video into the full output size and THEN blurring it (as this used to do on any
+    // browser with Canvas2D.filter) wastes almost all of that work -- it was a second full-
+    // resolution draw of the whole camera frame every single frame, on top of the sharp foreground
+    // draw above, and was the single heaviest part of the per-frame CPU cost: the extra work is
+    // what dropped frames under load, visible as stutter/strobing especially while moving. Instead,
+    // downsample first (same technique the old Safari-only fallback used, now used everywhere) --
+    // a small blurred source scaled back up looks the same as a full-size one once blurred, for a
+    // fraction of the pixels.
     this._outputCanvasCtx.globalCompositeOperation = 'destination-over';
     if (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
       this._outputCanvasCtx.drawImage(this._virtualImage, 0, 0, outWidth, outHeight);
-    } else if (supportsFilter) {
-      this._outputCanvasCtx.filter = `blur(${this._options.virtualBackground.blurValue}px)`;
-      // @ts-ignore
-      this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, outWidth, outHeight);
     } else {
-      // Safari versions without Canvas2D.filter: approximate blur by downsampling
-      // and smoothing the background only. The masked foreground remains sharp.
-      const scale = Math.max(8, this._options.virtualBackground.blurValue || 8);
+      const scale = Math.max(4, this._options.virtualBackground.blurValue || 8);
       const bWidth = Math.max(1, Math.round(outWidth / scale));
       const bHeight = Math.max(1, Math.round(outHeight / scale));
       if (this._blurCanvas.width !== bWidth) this._blurCanvas.width = bWidth;
       if (this._blurCanvas.height !== bHeight) this._blurCanvas.height = bHeight;
       const context = this._blurCanvas.getContext('2d');
       if (context) {
+        // A touch of real blur on the now-tiny source is nearly free and smooths out the
+        // downsampling itself; browsers without Canvas2D.filter (older Safari) just skip it and
+        // rely on the downsample + upscale alone, as before.
+        if (supportsFilter) context.filter = 'blur(1px)';
         context.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, bWidth, bHeight);
         this._outputCanvasCtx.imageSmoothingEnabled = true;
         this._outputCanvasCtx.drawImage(this._blurCanvas, 0, 0, outWidth, outHeight);

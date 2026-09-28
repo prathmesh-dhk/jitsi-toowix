@@ -87,11 +87,17 @@ test('uses background-only blur fallback without Canvas2D.filter', () => {
   assert.equal('filter' in s.effect._outputCanvasCtx, false);
 });
 
-test('retains native filter on browsers that support it', () => {
+test('background blur downsamples before blurring even when Canvas2D.filter is supported', () => {
+  // Drawing (and filter-blurring) the full camera frame into the full output size, on top of the
+  // same full-size draw already done for the sharp foreground, doubled the per-frame compositing
+  // cost. Blur hides detail anyway, so the background layer is downsampled first on every browser
+  // now (previously only the no-filter Safari fallback below did this) -- the little upscale draw
+  // that follows is what actually lands on the output canvas.
   const s = setup();
   s.effect.runPostProcessing();
-  assert.equal(s.effect._outputCanvasCtx.filter, 'blur(25px)');
-  assert.equal(s.draws.at(-1)[0], s.video);
+  assert.equal(s.effect._blurCanvas.width, 26);
+  assert.equal(s.effect._blurCanvas.height, 14);
+  assert.equal(s.draws.at(-1)[0], s.effect._blurCanvas);
 });
 
 test('a transient frame error does not stop the worker schedule', () => {
