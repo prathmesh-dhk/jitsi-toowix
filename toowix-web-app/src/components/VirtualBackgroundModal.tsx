@@ -19,6 +19,16 @@ const PRESET_IMAGES = Array.from({ length: 7 }, (_, i) => `/images/virtual-backg
 
 type SelectionKey = 'none' | `blur-${number}` | `image-${number}`;
 
+// The effect produces a new camera stream from a Canvas. Safari on iPhone/iPad does not
+// currently implement HTMLCanvasElement.captureStream(), so letting a user select an option
+// there can never work. Detect this before rendering selectable cards rather than showing a
+// broken-image grid and failing only after a tap.
+export function supportsVirtualBackground(): boolean {
+  if (typeof document === 'undefined') return false;
+
+  return typeof document.createElement('canvas').captureStream === 'function';
+}
+
 function getBackgroundErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || '');
   const normalized = message.toLowerCase();
@@ -56,6 +66,8 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
   if (!isOpen) {
     return null;
   }
+
+  const isSupported = supportsVirtualBackground();
 
   const apply = async (key: SelectionKey, config: IVirtualBackground | null) => {
     setBusyKey(key);
@@ -123,6 +135,21 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
           Blur or replace what's behind you. Runs entirely on your device.
         </div>
 
+        {!isSupported ? (
+          <div
+            style={{
+              color: '#F87171',
+              fontSize: '13px',
+              lineHeight: 1.5,
+              padding: '12px',
+              borderRadius: '10px',
+              backgroundColor: 'rgba(248,113,113,0.1)'
+            }}
+          >
+            Virtual backgrounds are not supported by this browser or device for this call. Safari on iPhone and iPad does not yet provide the required video-processing capability. Use Chrome or Edge on a desktop device to blur or replace your background.
+          </div>
+        ) : (
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
           <div style={optionStyle('none')} onClick={() => !busyKey && apply('none', null)}>
             <div
@@ -183,6 +210,7 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
             );
           })}
         </div>
+        )}
 
         {error && <div style={{ fontSize: '12px', color: '#F87171', marginTop: '12px' }}>{error}</div>}
       </div>
