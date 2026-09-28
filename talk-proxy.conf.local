@@ -25,6 +25,13 @@ server {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
     }
+    # Preset virtual-background photos are static Toowix application assets.
+    # Without this explicit route, the safe unknown-path redirect below sends
+    # them to /meeting-link-expired and the browser renders broken thumbnails.
+    location /images/virtual-background/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+    }
     location = /lib-jitsi-meet.min.js {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
