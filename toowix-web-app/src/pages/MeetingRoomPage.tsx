@@ -448,7 +448,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
               autoPlay
               playsInline
               muted
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
             />
 
             {/* Floating Presenter Pill Badge */}
@@ -4829,7 +4829,7 @@ export function MeetingRoomPage() {
                     autoPlay
                     playsInline
                     muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 ) : primaryShare?.kind === 'remote' ? (
                   <video
@@ -4838,7 +4838,7 @@ export function MeetingRoomPage() {
                     playsInline
                     muted
                     data-testid="remote-screen-share-video"
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 ) : jitsiMeeting.sharedVideo ? (
                   <Suspense fallback={null}>
