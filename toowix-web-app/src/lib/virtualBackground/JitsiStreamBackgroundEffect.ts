@@ -35,10 +35,11 @@ const SEG_HEIGHT = 144;
 const DEFAULT_MAX_OUTPUT_HEIGHT = 720;
 
 // How much of the previous frame's mask carries into this one (0 = no smoothing, 1 = frozen).
-// A raw per-frame mask has no memory, so the silhouette edge jitters independently every frame --
-// visible as flicker when still. Blending toward the previous frame trades a little edge lag for a
-// stable, Google-Meet-like edge; kept low so movement doesn't visibly drag the mask behind you.
-const MASK_TEMPORAL_SMOOTHING = 0.3;
+// A raw per-frame mask has no memory, so the silhouette edge jitters/fluctuates independently every
+// frame -- most visible exactly when moving, which is when the low-res (256x144) segmentation model
+// is least stable frame to frame. 0.3 was tried and wasn't enough to stop that jitter; the edge lag
+// this trades in return is a few frames (~100ms at 30fps) and isn't perceptible at normal speed.
+const MASK_TEMPORAL_SMOOTHING = 0.6;
 
 export default class JitsiStreamBackgroundEffect {
   _inputVideoElement: HTMLVideoElement;

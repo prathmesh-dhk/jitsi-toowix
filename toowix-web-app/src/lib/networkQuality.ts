@@ -166,14 +166,13 @@ export function getAudioMaxBitrateBps(state: NetworkState): number {
   return 40000;
 }
 
-// Output resolution cap for the virtual background/blur compositor. Scales with both the network
-// state (so a weak link renders less, same direction as the rest of the call's video quality) and
-// the call-size ceiling (so a 1-on-1 on a great connection looks noticeably sharper than an 8-way
-// grid). Capped at 1080p regardless -- higher than that the effect re-segments and redraws every
-// pixel on the CPU every frame (Canvas2D, no GPU) faster than it can keep up, which is what caused
-// visible lag/stutter when someone moved once camera capture could reach 4K.
+// Output resolution cap for the virtual background/blur compositor. Scales down with a weaker
+// network (same direction as the rest of the call's video quality), but the good-network ceiling
+// is fixed at 720p regardless of call size -- 1080p was tried and measurably lagged even a 1-on-1
+// call: the effect re-segments and redraws every pixel on the CPU every frame (Canvas2D, no GPU,
+// plus a blur filter pass), and 1080p was more work than that pipeline can do in real time.
 export function getBackgroundEffectMaxHeight(state: NetworkState, callSizeMaxHeight: number): number {
-  const ceiling = Math.min(callSizeMaxHeight, 1080);
+  const ceiling = Math.min(callSizeMaxHeight, 720);
 
   if (state === 'POOR') return 180;
   if (state === 'DEGRADED' || state === 'RECOVERING') return Math.min(360, ceiling);
