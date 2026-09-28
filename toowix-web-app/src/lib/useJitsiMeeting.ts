@@ -1843,7 +1843,14 @@ export function useJitsiMeeting({
       }
       // Our own uplink follows the same state: cap what we send when the network is weak and lift
       // the cap again (to the call-size ceiling) once it has recovered.
-      void Promise.resolve(room.setSenderVideoConstraint?.(networkState === 'GOOD' ? Math.max(base, 720) : height)).catch(() => undefined);
+      const sendHeight = networkState === 'GOOD' ? Math.max(base, 720) : height;
+
+      void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+      // A virtual background/blur effect renders and re-encodes every frame on the CPU at
+      // whatever resolution it's told to -- give it the same cap as the rest of the call's
+      // outgoing video, so a weak network or a large call also lightens that work instead of
+      // always compositing at a fixed size regardless of conditions.
+      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(sendHeight);
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
@@ -2448,6 +2455,14 @@ export function useJitsiMeeting({
 
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     const effect = await createVirtualBackgroundEffect(config);
+
+    // Apply today's network-driven cap immediately -- otherwise this would sit at the effect's
+    // own 720p default until the next network-quality tick (a few seconds away).
+    effect.setMaxOutputHeight?.(
+      networkStateRef.current === 'POOR' ? 180
+        : networkStateRef.current === 'DEGRADED' || networkStateRef.current === 'RECOVERING' ? 360
+          : 720
+    );
 
     if (track) {
       await track.setEffect(effect);

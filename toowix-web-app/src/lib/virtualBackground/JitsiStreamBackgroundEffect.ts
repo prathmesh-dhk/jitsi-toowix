@@ -25,6 +25,21 @@ export interface IVirtualBackground {
 const SEG_WIDTH = 256;
 const SEG_HEIGHT = 144;
 
+// Segmentation always runs at the small fixed size above, but compositing (drawing the mask +
+// sharp foreground + blurred/image background together) happens at full camera resolution every
+// frame -- CPU work that scales with pixel count. Camera capture can now request up to 4K/1080p,
+// and rendering/encoding a background effect at that size every frame is what caused dropped
+// frames (visible as flicker and softer video) once capture stopped being hard-capped at 720p.
+// 720p keeps this real-time on ordinary hardware; useJitsiMeeting lowers it further to match the
+// same network-driven cap the rest of the call's video quality follows (setMaxOutputHeight).
+const DEFAULT_MAX_OUTPUT_HEIGHT = 720;
+
+// How much of the previous frame's mask carries into this one (0 = no smoothing, 1 = frozen).
+// A raw per-frame mask has no memory, so the silhouette edge jitters independently every frame --
+// visible as flicker, especially moving. Blending toward the previous frame trades a little edge
+// lag (imperceptible at 30fps) for a stable, Google-Meet-like edge.
+const MASK_TEMPORAL_SMOOTHING = 0.55;
+
 export default class JitsiStreamBackgroundEffect {
   _inputVideoElement: HTMLVideoElement;
   _maskFrameTimerWorker: Worker | null = null;
@@ -42,6 +57,8 @@ export default class JitsiStreamBackgroundEffect {
   _sourceTrack: MediaStreamTrack | null = null;
   _lastPlaybackError = '';
   _frameErrorReported = false;
+  _maxOutputHeight = DEFAULT_MAX_OUTPUT_HEIGHT;
+  _smoothedMask: Float32Array | null = null;
   _resumeInput = () => {
     if (!this._stream || document.hidden) return;
     void this._inputVideoElement.play().catch((error: unknown) => {
@@ -79,6 +96,25 @@ export default class JitsiStreamBackgroundEffect {
     return jitsiLocalTrack.isVideoTrack() && jitsiLocalTrack.videoType === 'camera';
   }
 
+  // Lets the caller (useJitsiMeeting's network-quality effect) lower or raise the rendered/
+  // encoded output resolution to match the same call-size/network-state cap the rest of the
+  // call's video quality already follows -- so a background effect on a weak connection or a
+  // large call renders less, instead of always paying full 720p compositing cost regardless.
+  setMaxOutputHeight(height: number) {
+    this._maxOutputHeight = Math.max(90, Math.round(height) || DEFAULT_MAX_OUTPUT_HEIGHT);
+  }
+
+  // Scales (nativeWidth, nativeHeight) down to fit within _maxOutputHeight, preserving aspect
+  // ratio. Never scales up -- a camera already at or under the cap renders at its own resolution.
+  _getOutputSize(nativeWidth: number, nativeHeight: number): { height: number; width: number } {
+    const scale = Math.min(1, this._maxOutputHeight / (nativeHeight || this._maxOutputHeight));
+
+    return {
+      height: Math.max(1, Math.round(nativeHeight * scale)),
+      width: Math.max(1, Math.round(nativeWidth * scale))
+    };
+  }
+
   startEffect(stream: MediaStream): MediaStream {
     this.stopEffect();
     const firstVideoTrack = stream.getVideoTracks()[0];
@@ -91,15 +127,22 @@ export default class JitsiStreamBackgroundEffect {
     this._stream = stream;
     this._lastPlaybackError = '';
     this._frameErrorReported = false;
+    this._smoothedMask = null;
     this._sourceTrack = firstVideoTrack;
     const settings = firstVideoTrack.getSettings ? firstVideoTrack.getSettings() : firstVideoTrack.getConstraints();
     const { height, frameRate, width } = settings as any;
+    const nativeWidth = Number(width) || 640;
+    const nativeHeight = Number(height) || 360;
+    const output = this._getOutputSize(nativeWidth, nativeHeight);
 
-    this._outputCanvasElement.width = Number(width) || 640;
-    this._outputCanvasElement.height = Number(height) || 360;
+    this._outputCanvasElement.width = output.width;
+    this._outputCanvasElement.height = output.height;
     this._outputCanvasCtx = this._outputCanvasElement.getContext('2d');
-    this._inputVideoElement.width = this._outputCanvasElement.width;
-    this._inputVideoElement.height = this._outputCanvasElement.height;
+    // The <video> element's own box is kept at the camera's NATIVE size (not the capped output)
+    // so segmentation (resizeSource) always samples the full picture; only the final composite
+    // draws are scaled down to the capped output size.
+    this._inputVideoElement.width = nativeWidth;
+    this._inputVideoElement.height = nativeHeight;
     this._inputVideoElement.autoplay = true;
     this._inputVideoElement.srcObject = stream;
     document.addEventListener('visibilitychange', this._resumeInput);
@@ -170,53 +213,54 @@ export default class JitsiStreamBackgroundEffect {
     const { height, width } = settings as any;
     const { backgroundType } = this._options.virtualBackground;
 
-    const frameWidth = this._inputVideoElement.videoWidth || Number(width) || 640;
-    const frameHeight = this._inputVideoElement.videoHeight || Number(height) || 360;
-    this._inputVideoElement.width = frameWidth;
-    this._inputVideoElement.height = frameHeight;
-    if (this._outputCanvasElement.height !== frameHeight) this._outputCanvasElement.height = frameHeight;
-    if (this._outputCanvasElement.width !== frameWidth) this._outputCanvasElement.width = frameWidth;
+    const nativeWidth = this._inputVideoElement.videoWidth || Number(width) || 640;
+    const nativeHeight = this._inputVideoElement.videoHeight || Number(height) || 360;
+    this._inputVideoElement.width = nativeWidth;
+    this._inputVideoElement.height = nativeHeight;
+
+    const { width: outWidth, height: outHeight } = this._getOutputSize(nativeWidth, nativeHeight);
+    if (this._outputCanvasElement.height !== outHeight) this._outputCanvasElement.height = outHeight;
+    if (this._outputCanvasElement.width !== outWidth) this._outputCanvasElement.width = outWidth;
     this._outputCanvasCtx.globalCompositeOperation = 'copy';
 
-    // Draw the (blurred-edge) segmentation mask.
+    // Draw the (blurred-edge) segmentation mask, scaled to the (possibly capped) output size.
     const supportsFilter = 'filter' in this._outputCanvasCtx;
     if (supportsFilter) this._outputCanvasCtx.filter = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 'blur(4px)' : 'blur(8px)';
     this._outputCanvasCtx.drawImage(
         // @ts-ignore
         this._segmentationMaskCanvas,
         0, 0, this._options.width, this._options.height,
-        0, 0, this._inputVideoElement.width, this._inputVideoElement.height
+        0, 0, outWidth, outHeight
     );
     this._outputCanvasCtx.globalCompositeOperation = 'source-in';
     if (supportsFilter) this._outputCanvasCtx.filter = 'none';
 
-    // Draw the sharp foreground (you) on top, masked by the alpha channel above.
+    // Draw the sharp foreground (you) on top, masked by the alpha channel above -- scaled from
+    // the camera's native resolution down to the (possibly capped) output size.
     // @ts-ignore
-    this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0);
+    this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, outWidth, outHeight);
 
     // Draw the background behind everything else.
     this._outputCanvasCtx.globalCompositeOperation = 'destination-over';
     if (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
-      this._outputCanvasCtx.drawImage(
-          this._virtualImage, 0, 0, this._outputCanvasElement.width, this._outputCanvasElement.height
-      );
+      this._outputCanvasCtx.drawImage(this._virtualImage, 0, 0, outWidth, outHeight);
     } else if (supportsFilter) {
       this._outputCanvasCtx.filter = `blur(${this._options.virtualBackground.blurValue}px)`;
       // @ts-ignore
-      this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0);
+      this._outputCanvasCtx.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, outWidth, outHeight);
     } else {
       // Safari versions without Canvas2D.filter: approximate blur by downsampling
       // and smoothing the background only. The masked foreground remains sharp.
       const scale = Math.max(8, this._options.virtualBackground.blurValue || 8);
-      const width = Math.max(1, Math.round(frameWidth / scale));
-      const height = Math.max(1, Math.round(frameHeight / scale));
-      if (this._blurCanvas.width !== width) this._blurCanvas.width = width;
-      if (this._blurCanvas.height !== height) this._blurCanvas.height = height;
+      const bWidth = Math.max(1, Math.round(outWidth / scale));
+      const bHeight = Math.max(1, Math.round(outHeight / scale));
+      if (this._blurCanvas.width !== bWidth) this._blurCanvas.width = bWidth;
+      if (this._blurCanvas.height !== bHeight) this._blurCanvas.height = bHeight;
       const context = this._blurCanvas.getContext('2d');
       if (context) {
-        context.drawImage(this._inputVideoElement, 0, 0, width, height);
+        context.drawImage(this._inputVideoElement, 0, 0, nativeWidth, nativeHeight, 0, 0, bWidth, bHeight);
         this._outputCanvasCtx.imageSmoothingEnabled = true;
-        this._outputCanvasCtx.drawImage(this._blurCanvas, 0, 0, frameWidth, frameHeight);
+        this._outputCanvasCtx.drawImage(this._blurCanvas, 0, 0, outWidth, outHeight);
       }
     }
   }
@@ -225,10 +269,17 @@ export default class JitsiStreamBackgroundEffect {
     this._model._runInference();
     const outputMemoryOffset = this._model._getOutputMemoryOffset() / 4;
 
+    if (!this._smoothedMask || this._smoothedMask.length !== this._segmentationPixelCount) {
+      this._smoothedMask = new Float32Array(this._segmentationPixelCount);
+    }
     for (let i = 0; i < this._segmentationPixelCount; i++) {
       const person = this._model.HEAPF32[outputMemoryOffset + i];
+      // Blend toward the previous frame's value instead of using this frame's raw mask directly
+      // -- see MASK_TEMPORAL_SMOOTHING above for why (reduces edge flicker on movement).
+      const smoothed = (this._smoothedMask[i] * MASK_TEMPORAL_SMOOTHING) + (person * (1 - MASK_TEMPORAL_SMOOTHING));
 
-      this._segmentationMask.data[(i * 4) + 3] = 255 * person;
+      this._smoothedMask[i] = smoothed;
+      this._segmentationMask.data[(i * 4) + 3] = 255 * smoothed;
     }
     this._segmentationMaskCtx?.putImageData(this._segmentationMask, 0, 0);
   }

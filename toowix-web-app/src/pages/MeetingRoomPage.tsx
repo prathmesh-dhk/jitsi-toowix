@@ -258,7 +258,7 @@ function PipRemoteVideo({ stream }: { stream: MediaStream }) {
       autoPlay
       playsInline
       muted
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
     />
   );
 }
@@ -499,7 +499,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                   autoPlay
                   playsInline
                   muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
               ) : (
                 <div
@@ -563,7 +563,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                 autoPlay
                 playsInline
                 muted
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             ) : (
               <div
@@ -664,7 +664,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                   autoPlay
                   playsInline
                   muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
               ) : (
                 <div
@@ -4968,7 +4968,7 @@ export function MeetingRoomPage() {
                       autoPlay
                       playsInline
                       muted
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                     />
                   ) : (
                     <div
@@ -5082,7 +5082,7 @@ export function MeetingRoomPage() {
                               el.play().catch(() => { });
                             }
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                         />
                       ) : (
                         <div
@@ -5202,7 +5202,7 @@ export function MeetingRoomPage() {
                   style={{
                     width: '100%',
                     height: '100%',
-                    objectFit: 'cover',
+                    objectFit: 'contain',
                     borderRadius: '24px',
                   }}
                 />
@@ -5337,6 +5337,9 @@ export function MeetingRoomPage() {
                   <>
                     {/* Main pinned stage */}
                     <div
+                      // Double-click the big stage tile to go back to tile view -- the same
+                      // gesture that pinned it in the first place toggles it back off.
+                      onDoubleClick={() => setTileViewEnabled(true)}
                       style={{
                         flex: 1,
                         minWidth: 0,
@@ -5349,6 +5352,7 @@ export function MeetingRoomPage() {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        cursor: 'pointer',
                       }}
                     >
                       <SpeakingOverlay id={isLocalPinned ? 'local' : pinned?.id} />
@@ -5359,7 +5363,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'contain', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5396,7 +5400,7 @@ export function MeetingRoomPage() {
                               el.play().catch(() => { });
                             }
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                         />
                       ) : (
                         <div
@@ -5500,7 +5504,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'contain', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5593,7 +5597,7 @@ export function MeetingRoomPage() {
                                     el.play().catch(() => { });
                                   }
                                 }}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                               />
                             ) : (
                               <div
@@ -5695,6 +5699,13 @@ export function MeetingRoomPage() {
               {/* 1. Local Participant Card */}
               <div
                 key="local-participant"
+                // Double-click a tile to pin it and switch to speaker (stage) view, same as
+                // clicking the small pin button in its corner -- matches Google Meet's tile
+                // double-click behavior instead of requiring the tiny pin icon to be hit exactly.
+                onDoubleClick={() => {
+                  setPinnedParticipantId('local');
+                  setTileViewEnabled(false);
+                }}
                 style={{
                   width: '100%',
                   height: '100%',
@@ -5709,6 +5720,7 @@ export function MeetingRoomPage() {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  cursor: 'pointer',
                 }}
               >
                 {inCallVideo ? (
@@ -5717,7 +5729,7 @@ export function MeetingRoomPage() {
                     autoPlay
                     playsInline
                     muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '24px' }}
                   />
                 ) : (
                   <div
@@ -5846,6 +5858,14 @@ export function MeetingRoomPage() {
                 return (
                   <div
                     key={remote.id || idx}
+                    // Double-click a tile to pin it and switch to speaker (stage) view, same as
+                    // clicking the small pin button in its corner.
+                    onDoubleClick={() => {
+                      const isPinned = pinnedParticipantId === remote.id;
+
+                      setPinnedParticipantId(isPinned ? null : remote.id);
+                      setTileViewEnabled(isPinned);
+                    }}
                     style={{
                       width: '100%',
                       height: '100%',
@@ -5858,6 +5878,7 @@ export function MeetingRoomPage() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
+                      cursor: 'pointer',
                     }}
                   >
                     <SpeakingOverlay id={remote.id} />
@@ -5928,7 +5949,7 @@ export function MeetingRoomPage() {
                             el.play().catch(() => { });
                           }
                         }}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '24px' }}
                       />
                     ) : (
                       <div
@@ -8470,7 +8491,7 @@ export function MeetingRoomPage() {
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'cover',
+                  objectFit: 'contain',
                   transform: 'scaleX(-1)',
                 }}
               />
@@ -8826,7 +8847,7 @@ export function MeetingRoomPage() {
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'cover',
+                  objectFit: 'contain',
                   transform: 'scaleX(-1)',
                 }}
               />
