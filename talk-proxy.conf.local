@@ -73,6 +73,18 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
+    # The Toowix virtual-background effect loads these two binary assets only after a
+    # participant selects a background. Keep this allowlist exact: /libs/ otherwise stays
+    # private except for the Jitsi library above.
+    location = /libs/tflite.wasm {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+    }
+    location = /libs/selfie_segmentation_landscape.tflite {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
         proxy_set_header Host $host;
