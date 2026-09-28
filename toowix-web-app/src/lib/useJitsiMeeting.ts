@@ -63,32 +63,6 @@ export interface IRemoteParticipant {
   audioStream: MediaStream | null;
 }
 
-/**
- * The conference API exposes the signed JWT user object on remote presence, but does not expose
- * it for the local participant. Reading the already-issued local token gives us a stable identity
- * to distinguish our own stale connection from a real attendee with the same display name.
- * This is only a client-side roster guard; authorization remains entirely server-side.
- */
-function getJwtUserId(jwt: string | undefined): string | null {
-  if (!jwt) {
-    return null;
-  }
-
-  try {
-    const payload = jwt.split('.')[1];
-    if (!payload) {
-      return null;
-    }
-    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const json = decodeURIComponent(atob(base64).split('').map((char) => `%${(`00${char.charCodeAt(0).toString(16)}`).slice(-2)}`).join(''));
-    const userId = JSON.parse(json)?.context?.user?.id;
-
-    return typeof userId === 'string' && userId.trim() ? userId : null;
-  } catch {
-    return null;
-  }
-}
-
 interface IUseJitsiMeetingOptions {
   jitsiDomain: string;
   roomName: string;
@@ -162,6 +136,10 @@ const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
 // with a single layer (only an FID group is advertised). One layer is also a third of the
 // encoder CPU/uplink, which is what small Toowix calls and phones want anyway.
 const SEND_SINGLE_VIDEO_LAYER = true;
+// Ceiling for a single room.addTrack/removeTrack/replaceTrack call inside the shared
+// trackOperationQueueRef queue (see runSerializedRoomOperation) -- see its comment for why this
+// has to live at the queue level and not just at each caller's own await.
+const ROOM_OPERATION_TIMEOUT_MS = 8000;
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -518,7 +496,14 @@ export function useJitsiMeeting({
   const [ dominantSpeakerId, setDominantSpeakerId ] = useState<string | null>(null);
   const [ localParticipantId, setLocalParticipantId ] = useState<string | null>(null);
   const localConferenceIdRef = useRef<string | null>(null);
-  const localIdentityUserIdRef = useRef<string | null>(getJwtUserId(jwt));
+  // A stable id for THIS TAB/DEVICE only -- generated once when the hook first mounts, so it
+  // survives a reconnect (same tab, same value) but is different for every other tab, browser or
+  // device, even ones logged in as the exact same account (which share a JWT user id -- two
+  // genuinely different sessions of the same person legitimately do, and must still show up as
+  // two separate participant cards instead of one being treated as the other's stale duplicate).
+  const localSessionIdRef = useRef<string>(
+    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
   // Real, JVB/Jibri-confirmed recording state -- driven by RECORDER_STATE_CHANGED, which fires
   // for EVERY participant (it rides XMPP presence broadcast to the whole room, not just the
   // person who clicked start), unlike a locally-optimistic flag that only the initiator would
@@ -663,15 +648,25 @@ export function useJitsiMeeting({
   onForceMutedRef.current = onForceMuted;
   existingStreamRef.current = existingStream;
   deviceIdsRef.current = { audioDeviceId, videoDeviceId };
-  localIdentityUserIdRef.current = getJwtUserId(jwt);
 
   // Runs `fn` only after every previously-queued room operation has settled (see
   // trackOperationQueueRef above for why). `.then(fn, fn)` -- not `.then(fn).catch(...)` -- so a
   // PRIOR failed operation still lets this one run instead of leaving the queue stuck forever;
   // the queue's own stored promise is separately caught so one failure can't reject the chain
   // for whichever operation queues next.
+  //
+  // fn() itself is raced against ROOM_OPERATION_TIMEOUT_MS before it's allowed to settle the
+  // queue. This used to be missing: a caller could wrap its OWN await in withTimeout() (several
+  // still do, for faster local UI recovery -- e.g. stopScreenShareInternal), but that only freed
+  // that one caller. The queue's stored promise was still built from the raw, un-timed fn(), so
+  // if the underlying room.addTrack/removeTrack call genuinely stalled (slow JVB response, a
+  // renegotiation hiccup while another operation like a remote participant's own screen share was
+  // in flight), every operation queued after it -- toggling the camera, starting a share, on a
+  // completely different call to runSerializedRoomOperation -- hung right along with it, forever.
+  // This is what showed up as the camera "freezing" while toggling it during a screen share.
   const runSerializedRoomOperation = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
-    const result = trackOperationQueueRef.current.then(fn, fn);
+    const bounded = () => withTimeout(fn(), ROOM_OPERATION_TIMEOUT_MS, 'Room operation timed out');
+    const result = trackOperationQueueRef.current.then(bounded, bounded);
 
     trackOperationQueueRef.current = result.catch(() => undefined);
 
@@ -1164,9 +1159,13 @@ export function useJitsiMeeting({
                 return true;
               }
 
-              const participantUserId = participant?.getIdentity?.()?.user?.id;
+              // Matched by THIS TAB's own session id, not the JWT account id -- two tabs/devices
+              // signed in as the same person share a JWT user id but must still show up as two
+              // separate participant cards. A stale reconnect of THIS session carries the same
+              // session id it always has, so it's still correctly filtered out here.
+              const participantSessionId = participant?.getProperty?.('deviceSessionId');
 
-              return Boolean(participantUserId && participantUserId === localIdentityUserIdRef.current);
+              return Boolean(participantSessionId && participantSessionId === localSessionIdRef.current);
             };
 
             room.on(JitsiMeetJS.events.conference.TRACK_ADDED, (track: any) => {
@@ -1598,6 +1597,11 @@ export function useJitsiMeeting({
             });
 
             room.setDisplayName(displayName || 'Participant');
+            // Broadcast BEFORE join() so it's present in this session's very first presence --
+            // lets isLocalParticipantEvent tell "my own stale reconnect" (same tab, same session
+            // id) apart from "a different tab/device signed in as the same account" (same JWT
+            // user id, different session id), which must show up as its own participant card.
+            room.setLocalParticipantProperty?.('deviceSessionId', localSessionIdRef.current);
             room.join();
           }
         );
