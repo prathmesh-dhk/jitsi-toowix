@@ -140,6 +140,8 @@ const SEND_SINGLE_VIDEO_LAYER = true;
 // trackOperationQueueRef queue (see runSerializedRoomOperation) -- see its comment for why this
 // has to live at the queue level and not just at each caller's own await.
 const ROOM_OPERATION_TIMEOUT_MS = 8000;
+// See recomputeRemoteScreenShare's comment for why this exists and why it's short.
+const SCREEN_SHARE_CLEAR_DEBOUNCE_MS = 200;
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -982,7 +984,11 @@ export function useJitsiMeeting({
   // brief null forces the whole presentation stage to unmount back to tile view and then
   // immediately remount for B, which is what showed up as a laggy/stuck handoff between
   // presenters. Debounce the "nobody is sharing" clear slightly so a same-beat handoff never
-  // produces that flicker; a real "everyone stopped sharing" still clears, just ~600ms later.
+  // produces that flicker; a real "everyone stopped sharing" still clears, just a little later.
+  // 600ms was needlessly generous for what this is guarding against (a same-beat A-stops/B-starts
+  // handoff completes within one signaling round trip, well under this) and was adding a fully
+  // avoidable, noticeable pause every time someone JUST stops sharing with no handoff -- the far
+  // more common case.
   const screenShareClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // True only while the track's underlying native MediaStreamTrack can still produce frames.
@@ -1014,16 +1020,13 @@ export function useJitsiMeeting({
 
     const entries = Object.entries(remoteDesktopTracksRef.current);
     void applyMediaQualityPolicy();
-    // TEMP diagnostic for the "viewer's screen-share freezes after presenter stops" investigation
-    // -- remove once confirmed fixed. Unconditional (not DEV-gated) so it shows up on the
-    // production build being tested against.
 
     if (entries.length === 0) {
       screenShareClearTimerRef.current = setTimeout(() => {
         screenShareClearTimerRef.current = null;
         setRemoteScreenShare(null);
         setRemoteScreenShares([]);
-      }, 600);
+      }, SCREEN_SHARE_CLEAR_DEBOUNCE_MS);
 
       return;
     }
