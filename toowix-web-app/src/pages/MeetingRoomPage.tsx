@@ -239,6 +239,45 @@ const ElapsedClock = memo(function ElapsedClock({ startedAt }: { startedAt: numb
   return <>{formatDuration(startedAt == null ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))}</>;
 });
 
+// Ticks every second, same self-ticking pattern as ElapsedClock above, but counting DOWN to a
+// meeting's scheduled/free-tier end time -- renders nothing until inside the final 5 minutes (see
+// the 5-minutes-remaining effect in MeetingRoomPage, which fires the matching tone/toast at the
+// same threshold), then shows a live MM:SS countdown badge in the top bar for the rest of the call.
+const MeetingEndCountdown = memo(function MeetingEndCountdown({ expiresAt }: { expiresAt: string | null }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+
+    return () => window.clearInterval(timer);
+  }, [expiresAt]);
+
+  if (!expiresAt) return null;
+  const secondsRemaining = Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000);
+
+  if (secondsRemaining > 5 * 60 || secondsRemaining <= 0) return null;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        backgroundColor: 'rgba(249, 171, 0, 0.15)',
+        border: '1px solid rgba(249, 171, 0, 0.4)',
+        padding: '3px 8px',
+        borderRadius: '12px',
+      }}
+    >
+      <Clock size={13} color="#F9AB00" />
+      <span style={{ fontSize: '11px', fontWeight: 600, color: '#F9AB00', letterSpacing: '0.4px' }}>
+        Ending in {formatDuration(secondsRemaining)}
+      </span>
+    </div>
+  );
+});
+
 // Live remote camera inside the Picture-in-Picture window.
 function PipRemoteVideo({ stream }: { stream: MediaStream }) {
   const nodeRef = useRef<HTMLVideoElement | null>(null);
@@ -992,6 +1031,7 @@ export function MeetingRoomPage() {
   const [isFreeInstantMeeting] = useState<boolean>(Boolean((location.state as any)?.freeInstantMeeting));
   const freeInstantExpiresAtRef = useRef<number | null>(null);
   const tenMinuteWarningFiredRef = useRef(false);
+  const fiveMinuteWarningFiredRef = useRef(false);
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
   const [joining, setJoining] = useState(false);
@@ -3237,6 +3277,27 @@ export function MeetingRoomPage() {
     return () => clearTimeout(timer);
   }, [hasJoined, effectiveExpiresAt]);
 
+  // 5-minutes-remaining heads-up -- the same tone used when recording starts (recognisable, more
+  // urgent than the 10-minute one above), a toast, and a live MM:SS countdown to the meeting's end
+  // shown in the top bar for the rest of the call (see MeetingEndCountdown below).
+  useEffect(() => {
+    if (!hasJoined || !effectiveExpiresAt || fiveMinuteWarningFiredRef.current) return;
+    const msUntilWarning = new Date(effectiveExpiresAt).getTime() - Date.now() - 5 * 60 * 1000;
+
+    if (msUntilWarning <= 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (fiveMinuteWarningFiredRef.current) return;
+      fiveMinuteWarningFiredRef.current = true;
+      playRecordingStartedTone();
+      setTimeLimitToast('5 minutes left in this meeting');
+      setTimeout(() => setTimeLimitToast((t) => (t === '5 minutes left in this meeting' ? null : t)), 6000);
+    }, msUntilWarning);
+
+    return () => clearTimeout(timer);
+  }, [hasJoined, effectiveExpiresAt]);
+
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
   // Direct lib-jitsi-meet integration -- no IFrame, no external_api.js. We own the real
@@ -4647,6 +4708,8 @@ export function MeetingRoomPage() {
               <Wifi size={13} />
               <span style={{ fontSize: '11px', fontWeight: 600 }}>{networkStatusLabel}</span>
             </div>
+
+            <MeetingEndCountdown expiresAt={effectiveExpiresAt} />
 
             {/* Active Recording Pill Badge (Strictly decoupled from clock time) */}
             {recording && (
