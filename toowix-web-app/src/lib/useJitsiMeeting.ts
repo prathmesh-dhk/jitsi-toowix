@@ -13,6 +13,7 @@ import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './shar
 import {
   classifyNetwork,
   getAudioMaxBitrateBps,
+  getBackgroundEffectMaxHeight,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
   type INetworkMetrics,
@@ -1846,11 +1847,12 @@ export function useJitsiMeeting({
       const sendHeight = networkState === 'GOOD' ? Math.max(base, 720) : height;
 
       void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
-      // A virtual background/blur effect renders and re-encodes every frame on the CPU at
-      // whatever resolution it's told to -- give it the same cap as the rest of the call's
-      // outgoing video, so a weak network or a large call also lightens that work instead of
-      // always compositing at a fixed size regardless of conditions.
-      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(sendHeight);
+      // A virtual background/blur effect renders and re-encodes every frame on the CPU (Canvas2D,
+      // no GPU) -- it has its own, much lower cap than the raw camera send height above, which can
+      // go up to 4K for a 1-on-1 call. Compositing at that size every frame stalls the frame loop
+      // (visible as lag/stutter when the person moves), so it follows network state only, capped
+      // at 720p regardless of call size.
+      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkState));
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
@@ -2458,11 +2460,7 @@ export function useJitsiMeeting({
 
     // Apply today's network-driven cap immediately -- otherwise this would sit at the effect's
     // own 720p default until the next network-quality tick (a few seconds away).
-    effect.setMaxOutputHeight?.(
-      networkStateRef.current === 'POOR' ? 180
-        : networkStateRef.current === 'DEGRADED' || networkStateRef.current === 'RECOVERING' ? 360
-          : 720
-    );
+    effect.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkStateRef.current));
 
     if (track) {
       await track.setEffect(effect);

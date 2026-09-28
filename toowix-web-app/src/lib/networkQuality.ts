@@ -166,6 +166,18 @@ export function getAudioMaxBitrateBps(state: NetworkState): number {
   return 40000;
 }
 
+// Output resolution cap for the virtual background/blur compositor, by network state. Kept
+// deliberately independent of getReceiveMaxHeightForCallSize()/the raw camera send height -- those
+// can go up to 4K for a 1-on-1 call, but the background effect re-segments and redraws every pixel
+// on the CPU every frame (Canvas2D, no GPU), so compositing at that size stalls the frame loop and
+// shows up as lag/stutter whenever the person moves. 720p is the ceiling where it stays real-time.
+export function getBackgroundEffectMaxHeight(state: NetworkState): number {
+  if (state === 'POOR') return 180;
+  if (state === 'DEGRADED' || state === 'RECOVERING') return 360;
+
+  return 720;
+}
+
 export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): string {
   if (mode === 'audio-only') return 'Audio priority mode';
   if (state === 'POOR') return 'Limited connection';

@@ -258,7 +258,7 @@ function PipRemoteVideo({ stream }: { stream: MediaStream }) {
       autoPlay
       playsInline
       muted
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
     />
   );
 }
@@ -448,7 +448,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
               autoPlay
               playsInline
               muted
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
 
             {/* Floating Presenter Pill Badge */}
@@ -499,7 +499,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                   autoPlay
                   playsInline
                   muted
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
               ) : (
                 <div
@@ -563,7 +563,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                 autoPlay
                 playsInline
                 muted
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
             ) : (
               <div
@@ -664,7 +664,7 @@ const DocumentPipContent = memo(function DocumentPipContent({
                   autoPlay
                   playsInline
                   muted
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
               ) : (
                 <div
@@ -4829,7 +4829,7 @@ export function MeetingRoomPage() {
                     autoPlay
                     playsInline
                     muted
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
                 ) : primaryShare?.kind === 'remote' ? (
                   <video
@@ -4838,7 +4838,7 @@ export function MeetingRoomPage() {
                     playsInline
                     muted
                     data-testid="remote-screen-share-video"
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
                 ) : jitsiMeeting.sharedVideo ? (
                   <Suspense fallback={null}>
@@ -4968,7 +4968,7 @@ export function MeetingRoomPage() {
                       autoPlay
                       playsInline
                       muted
-                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     />
                   ) : (
                     <div
@@ -5082,7 +5082,7 @@ export function MeetingRoomPage() {
                               el.play().catch(() => { });
                             }
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
                       ) : (
                         <div
@@ -5202,7 +5202,7 @@ export function MeetingRoomPage() {
                   style={{
                     width: '100%',
                     height: '100%',
-                    objectFit: 'contain',
+                    objectFit: 'cover',
                     borderRadius: '24px',
                   }}
                 />
@@ -5363,7 +5363,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'contain', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5400,7 +5400,7 @@ export function MeetingRoomPage() {
                               el.play().catch(() => { });
                             }
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
                       ) : (
                         <div
@@ -5504,7 +5504,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'contain', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5597,7 +5597,7 @@ export function MeetingRoomPage() {
                                     el.play().catch(() => { });
                                   }
                                 }}
-                                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                               />
                             ) : (
                               <div
@@ -5729,7 +5729,7 @@ export function MeetingRoomPage() {
                     autoPlay
                     playsInline
                     muted
-                    style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '24px' }}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
                   />
                 ) : (
                   <div
@@ -5949,7 +5949,7 @@ export function MeetingRoomPage() {
                             el.play().catch(() => { });
                           }
                         }}
-                        style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '24px' }}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
                       />
                     ) : (
                       <div
@@ -8491,7 +8491,7 @@ export function MeetingRoomPage() {
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'contain',
+                  objectFit: 'cover',
                   transform: 'scaleX(-1)',
                 }}
               />
@@ -8847,7 +8847,7 @@ export function MeetingRoomPage() {
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'contain',
+                  objectFit: 'cover',
                   transform: 'scaleX(-1)',
                 }}
               />
