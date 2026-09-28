@@ -550,6 +550,9 @@ export function useJitsiMeeting({
   const localVideoTrackRef = useRef<any>(null);
   const localDesktopTrackRef = useRef<any>(null);
   const networkStateRef = useRef<NetworkState>('GOOD');
+  // Tracks call size for the background effect's initial resolution guess (see
+  // setVirtualBackground) -- kept in sync by the network-quality effect below.
+  const callSizeHeightRef = useRef(2160);
   const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
   const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
   const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
@@ -1848,11 +1851,11 @@ export function useJitsiMeeting({
 
       void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
       // A virtual background/blur effect renders and re-encodes every frame on the CPU (Canvas2D,
-      // no GPU) -- it has its own, much lower cap than the raw camera send height above, which can
-      // go up to 4K for a 1-on-1 call. Compositing at that size every frame stalls the frame loop
-      // (visible as lag/stutter when the person moves), so it follows network state only, capped
-      // at 720p regardless of call size.
-      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkState));
+      // no GPU), so it has its own lower ceiling than the raw camera send height above (which can
+      // go up to 4K for a 1-on-1 call) -- but it still follows the same network state and call-size
+      // shape the rest of the call's video quality does: better network / smaller call = sharper.
+      callSizeHeightRef.current = base;
+      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkState, base));
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
@@ -2458,9 +2461,9 @@ export function useJitsiMeeting({
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     const effect = await createVirtualBackgroundEffect(config);
 
-    // Apply today's network-driven cap immediately -- otherwise this would sit at the effect's
-    // own 720p default until the next network-quality tick (a few seconds away).
-    effect.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkStateRef.current));
+    // Apply today's network- and call-size-driven cap immediately -- otherwise this would sit at
+    // the effect's own 720p default until the next network-quality tick (a few seconds away).
+    effect.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkStateRef.current, callSizeHeightRef.current));
 
     if (track) {
       await track.setEffect(effect);
