@@ -13,20 +13,49 @@
 // THIRD_PARTY_NOTICES.md for its exact source URL, pinned generation, size and SHA-256.
 export type SegmentationEngine = 'v1' | 'mediapipe-cpu' | 'mediapipe-gpu';
 
-const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'v1';
-// Dev-only override, e.g. from a browser console: localStorage.setItem('toowix_bg_engine',
-// 'mediapipe-cpu'). 'mediapipe-gpu' must NEVER be reachable except through this explicit,
-// manual override -- getAsFloat32Array() on a GPU-backed mask forces an expensive GPU-to-CPU
-// readback (confirmed via @mediapipe/tasks-vision's own MPMask.getAsFloat32Array() doc comment,
-// and independently by mediapipe/mediapipe#5681, which measured it at 80-100ms per frame -- far
-// past this effect's entire per-frame budget), so it must never be picked automatically.
+// This was 'v1' through Phase 2/3 -- mediapipe-gpu was kept strictly opt-in, based on a concern
+// (see mediapipe/mediapipe#5681) that GPU-backed mask readback could cost 80-100ms/frame, far
+// past budget, and on this repo's own bench/REPORT.md flagging real caveats (workstation-GPU-only
+// measurements, an unexplained headed-run slowdown, an untested tab-visibility-resume case).
+// Promoted to default after this session's real-device validation (motion-adaptive smoothing,
+// spatial hole-fill, higher-res segmentation, edge sharpening -- all MediaPipe-only, see
+// JitsiStreamBackgroundEffect.ts) measurably fixed the ghosting/hole/edge-softness issues V1 has
+// no equivalent fix for, and this repo's actual measured readback cost (8-25ms in bench/REPORT.md)
+// was well under the cited worst case. The bench report's caveats about untested typical
+// (non-workstation) hardware and long-session robustness still apply and haven't been separately
+// re-validated -- V1 remains the automatic fallback (see _fallBackToV1/_giveUp in
+// JitsiStreamBackgroundEffect.ts) if MediaPipe fails to load or fails repeatedly mid-call.
+const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'mediapipe-gpu';
+// Override, e.g. from a browser console: localStorage.setItem('toowix_bg_engine', 'v1'), or via
+// the ?bgEngine= URL param (see readSegmentationEngineOverride below) -- useful for comparing
+// against V1 or forcing CPU delegate for debugging.
 const SEGMENTATION_ENGINE_STORAGE_KEY = 'toowix_bg_engine';
+
+function isValidEngine(value: string | null): value is SegmentationEngine {
+  return value === 'v1' || value === 'mediapipe-cpu' || value === 'mediapipe-gpu';
+}
 
 export function readSegmentationEngineOverride(): SegmentationEngine {
   try {
+    // A URL param (?bgEngine=mediapipe-gpu) is checked FIRST and, if present, written into
+    // localStorage so it survives a reload without the param still in the URL -- this exists
+    // because the console-command flow (localStorage.setItem(...) typed by hand, in whichever tab
+    // happens to be focused, before a reload) is easy to get wrong in a way that silently does
+    // nothing (wrong tab/origin, private window, a reload racing the command) and gives no
+    // feedback when it does. A URL param can't land in the wrong place -- it's part of the exact
+    // page being loaded.
+    if (typeof location !== 'undefined') {
+      const fromUrl = new URLSearchParams(location.search).get('bgEngine');
+
+      if (isValidEngine(fromUrl)) {
+        localStorage.setItem(SEGMENTATION_ENGINE_STORAGE_KEY, fromUrl);
+
+        return fromUrl;
+      }
+    }
     const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(SEGMENTATION_ENGINE_STORAGE_KEY) : null;
 
-    if (stored === 'v1' || stored === 'mediapipe-cpu' || stored === 'mediapipe-gpu') {
+    if (isValidEngine(stored)) {
       return stored;
     }
   } catch {

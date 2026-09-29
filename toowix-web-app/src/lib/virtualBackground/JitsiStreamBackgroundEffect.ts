@@ -43,6 +43,20 @@ interface IDutyPrediction { duty: number; estimated: boolean }
 const SEG_WIDTH = 256;
 const SEG_HEIGHT = 144;
 
+// MediaPipe-only, NOT used by V1 (which stays at SEG_WIDTH x SEG_HEIGHT, unchanged -- V1's own
+// per-frame cost is CPU-bound and resolution-sensitive, so raising its input size would regress
+// the already-tuned default path for every user). The MediaPipe GPU delegate's segmentation cost
+// is close to flat regardless of resolution (bench/REPORT.md section 9: 1.5-1.9ms across
+// 480/720/1080p) -- so it can afford a much sharper mask input for close to free. A sharper,
+// less-noisy raw mask needs less temporal smoothing to look stable, which is what actually
+// reduces the motion "ghost trail" (see MASK_TEMPORAL_SMOOTHING below): smoothing hides noise in
+// a low-res mask by blending in the previous frame, and that same blending is what makes a fast-
+// moving edge lag behind and bleed through as a trailing ghost. A sharper source mask needs less
+// of that blend to look clean, so it ghosts less at the same smoothing value. Same 16:9 aspect
+// ratio as SEG_WIDTH x SEG_HEIGHT, just 2x the linear resolution (4x the pixels).
+const MEDIAPIPE_SEG_WIDTH = 512;
+const MEDIAPIPE_SEG_HEIGHT = 288;
+
 // Segmentation always runs at the small fixed size above, but compositing (drawing the mask +
 // sharp foreground + blurred/image background together) happens at full camera resolution every
 // frame -- CPU work that scales with pixel count. Camera capture can now request up to 4K/1080p,
@@ -57,7 +71,87 @@ const DEFAULT_MAX_OUTPUT_HEIGHT = 720;
 // frame -- most visible exactly when moving, which is when the low-res (256x144) segmentation model
 // is least stable frame to frame. 0.3 was tried and wasn't enough to stop that jitter; the edge lag
 // this trades in return is a few frames (~100ms at 30fps) and isn't perceptible at normal speed.
+//
+// V1-ONLY. This stays a flat constant deliberately -- V1's runInference() below is pinned
+// byte-for-byte unchanged (see the 'V1 SAFETY' test), so the motion-adaptive smoothing added for
+// MediaPipe (see motionAdaptiveSmoothing and MEDIAPIPE_MASK_TEMPORAL_SMOOTHING below) does not
+// apply here. All of this session's motion/edge-quality fixes were validated against MediaPipe,
+// never against V1 -- V1 remains the already-proven, untouched fallback engine.
 const MASK_TEMPORAL_SMOOTHING = 0.6;
+
+// A pixel's confidence delta (frame to frame) at or above this magnitude is treated as full
+// motion (uses MEDIAPIPE_MASK_SMOOTHING_MIN); below it, the blend interpolates linearly toward
+// MEDIAPIPE_MASK_TEMPORAL_SMOOTHING (stationary). MediaPipe-only -- see motionAdaptiveSmoothing.
+const MOTION_DELTA_FULL = 0.3;
+
+// Blends `smoothingMax` (stationary) down toward `smoothingMin` (full motion) based on how much
+// this pixel's confidence actually changed since the last frame -- see MASK_TEMPORAL_SMOOTHING's
+// comment for why a single flat number caused visible lag on real hand motion.
+function motionAdaptiveSmoothing(delta: number, smoothingMin: number, smoothingMax: number): number {
+  const motionFactor = Math.min(1, Math.abs(delta) / MOTION_DELTA_FULL);
+
+  return smoothingMax - (motionFactor * (smoothingMax - smoothingMin));
+}
+
+// MediaPipe-only, lower than V1's above. V1's 0.6 was tuned against a noisy, low-res (256x144)
+// CPU model, where that much smoothing was needed just to stop per-frame flicker -- the tradeoff
+// being a visible motion "ghost trail" (the mask lagging behind fast real movement, the old value
+// bleeding through). MediaPipe's mask is sharper and higher-resolution (512x288, GPU-segmented),
+// so it's inherently more stable frame to frame and needs far less of the previous frame blended
+// in to stay clean, which directly reduces that lag/ghosting. Not 0 (a completely raw per-frame
+// mask still has SOME flicker). Was pushed up to 0.4 at one point to paper over holes (a real,
+// low-confidence moment from the model -- e.g. an arm against a low-contrast background -- showing
+// through as an actual gap to the real room), but that just traded holes for a WORSE ghost trail,
+// since more smoothing means more of a stale "person was here" value lingers after they've moved
+// away. Holes are now handled separately and correctly by _fillSpatialHoles (a spatial, same-frame
+// fix, not a temporal one), which means this can go back to favoring low ghosting again without
+// reopening the hole problem -- the two are no longer fighting over the same knob.
+const MEDIAPIPE_MASK_TEMPORAL_SMOOTHING = 0.25;
+// MediaPipe's motion floor, well below V1's -- its cleaner, higher-res mask can afford tracking
+// fast motion almost immediately (near-zero smoothing) without the flicker risk V1's noisier mask
+// has at the same floor, and the spatial hole-fill (_fillSpatialHoles) now covers the "real person,
+// momentarily low confidence" case that low smoothing alone would otherwise expose as a hole.
+const MEDIAPIPE_MASK_SMOOTHING_MIN = 0.05;
+
+// Steepens the mask's alpha value around the 0.5 (person/background) boundary before it's drawn.
+// Missing entirely before this: the raw model confidence (0..1, "how much is this a person") was
+// written straight to alpha with no shaping, so any pixel the model was genuinely unsure about
+// (0.4, 0.5, 0.6...) rendered as a semi-transparent gray band instead of committing to a clean
+// edge -- this is what read as a "disturbed"/muddy edge rather than a crisp one, independent of
+// and in addition to the temporal ghosting MASK_TEMPORAL_SMOOTHING already addresses. Values near
+// the extremes (confidently person or confidently background) are left almost unchanged; only the
+// ambiguous middle is pushed outward. MediaPipe-only (see _blendMaskValues) -- V1's runInference()
+// is pinned byte-for-byte unchanged, so this does not apply there. Applied AFTER temporal
+// smoothing, so it shapes each frame's already-stabilized value, not the raw noisy one.
+// Exponent tuned down from an initial 0.6 -- steepening the transition also steepens the model's
+// own per-pixel NOISE right at the boundary (a value hovering around 0.5 from real sensor/model
+// jitter, not real edge motion, gets pushed to full-on/full-off), which showed up as visible
+// speckle/graininess right at the edge instead of a clean line. 0.8 is closer to linear (gentler),
+// trading some of the crispness gain for not amplifying that per-pixel noise into speckling.
+const SHARPEN_EXPONENT = 0.8;
+
+function sharpenMaskAlpha(value: number): number {
+  const centered = value - 0.5;
+  const steepened = Math.sign(centered) * Math.pow(Math.abs(centered) * 2, SHARPEN_EXPONENT) * 0.5;
+
+  return Math.min(1, Math.max(0, steepened + 0.5));
+}
+
+// MediaPipe-only spatial hole-fill (see _fillSpatialHoles). This is what actually decouples the
+// "hole in a real person" problem from the "ghost where a person used to be" problem -- both were
+// previously fought with the SAME temporal-smoothing knob, which cannot fix one without worsening
+// the other (see MEDIAPIPE_MASK_TEMPORAL_SMOOTHING's comment). A hole is a pixel with low CURRENT
+// alpha surrounded by high-alpha neighbors RIGHT NOW -- that's a spatial fact about this frame,
+// not something that needs frame history to detect or fix, so it doesn't reintroduce lag/ghosting
+// the way raising temporal smoothing did. Blur radius is in the mask's own small pixel space
+// (roughly MEDIAPIPE_SEG_WIDTH/HEIGHT), not output pixels -- deliberately larger than the output-
+// space edge blur, so it can actually reach across a hole a few mask-pixels wide.
+const MASK_HOLE_FILL_BLUR_PX = 6;
+// A hole's rescued alpha is the blurred (locally-averaged) value, scaled down slightly rather
+// than used at full strength -- keeps a genuinely large/real gap (most of the local blur average
+// is still low) from being forced fully opaque, while a small hole inside an otherwise-solid
+// person region (blur average close to 1) still gets pulled back close to opaque.
+const MASK_HOLE_FILL_STRENGTH = 0.85;
 
 // Output resolution floor -- setMaxOutputHeight (network/call-size driven, see
 // getBackgroundEffectMaxHeight) is clamped to this range regardless of what the caller asks for.
@@ -196,6 +290,9 @@ export default class JitsiStreamBackgroundEffect {
   _frameErrorReported = false;
   _maxOutputHeight = DEFAULT_MAX_OUTPUT_HEIGHT;
   _smoothedMask: Float32Array | null = null;
+  // MediaPipe-only spatial hole-fill scratch canvas -- see _fillSpatialHoles.
+  _maskDilateCanvas: HTMLCanvasElement | null = null;
+  _maskDilateCtx: CanvasRenderingContext2D | null = null;
   // Performance governor state -- see PERF_*/FPS_TIERS constants above. _perfCap/_perfFpsCap both
   // start at the top tier; real hardware that can't sustain it steps down within about a second.
   _perfCap = PERF_TIERS[PERF_TIERS.length - 1];
@@ -797,8 +894,8 @@ export default class JitsiStreamBackgroundEffect {
     // could need it later even if this effect started on v1.
     if (!this._mediaPipeInputCanvas) {
       this._mediaPipeInputCanvas = document.createElement('canvas');
-      this._mediaPipeInputCanvas.width = SEG_WIDTH;
-      this._mediaPipeInputCanvas.height = SEG_HEIGHT;
+      this._mediaPipeInputCanvas.width = MEDIAPIPE_SEG_WIDTH;
+      this._mediaPipeInputCanvas.height = MEDIAPIPE_SEG_HEIGHT;
       this._mediaPipeInputCtx = this._mediaPipeInputCanvas.getContext('2d');
     }
 
@@ -891,10 +988,42 @@ export default class JitsiStreamBackgroundEffect {
     if (this._outputCanvasElement.height !== outHeight) this._outputCanvasElement.height = outHeight;
     if (this._outputCanvasElement.width !== outWidth) this._outputCanvasElement.width = outWidth;
     this._outputCanvasCtx.globalCompositeOperation = 'copy';
+    // The mask is only SEG_WIDTH/MEDIAPIPE_SEG_WIDTH pixels wide and gets stretched up to the
+    // full output size below -- often 4-8x. Without explicitly requesting high-quality smoothing,
+    // a browser can fall back to a cheaper (blockier, more jagged-edged) scaling method for that
+    // stretch. This is close to free and applies to every draw on this context, so it's set once
+    // here rather than per-drawImage call.
+    this._outputCanvasCtx.imageSmoothingEnabled = true;
+    this._outputCanvasCtx.imageSmoothingQuality = 'high';
 
     // Draw the (blurred-edge) segmentation mask, scaled to the (possibly capped) output size.
+    // The blur radius scales with how many output pixels one mask pixel is being stretched into,
+    // instead of a flat 8px/4px regardless of source detail. That flat number was tuned against
+    // V1's coarse 256x144 source at a typical ~5x stretch (e.g. 720p output) -- fine there, but
+    // needlessly heavy (a muddy, "disturbed" edge) on MediaPipe's finer 512x288 source, which
+    // doesn't need nearly as much blur to hide upscaling blockiness at the same output size. This
+    // keeps V1 close to its previously-tuned amount (its ratio is usually near the reference) and
+    // gives MediaPipe a visibly crisper edge, both from the SAME formula rather than a hardcoded
+    // per-engine branch.
     const supportsFilter = 'filter' in this._outputCanvasCtx;
-    if (supportsFilter) this._outputCanvasCtx.filter = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 'blur(4px)' : 'blur(8px)';
+    const baseBlurPx = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 4 : 8;
+    // The finer MediaPipe mask (MEDIAPIPE_SEG_HEIGHT) gets a small FIXED blur instead of the
+    // ratio-scaled formula below -- the ratio formula (tried first) still landed around 4px at
+    // typical call resolutions, which read as feathered/soft rather than crisp. Raised back up
+    // from an initial 1/1.5px -- that was crisp, but a real low-confidence moment from the model
+    // (e.g. an arm against a low-contrast background) had too little blur left to let nearby
+    // confident (opaque) pixels average it back toward opaque, and showed through as an actual
+    // hole to the real background instead of a softer edge. A fine source mask still needs less
+    // blur than V1's coarse one to look sharp, just not this little -- 3/2.5px is the current
+    // middle ground between "crisp" and "never lets the real background show through."
+    const isFineMask = this._options.height >= MEDIAPIPE_SEG_HEIGHT;
+    const stretchRatio = outHeight / (this._options.height || outHeight);
+    const REFERENCE_STRETCH_RATIO = 5; // ~720 / 144, the ratio baseBlurPx was originally tuned against
+    const edgeBlurPx = isFineMask
+      ? (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 2.5 : 3)
+      : Math.max(1, Math.min(baseBlurPx, baseBlurPx * (stretchRatio / REFERENCE_STRETCH_RATIO)));
+
+    if (supportsFilter) this._outputCanvasCtx.filter = `blur(${edgeBlurPx}px)`;
     this._outputCanvasCtx.drawImage(
         // @ts-ignore
         this._segmentationMaskCanvas,
@@ -987,17 +1116,86 @@ export default class JitsiStreamBackgroundEffect {
   // kept as its own copy rather than a shared helper so runInference() (V1's inference loop)
   // stays completely untouched, per Phase 2's "do not refactor the existing TFLite path" rule.
   _blendMaskValues(values: Float32Array) {
-    if (!this._smoothedMask || this._smoothedMask.length !== this._segmentationPixelCount) {
+    // See the matching comment in runInference() -- same first-frame fade-in bug, same fix.
+    const isFirstFrame = !this._smoothedMask || this._smoothedMask.length !== this._segmentationPixelCount;
+
+    if (isFirstFrame) {
       this._smoothedMask = new Float32Array(this._segmentationPixelCount);
     }
     for (let i = 0; i < this._segmentationPixelCount; i++) {
       const person = values[i];
-      const smoothed = (this._smoothedMask[i] * MASK_TEMPORAL_SMOOTHING) + (person * (1 - MASK_TEMPORAL_SMOOTHING));
+      let smoothed: number;
 
-      this._smoothedMask[i] = smoothed;
-      this._segmentationMask.data[(i * 4) + 3] = 255 * smoothed;
+      if (isFirstFrame) {
+        smoothed = person;
+      } else {
+        const prev = this._smoothedMask![i];
+        const smoothingNow = motionAdaptiveSmoothing(person - prev, MEDIAPIPE_MASK_SMOOTHING_MIN, MEDIAPIPE_MASK_TEMPORAL_SMOOTHING);
+
+        smoothed = (prev * smoothingNow) + (person * (1 - smoothingNow));
+      }
+
+      this._smoothedMask![i] = smoothed;
+      this._segmentationMask.data[(i * 4) + 3] = 255 * sharpenMaskAlpha(smoothed);
     }
     this._segmentationMaskCtx?.putImageData(this._segmentationMask, 0, 0);
+    this._fillSpatialHoles();
+  }
+
+  // See MASK_HOLE_FILL_BLUR_PX/STRENGTH above. Reads back the mask canvas _blendMaskValues just
+  // wrote, blurs a COPY of it to get each pixel's local neighborhood average, and raises any
+  // pixel whose own alpha is lower than that (scaled) local average -- i.e. a pixel surrounded by
+  // confident "person" alpha gets pulled back toward opaque even if ITS OWN reading dipped this
+  // frame, without touching a pixel that's genuinely in a low-alpha region (whose neighbors are
+  // low too, so the local average stays low and nothing changes).
+  _fillSpatialHoles() {
+    if (!this._segmentationMaskCanvas || !this._segmentationMaskCtx) return;
+    const w = this._options.width;
+    const h = this._options.height;
+
+    if (!this._maskDilateCanvas) {
+      this._maskDilateCanvas = document.createElement('canvas');
+    }
+    if (this._maskDilateCanvas.width !== w || this._maskDilateCanvas.height !== h) {
+      this._maskDilateCanvas.width = w;
+      this._maskDilateCanvas.height = h;
+      // willReadFrequently: getImageData runs on this canvas every single frame (see below) --
+      // without this hint Chrome logs a real perf warning and can pick a slower backing store.
+      this._maskDilateCtx = this._maskDilateCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    const dilateCtx = this._maskDilateCtx;
+
+    if (!dilateCtx) return;
+    dilateCtx.clearRect(0, 0, w, h);
+    if ('filter' in dilateCtx) dilateCtx.filter = `blur(${MASK_HOLE_FILL_BLUR_PX}px)`;
+    dilateCtx.drawImage(
+        // @ts-ignore
+        this._segmentationMaskCanvas, 0, 0
+    );
+    if ('filter' in dilateCtx) dilateCtx.filter = 'none';
+
+    let dilated: ImageData;
+
+    try {
+      dilated = dilateCtx.getImageData(0, 0, w, h);
+    } catch {
+      return; // Canvas read failure (e.g. a tainted-canvas edge case) -- keep the un-filled mask.
+    }
+    let changed = false;
+
+    for (let i = 0; i < this._segmentationPixelCount; i++) {
+      const alphaIndex = (i * 4) + 3;
+      const current = this._segmentationMask.data[alphaIndex];
+      const rescued = dilated.data[alphaIndex] * MASK_HOLE_FILL_STRENGTH;
+
+      if (rescued > current) {
+        this._segmentationMask.data[alphaIndex] = rescued;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this._segmentationMaskCtx.putImageData(this._segmentationMask, 0, 0);
+    }
   }
 
   // The MediaPipe engine's counterpart to resizeSource()+runInference() combined. Phase 2c change:
@@ -1006,7 +1204,12 @@ export default class JitsiStreamBackgroundEffect {
   // element -- this is what keeps its returned mask at the same small fixed size V1 already uses,
   // instead of scaling with camera resolution (which was the real cause of the Phase 2 benchmark's
   // untimed blend-cost regression at 720p/1080p; see _blendMaskValues timing below).
-  _runMediaPipeInference() {
+  // Returns whether this frame's segmentation actually succeeded. The caller (_renderMask) uses
+  // this to decide whether to composite at all this frame -- see that method's comment for why
+  // compositing on a failure would mean drawing THIS frame's fresh camera image against the mask
+  // canvas's last successful (now-stale) segmentation, which can visibly misalign for as long as
+  // the failure streak lasts, not just the one frame a naive reading of "skip a frame" suggests.
+  _runMediaPipeInference(): boolean {
     // Phase 2b/2c timing -- reset every call so a failure before any measurement point still
     // reports something meaningful (0, not last frame's stale number) rather than lying to the
     // debug log/bench about how long this frame actually took.
@@ -1018,19 +1221,20 @@ export default class JitsiStreamBackgroundEffect {
     if (!segmenter || !this._mediaPipeInputCtx || !this._mediaPipeInputCanvas) {
       this._handleMediaPipeFrameFailure(new Error('MediaPipe segmenter is not available'));
 
-      return;
+      return false;
     }
     const timestamp = getNextMediaPipeTimestamp();
     let mask: any = null;
     const segmentStart = Date.now();
 
     try {
-      // Same source rect and same dest rect shape as resizeSource() -- see that method.
+      // Same source rect shape as resizeSource() -- see that method. Dest rect is
+      // MEDIAPIPE_SEG_WIDTH/HEIGHT, not V1's SEG_WIDTH/HEIGHT -- see that constant's comment.
       this._mediaPipeInputCtx.drawImage(
           // @ts-ignore
           this._inputVideoElement,
           0, 0, this._inputVideoElement.width, this._inputVideoElement.height,
-          0, 0, SEG_WIDTH, SEG_HEIGHT
+          0, 0, MEDIAPIPE_SEG_WIDTH, MEDIAPIPE_SEG_HEIGHT
       );
 
       const result = segmenter.segmentForVideo(this._mediaPipeInputCanvas, timestamp);
@@ -1055,11 +1259,15 @@ export default class JitsiStreamBackgroundEffect {
       this._blendMaskValues(values);
       this._lastMediaPipeBlendMs = Date.now() - blendStart;
       this._mediaPipeConsecutiveErrors = 0;
+
+      return true;
     } catch (error) {
       if (this._lastMediaPipeSegmentMs === 0) {
         this._lastMediaPipeSegmentMs = Date.now() - segmentStart;
       }
       this._handleMediaPipeFrameFailure(error);
+
+      return false;
     } finally {
       // Owned by this single frame regardless of outcome -- must be released every time,
       // including every error path above, or MediaPipe leaks the mask's backing memory.
@@ -1112,10 +1320,14 @@ export default class JitsiStreamBackgroundEffect {
         }
         this._engine = 'v1';
       } catch (err) {
-        console.warn(
-            '[VirtualBackground] Falling back to V1 also failed to load; background effect will keep showing the last good frame.',
-            err
-        );
+        // Previously just logged and left the effect on the still-broken MediaPipe engine,
+        // retrying (and failing) forever with no path back to a real, moving picture -- exactly
+        // the "no reliable recovery to the raw camera" gap this closes. There is nowhere left to
+        // fall back TO once V1 itself won't load, so give up (stops the effect, hands control
+        // back via onGiveUp, which the caller uses to restore the raw camera track and tell the
+        // user) instead of leaving them stuck on a frozen/broken effect indefinitely.
+        console.warn('[VirtualBackground] Falling back to V1 also failed to load:', err);
+        this._giveUp('MediaPipe failed repeatedly and the V1 fallback also failed to load');
       } finally {
         this._mediaPipeFallbackInProgress = false;
       }
@@ -1140,20 +1352,24 @@ export default class JitsiStreamBackgroundEffect {
     let segmentationMs: number;
     let readbackMs = 0;
     let blendMs = 0;
+    let segmentationSucceeded = true;
 
     if (this._engine === 'v1') {
       // Unchanged from before Phase 2 -- exactly resizeSource() then runInference(), in that
       // order, same as always. Timed from OUTSIDE (not by editing either method) so this stays
       // true for the "do not touch the V1 path" rule. blendMs stays 0: V1's equivalent blend work
       // is fused inside the untouched runInference() and reported as part of segmentationMs, same
-      // as it always has been.
+      // as it always has been. runInference()/resizeSource() have no failure signal of their own
+      // (they don't throw under normal operation), so segmentationSucceeded stays true here --
+      // this fix is scoped to the MediaPipe path below, where _runMediaPipeInference DOES have a
+      // real, observed failure mode (see that method's comment).
       const segmentStart = Date.now();
 
       this.resizeSource();
       this.runInference();
       segmentationMs = Date.now() - segmentStart;
     } else {
-      this._runMediaPipeInference();
+      segmentationSucceeded = this._runMediaPipeInference();
       segmentationMs = this._lastMediaPipeSegmentMs;
       readbackMs = this._lastMediaPipeReadbackMs;
       blendMs = this._lastMediaPipeBlendMs;
@@ -1161,7 +1377,14 @@ export default class JitsiStreamBackgroundEffect {
 
     const compositeStart = Date.now();
 
-    this.runPostProcessing();
+    // Skip compositing entirely on a failed frame instead of drawing THIS frame's fresh camera
+    // image against the mask canvas's last successful (now stale) segmentation -- that mismatch
+    // is what could show a misaligned/frozen-looking cutout for as long as a failure streak
+    // lasts, not just a single skipped frame. The output canvas simply keeps showing its last
+    // successfully composited frame instead, which reads as a brief pause, not a visible glitch.
+    if (segmentationSucceeded) {
+      this.runPostProcessing();
+    }
     const compositingMs = Date.now() - compositeStart;
     const totalMs = Date.now() - frameStart;
 

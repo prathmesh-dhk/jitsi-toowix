@@ -25,10 +25,10 @@ function load(initialLocalStorage = {}, initialNow = 0) {
   return { exports, localStorage, setNow: (v) => { nowValue = v; } };
 }
 
-test('readSegmentationEngineOverride defaults to v1 with nothing set', () => {
+test('readSegmentationEngineOverride defaults to mediapipe-gpu with nothing set', () => {
   const { exports } = load();
 
-  assert.equal(exports.readSegmentationEngineOverride(), 'v1');
+  assert.equal(exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
 });
 
 test('readSegmentationEngineOverride respects a valid stored override', () => {
@@ -37,9 +37,9 @@ test('readSegmentationEngineOverride respects a valid stored override', () => {
   assert.equal(load({ toowix_bg_engine: 'v1' }).exports.readSegmentationEngineOverride(), 'v1');
 });
 
-test('readSegmentationEngineOverride ignores an invalid/garbage stored value and falls back to v1', () => {
-  assert.equal(load({ toowix_bg_engine: 'nonsense' }).exports.readSegmentationEngineOverride(), 'v1');
-  assert.equal(load({ toowix_bg_engine: '' }).exports.readSegmentationEngineOverride(), 'v1');
+test('readSegmentationEngineOverride ignores an invalid/garbage stored value and falls back to the default', () => {
+  assert.equal(load({ toowix_bg_engine: 'nonsense' }).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
+  assert.equal(load({ toowix_bg_engine: '' }).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
 });
 
 test('readSegmentationEngineOverride does not throw if localStorage access itself throws (private mode)', () => {
@@ -52,7 +52,7 @@ test('readSegmentationEngineOverride does not throw if localStorage access itsel
     localStorage: { getItem() { throw new Error('SecurityError: access denied'); } },
     performance: { now: () => 0 }
   });
-  assert.equal(exports.readSegmentationEngineOverride(), 'v1');
+  assert.equal(exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
 });
 
 test('getNextMediaPipeTimestamp is monotonically increasing across calls at the same performance.now()', () => {

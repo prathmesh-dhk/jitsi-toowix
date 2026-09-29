@@ -14,7 +14,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'virtual
 assert.match(
     source,
     /const requestedEngine = readSegmentationEngineOverride\(\);/,
-    'engine selection must come from the dev-only flag, defaulting to v1 (see mediaPipeSegmentation.ts)'
+    'engine selection must come from readSegmentationEngineOverride() (see its own default in mediaPipeSegmentation.ts, currently mediapipe-gpu)'
 );
 assert.match(
     source,
@@ -38,8 +38,8 @@ assert.match(
 );
 assert.match(
     source,
-    /return new JitsiStreamBackgroundEffect\(engineHandle, virtualBackground, loadTfliteOnce\);/,
-    'loadTfliteOnce must be passed to the effect so it can load V1 on demand for a mid-call fallback, without every engine paying for it upfront'
+    /return new JitsiStreamBackgroundEffect\(engineHandle, virtualBackground, loadTfliteOnce, options\.onGiveUp \?\? null\);/,
+    'loadTfliteOnce must be passed to the effect so it can load V1 on demand for a mid-call fallback, without every engine paying for it upfront; onGiveUp must be passed through for the performance-governor give-up tier'
 );
 
-console.log('PASS background engine selection: v1 default, GPU only via explicit flag, MediaPipe failure falls back to V1');
+console.log('PASS background engine selection: default per mediaPipeSegmentation.ts (currently mediapipe-gpu), MediaPipe failure falls back to V1');

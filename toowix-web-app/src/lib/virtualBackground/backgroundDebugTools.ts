@@ -4,16 +4,31 @@
 // easily-unit-testable logic (flag reading, stats math) doesn't need the DOM/Worker mocking that
 // file's own tests require.
 export function isMaskDebugEnabled(): boolean {
-  return readFlag('toowix_bg_debug_mask');
+  return readFlag('toowix_bg_debug_mask', 'bgDebugMask');
 }
 
 export function isOverlayDebugEnabled(): boolean {
-  return readFlag('toowix_bg_debug_overlay');
+  return readFlag('toowix_bg_debug_overlay', 'bgDebug');
 }
 
-function readFlag(key: string): boolean {
+// Same URL-param-first pattern as readSegmentationEngineOverride() in mediaPipeSegmentation.ts --
+// see that function's comment for why a URL param is preferred over asking someone to type a
+// console command by hand. ?bgDebug=1 draws a live on-canvas readout (engine, resolution, per-
+// stage timing) directly on the video, so which engine is actually running is visible on screen,
+// not just inferable from console output.
+function readFlag(storageKey: string, urlParam: string): boolean {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem(key) === '1';
+    if (typeof location !== 'undefined') {
+      const fromUrl = new URLSearchParams(location.search).get(urlParam);
+
+      if (fromUrl === '1') {
+        localStorage.setItem(storageKey, '1');
+
+        return true;
+      }
+    }
+
+    return typeof localStorage !== 'undefined' && localStorage.getItem(storageKey) === '1';
   } catch {
     // localStorage can be unavailable (private mode, a restricted embed) -- default is off.
     return false;

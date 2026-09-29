@@ -29,7 +29,15 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     putImageData() {},
     getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
     fillRect: (...args) => textOverlayCalls.push([ 'fillRect', ...args ]),
-    fillText: (...args) => textOverlayCalls.push([ 'fillText', ...args ])
+    fillText: (...args) => textOverlayCalls.push([ 'fillText', ...args ]),
+    // Used by _fillSpatialHoles' scratch canvas (see JitsiStreamBackgroundEffect.ts) -- missing
+    // here initially, which meant every MediaPipe test silently hit a real TypeError inside
+    // _blendMaskValues, caught by _runMediaPipeInference's try/catch and reported as a FAILED
+    // frame even though segmentation itself succeeded. Existing tests didn't catch this because
+    // none of them asserted on the frame's success/failure return value or on whether
+    // runPostProcessing was actually called -- only the new stale-mask-skip regression tests
+    // added alongside this fix did, which is what surfaced this mock gap.
+    clearRect() {}
   });
   let plays = 0;
   const video = { readyState: 2, videoWidth: width, videoHeight: height, setAttribute() {}, pause() {}, play() { plays++; return Promise.resolve(); } };
@@ -794,10 +802,13 @@ test('MediaPipe engine: a successful frame updates the mask and always closes it
   assert.equal(s.effect._options.width, 5);
   assert.equal(s.effect._options.height, 4);
   assert.equal(s.effect._segmentationPixelCount, 20);
-  // _smoothedMask starts zero-filled -- even the first frame is blended (0 * 0.6) + (0.9 * 0.4)
-  // = 0.36, same EMA formula as V1, not a special-cased "raw value on frame one". 255 * 0.36 =
-  // 91.8 -> 92 (Uint8ClampedArray rounding).
-  assert.equal(s.effect._segmentationMask.data[3], 92);
+  // The first frame now snaps directly to the raw value (0.9) instead of being blended against a
+  // zero-filled _smoothedMask -- the old (0 * 0.6) + (0.9 * 0.4) = 0.36 behavior was a real bug
+  // (a visible fade-in flash the instant the effect turns on), fixed by special-casing frame one.
+  // 0.9 then passes through sharpenMaskAlpha (MediaPipe-only edge-crispening), landing at
+  // 255 * 0.91825... = 234 (Uint8ClampedArray rounding) -- not 255 * 0.9 = 229.5, since the raw
+  // value is shaped before being written to alpha, not written raw.
+  assert.equal(s.effect._segmentationMask.data[3], 234);
 });
 
 test('MediaPipe engine: mask.close() is called even when segmentForVideo throws', () => {
@@ -906,6 +917,83 @@ test('MediaPipe engine: a successful frame resets the consecutive-error counter'
   shouldThrow = true;
   for (let i = 0; i < 4; i++) s.effect._renderMask(); // 4 more failures -- still under threshold since it reset
   assert.equal(s.effect._engine, 'mediapipe-cpu', 'the counter reset on the successful frame, so 4+4 failures must not trip the 5-in-a-row threshold');
+});
+
+test('a failed MediaPipe frame skips compositing entirely instead of drawing a fresh camera frame against a stale mask', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { throwOnSegment: true } });
+  let postProcessCalls = 0;
+
+  s.effect.runPostProcessing = () => { postProcessCalls++; };
+  s.effect._renderMask();
+  assert.equal(postProcessCalls, 0, 'compositing must be skipped on a failed frame, not run against a stale mask + fresh video');
+});
+
+test('a successful MediaPipe frame still composites normally (the skip above is failure-only)', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu' });
+  let postProcessCalls = 0;
+
+  s.effect.runPostProcessing = () => { postProcessCalls++; };
+  s.effect._renderMask();
+  assert.equal(postProcessCalls, 1);
+});
+
+test('GO 3 give-up tier: MediaPipe fails repeatedly AND the V1 fallback also fails to load -- gives up instead of retrying forever with no recovery path', () => {
+  let giveUpCalls = 0;
+  const s = setup(true, {
+    engine: 'mediapipe-cpu',
+    mediaPipe: { throwOnSegment: true },
+    v1Fallback: { reject: true },
+    onGiveUp: () => { giveUpCalls++; }
+  });
+
+  for (let i = 0; i < 5; i++) s.effect._renderMask();
+  assert.equal(s.loadV1FallbackCalls.length, 1);
+
+  return new Promise((resolve) => setTimeout(resolve, 0)).then(() => {
+    assert.equal(giveUpCalls, 1, 'must give up (restoring the raw camera via onGiveUp) rather than staying stuck on the broken engine');
+    assert.equal(s.effect.hasGivenUp(), true);
+    assert.ok(s.warnings.some((w) => String(w.join(' ')).includes('also failed to load')));
+  });
+});
+
+test('MediaPipe engine: motion-adaptive smoothing reacts fast to a real jump in confidence', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 1, maskHeight: 1, values: new Float32Array([ 0.2 ]) } });
+
+  s.effect._renderMask(); // first frame -- snaps directly to 0.2 (see the first-frame fix above)
+  // Float32Array round-trips 0.2 as ~0.20000000298023224, not the float64 literal 0.2 -- an
+  // approximate comparison, not assert.equal, is the correct check here.
+  assert.ok(Math.abs(s.effect._smoothedMask[0] - 0.2) < 1e-6);
+
+  // A large jump (0.2 -> 0.9, delta 0.7, well past MOTION_DELTA_FULL) lands at the motion floor
+  // (0.05): 0.2*0.05 + 0.9*0.95 = 0.865 -- the OLD flat MEDIAPIPE_MASK_TEMPORAL_SMOOTHING (0.25)
+  // would have given 0.2*0.25 + 0.9*0.75 = 0.725 regardless of how big the real change was.
+  s.effect._mediaPipeSegmenter.segmentForVideo = () => {
+    s.mediaPipeCalls.segmentForVideo++;
+
+    return { confidenceMasks: [ { width: 1, height: 1, getAsFloat32Array: () => new Float32Array([ 0.9 ]), close: () => { s.mediaPipeCalls.close++; } } ] };
+  };
+  s.effect._renderMask();
+  assert.ok(s.effect._smoothedMask[0] > 0.8, `expected fast tracking of a real jump (>0.8), got ${s.effect._smoothedMask[0]}`);
+});
+
+test('MediaPipe engine: motion-adaptive smoothing stays heavily smoothed for a near-stationary pixel', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 1, maskHeight: 1, values: new Float32Array([ 0.5 ]) } });
+
+  s.effect._renderMask(); // first frame -- snaps to 0.5
+  // A small delta (0.02, well under MOTION_DELTA_FULL) should land close to the MAX-smoothing
+  // prediction (0.5*0.25 + 0.52*0.75 = 0.515) and clearly short of the MIN-smoothing/full-motion
+  // prediction (0.5*0.05 + 0.52*0.95 = 0.519) -- i.e. still mostly treated as stationary, not
+  // full motion, even though it moves some (motion-adaptive, not a hard on/off switch).
+  s.effect._mediaPipeSegmenter.segmentForVideo = () => {
+    s.mediaPipeCalls.segmentForVideo++;
+
+    return { confidenceMasks: [ { width: 1, height: 1, getAsFloat32Array: () => new Float32Array([ 0.52 ]), close: () => { s.mediaPipeCalls.close++; } } ] };
+  };
+  s.effect._renderMask();
+  assert.ok(
+      s.effect._smoothedMask[0] < 0.517,
+      `expected near-max smoothing for a near-stationary pixel (< 0.517), got ${s.effect._smoothedMask[0]}`
+  );
 });
 
 // --- Phase 2b: measurement tools -----------------------------------------------------------
@@ -1099,22 +1187,26 @@ test('Phase 2c: getTotalFrameCount is monotonic and does not reset across runBen
   assert.equal(s.effect.getTotalFrameCount(), before + 3);
 });
 
-test('Phase 2c: MediaPipe is fed a small SEG_WIDTH x SEG_HEIGHT canvas, not the raw video element', () => {
-  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 256, maskHeight: 144 } });
+test('MediaPipe is fed a small, FIXED-size canvas (not the raw video element, and not V1\'s SEG_WIDTH/HEIGHT)', () => {
+  // Deliberately raised from V1's 256x144 to 512x288 (still fixed, still much smaller than the
+  // camera's native resolution) -- GPU segmentation cost is close to flat regardless of input size
+  // (see JitsiStreamBackgroundEffect's MEDIAPIPE_SEG_WIDTH/HEIGHT comment and bench/REPORT.md), so
+  // MediaPipe can afford a sharper mask for close to free, which directly reduced ghosting/edge
+  // softness. Uses the real reported size (512x288) here rather than the mock's old 256x144, since
+  // the mock's maskWidth/maskHeight is meant to mirror what a real segmenter fed this input size
+  // would report back.
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 512, maskHeight: 288 } });
 
   s.effect._renderMask();
 
   const videoArg = s.mediaPipeCalls;
 
   assert.equal(videoArg.segmentForVideo, 1);
-  // The mask reported back is SEG_WIDTH x SEG_HEIGHT (256x144), matching what a small fixed-size
-  // input canvas would produce -- _ensureMaskSize must not have needed to resize anything away
-  // from the constructor's default.
-  assert.equal(s.effect._options.width, 256);
-  assert.equal(s.effect._options.height, 144);
+  assert.equal(s.effect._options.width, 512);
+  assert.equal(s.effect._options.height, 288);
   assert.ok(s.effect._mediaPipeInputCanvas, 'a reusable MediaPipe input canvas must have been created');
-  assert.equal(s.effect._mediaPipeInputCanvas.width, 256);
-  assert.equal(s.effect._mediaPipeInputCanvas.height, 144);
+  assert.equal(s.effect._mediaPipeInputCanvas.width, 512);
+  assert.equal(s.effect._mediaPipeInputCanvas.height, 288);
 });
 
 test('Phase 2c: MediaPipe blend timing is measured separately from segmentation/readback', () => {

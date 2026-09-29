@@ -641,6 +641,13 @@ export function useJitsiMeeting({
   // SAME track instance re-applies the effect automatically inside lib-jitsi-meet itself, so that
   // path needs no extra handling here.
   const virtualBackgroundRef = useRef<{ config: IVirtualBackground; effect: any } | null>(null);
+  // Guards against a stale-application race in setVirtualBackground: switching backgrounds twice
+  // quickly starts two overlapping async createVirtualBackgroundEffect() calls, and without this,
+  // whichever one happened to FINISH last would win and get applied -- not whichever one the
+  // person actually selected last. Each call captures the generation counter's value at its own
+  // start and checks it again right before every side effect; a call that's no longer the latest
+  // bails out silently instead of applying a stale result.
+  const backgroundApplyGenerationRef = useRef(0);
 
   const applyVirtualBackgroundToTrack = useCallback(async (track: any) => {
     if (!virtualBackgroundRef.current || !track) {
@@ -2563,6 +2570,9 @@ export function useJitsiMeeting({
   // the UI can show an error instead of silently doing nothing.
   const setVirtualBackground = useCallback(async (config: IVirtualBackground | null) => {
     const track = localVideoTrackRef.current;
+    // See backgroundApplyGenerationRef's own comment. Captured before any await in this call.
+    const myGeneration = ++backgroundApplyGenerationRef.current;
+    const isStaleCall = () => backgroundApplyGenerationRef.current !== myGeneration;
 
     if (config && config.backgroundType !== 'none' && lowDataModeRef.current !== 'auto') {
       throw new Error('Background effects are disabled while Low Data Mode is active.');
@@ -2572,6 +2582,11 @@ export function useJitsiMeeting({
       virtualBackgroundRef.current = null;
       if (track) {
         await track.setEffect(undefined);
+        if (isStaleCall()) {
+          // A newer call (re-enabling a background, or switching to a different one) has already
+          // started since this removal began -- don't overwrite whatever it's already applied.
+          return;
+        }
         setLocalCameraStream(trackToStream(track));
       }
       // Restore the sender to exactly what the non-effect policy would already be using --
@@ -2600,6 +2615,17 @@ export function useJitsiMeeting({
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     const effect = await createVirtualBackgroundEffect(config, { onGiveUp: handleBackgroundGiveUp });
 
+    if (isStaleCall()) {
+      // A newer setVirtualBackground call has already started (another switch, or a removal)
+      // since this one began its (async, model-loading) work. Discard this effect instead of
+      // applying it over whatever the newer call has already done or is doing -- it was never
+      // attached to the track (see stopEffect's own comment on why calling it pre-attachment is
+      // safe), so there's no active frame loop to leave running either.
+      effect.stopEffect?.();
+
+      return;
+    }
+
     // Apply today's network- and call-size-driven target immediately -- otherwise this would sit
     // at the effect's own 720p default until the next network-quality tick (a few seconds away).
     // A brand-new effect instance has no previous applied target, so this is never subject to the
@@ -2623,6 +2649,16 @@ export function useJitsiMeeting({
 
     if (track) {
       await track.setEffect(effect);
+      if (isStaleCall()) {
+        // Another call superseded this one while setEffect was in flight -- undo the attach
+        // instead of leaving this now-unwanted effect live on the track. Best-effort: if this
+        // itself fails, the newer call's own setEffect (already applying/about to apply) still
+        // wins the track, it just briefly shared it with this stale one.
+        void Promise.resolve(track.setEffect(undefined)).catch(() => undefined);
+        effect.stopEffect?.();
+
+        return;
+      }
       setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };

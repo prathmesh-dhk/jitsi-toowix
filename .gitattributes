@@ -1,3 +1,9 @@
 *.bundle.js -text -diff
 *.pbxproj -text
 lib-jitsi-meet.js -text -diff
+# Self-hosted MediaPipe WASM glue, must byte-for-byte match @mediapipe/tasks-vision's own copy
+# (checked at build time by scripts/verify-mediapipe-assets.cjs -- FilesetResolver requires these
+# unrenamed AND unmodified). Without this, a Windows checkout with Git's default line-ending
+# conversion silently rewrites these committed LF files to CRLF, breaking that check for every
+# Windows contributor and Windows CI runner -- reproduced directly while validating this file.
+toowix-web-app/public/libs/mediapipe/wasm/* -text
