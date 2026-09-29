@@ -1,0 +1,54 @@
+{
+  "requestedEngine": "v1",
+  "headless": true,
+  "cpuThrottle": 6,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-720.mjpeg",
+  "actualEngineAtStart": "v1",
+  "bench": {
+    "engine": "v1",
+    "frames": 108,
+    "fps": 3.6,
+    "droppedFrames": 108,
+    "total": {
+      "average": 242.97222222222223,
+      "max": 399,
+      "min": 206,
+      "p95": 297
+    },
+    "segmentation": {
+      "average": 230.7037037037037,
+      "max": 389,
+      "min": 198,
+      "p95": 278
+    },
+    "readback": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    },
+    "compositing": {
+      "average": 12.203703703703704,
+      "max": 34,
+      "min": 6,
+      "p95": 22
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 480,
+  "perfCapStepped": true,
+  "actualEngineAfterBench": "v1",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "v1",
+    "outputHeight": 480,
+    "avgTotalMs": 221.3,
+    "avgSegmentationMs": 207.3,
+    "avgReadbackMs": 0,
+    "avgCompositingMs": 14,
+    "droppedFrames": 4,
+    "jsHeapMB": 4.9
+  },
+  "consoleErrors": [],
+  "exceptions": []
+}

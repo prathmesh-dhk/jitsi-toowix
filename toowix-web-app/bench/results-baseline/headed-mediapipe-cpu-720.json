@@ -1,0 +1,56 @@
+{
+  "requestedEngine": "mediapipe-cpu",
+  "headless": false,
+  "cpuThrottle": null,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-720.mjpeg",
+  "actualEngineAtStart": "mediapipe-cpu",
+  "bench": {
+    "engine": "mediapipe-cpu",
+    "frames": 0,
+    "fps": 0,
+    "droppedFrames": 0,
+    "total": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    },
+    "segmentation": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    },
+    "readback": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    },
+    "compositing": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    }
+  },
+  "perfCapBeforeBench": 1080,
+  "perfCapAfterBench": 1080,
+  "perfCapStepped": false,
+  "actualEngineAfterBench": "mediapipe-cpu",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "mediapipe-cpu",
+    "outputHeight": 720,
+    "avgTotalMs": 197,
+    "avgSegmentationMs": 179,
+    "avgReadbackMs": 0,
+    "avgCompositingMs": 3,
+    "droppedFrames": 1,
+    "jsHeapMB": 16.5
+  },
+  "consoleErrors": [
+    "INFO: Created TensorFlow Lite XNNPACK delegate for CPU."
+  ],
+  "exceptions": []
+}

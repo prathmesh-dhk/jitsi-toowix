@@ -13,9 +13,9 @@ import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './shar
 import {
   classifyNetwork,
   getAudioMaxBitrateBps,
-  getBackgroundEffectMaxHeight,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
+  getTargetVideoHeight,
   type INetworkMetrics,
   type LowDataMode,
   NETWORK_RECOVERY_STABLE_MS,
@@ -142,6 +142,24 @@ const SEND_SINGLE_VIDEO_LAYER = true;
 const ROOM_OPERATION_TIMEOUT_MS = 8000;
 // See recomputeRemoteScreenShare's comment for why this exists and why it's short.
 const SCREEN_SHARE_CLEAR_DEBOUNCE_MS = 200;
+// Minimum time between two consecutive INCREASES to the sender's video-quality ceiling while a
+// background effect is active (see the periodic network-quality effect). Stepping DOWN is always
+// immediate -- only stepping up is rate-limited, so a brief network recovery blip can't bounce the
+// encoder up and back down repeatedly. No corresponding limit exists for the non-effect path --
+// this is new in Phase 1b, scoped to the effect-active sender height only.
+const EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS = 8000;
+
+// The video-quality formula used when NO background effect is active -- unchanged from before
+// Phase 1b (see the periodic network-quality effect for where this ran inline previously).
+// Factored out so setVirtualBackground's removal path can restore exactly this, instead of a
+// second, possibly-drifting copy of the same formula.
+function computeNonEffectSendHeight(networkState: NetworkState, base: number): number {
+  const height = networkState === 'POOR' ? Math.min(base, 180)
+    : networkState === 'DEGRADED' || networkState === 'RECOVERING' ? Math.min(base, 360)
+      : base;
+
+  return networkState === 'GOOD' ? Math.max(base, 720) : height;
+}
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
   candidateType: null,
@@ -540,6 +558,24 @@ export function useJitsiMeeting({
   // Tracks call size for the background effect's initial resolution guess (see
   // setVirtualBackground) -- kept in sync by the network-quality effect below.
   const callSizeHeightRef = useRef(2160);
+  // The network/call-size TARGET (getTargetVideoHeight's raw output) last actually applied to
+  // the effect's own render height (effect.setMaxOutputHeight) -- null means no effect-driven
+  // value has been applied yet (so the first one applies immediately, uncapped by the step-up
+  // rate limit). This is intentionally what gates BOTH the effect's render height and the sender
+  // constraint (see the periodic network-quality effect below): applying the raw target to the
+  // effect immediately while only rate-limiting the SENDER would mean the effect composites at a
+  // higher resolution than is actually being sent for up to EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS
+  // -- CPU spent on pixels nobody receives yet. Stepping DOWN (a lower target, or the performance
+  // governor's own _perfCap dropping) is never held back by this -- only a target INCREASE is.
+  const effectAppliedTargetRef = useRef<number | null>(null);
+  // When effectAppliedTargetRef last stepped UP (not on every change -- see above). The cooldown
+  // this gates is specifically for repeated target increases; it's not touched by a decrease.
+  const effectTargetStepUpAtRef = useRef(0);
+  // The sender height last actually sent (via room.setSenderVideoConstraint) while a background
+  // effect is active -- just mirrors whatever the (already rate-limited) effect is producing, so
+  // this itself is applied immediately in either direction; the rate limiting already happened
+  // above, before the effect's render height was ever raised.
+  const effectSenderHeightRef = useRef<number | null>(null);
   const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
   const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
   const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
@@ -1853,16 +1889,57 @@ export function useJitsiMeeting({
         room.setReceiverVideoConstraint?.(height);
       }
       // Our own uplink follows the same state: cap what we send when the network is weak and lift
-      // the cap again (to the call-size ceiling) once it has recovered.
-      const sendHeight = networkState === 'GOOD' ? Math.max(base, 720) : height;
-
-      void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
-      // A virtual background/blur effect renders and re-encodes every frame on the CPU (Canvas2D,
-      // no GPU), so it has its own lower ceiling than the raw camera send height above (which can
-      // go up to 4K for a 1-on-1 call) -- but it still follows the same network state and call-size
-      // shape the rest of the call's video quality does: better network / smaller call = sharper.
+      // the cap again (to the call-size ceiling) once it has recovered. While a background effect
+      // is active, both the effect's render height and the sender's ceiling come from the SAME
+      // getTargetVideoHeight() call (see its own comment for why) so they can never disagree: the
+      // effect never renders more than the sender is allowed to send, and the sender is never
+      // asked to send more than the effect actually produces (getCurrentOutputHeight). Effect-off
+      // callers use computeNonEffectSendHeight, unchanged from before Phase 1b.
       callSizeHeightRef.current = base;
-      virtualBackgroundRef.current?.effect?.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkState, base));
+      const activeEffect = virtualBackgroundRef.current?.effect;
+
+      if (activeEffect) {
+        const target = getTargetVideoHeight(networkState, base, networkMetricsRef.current.availableOutgoingBitrateKbps);
+        const previousTarget = effectAppliedTargetRef.current;
+        const now = Date.now();
+        // The rate limit gates the TARGET itself, before it ever reaches the effect's render
+        // height -- not just the sender constraint. Applying a higher target to the effect
+        // immediately while only rate-limiting the sender would mean the effect composites at a
+        // resolution nobody is actually being sent yet, wasting CPU for up to
+        // EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS. A lower target (or no previous one) applies
+        // immediately; a higher one waits for the cooldown.
+        const canStepUp = previousTarget === null || now - effectTargetStepUpAtRef.current >= EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS;
+        const appliedTarget = previousTarget === null || target < previousTarget || canStepUp ? target : previousTarget;
+
+        if (appliedTarget !== previousTarget) {
+          effectAppliedTargetRef.current = appliedTarget;
+          if (previousTarget === null || appliedTarget > previousTarget) {
+            effectTargetStepUpAtRef.current = now;
+          }
+        }
+        activeEffect.setMaxOutputHeight?.(appliedTarget);
+
+        // The sender just mirrors what the effect is ACTUALLY producing right now -- always
+        // immediately, in either direction. The rate limiting already happened above (on
+        // appliedTarget); a further drop here can only come from the performance governor's own
+        // _perfCap easing off, which must reach the sender right away (it already happened
+        // locally -- there's nothing to gain by delaying that), and a further rise here can only
+        // come from _perfCap recovering, which is already bounded by its own, separate cooldown.
+        const producedHeight = activeEffect.getCurrentOutputHeight?.() ?? appliedTarget;
+
+        if (producedHeight !== effectSenderHeightRef.current) {
+          void Promise.resolve(room.setSenderVideoConstraint?.(producedHeight)).catch(() => undefined);
+          effectSenderHeightRef.current = producedHeight;
+        }
+      } else {
+        // No effect active (including "just removed" -- setVirtualBackground's removal path
+        // already re-applies this same formula immediately rather than waiting for this tick).
+        effectAppliedTargetRef.current = null;
+        effectSenderHeightRef.current = null;
+        const sendHeight = computeNonEffectSendHeight(networkState, base);
+
+        void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+      }
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
@@ -2441,6 +2518,46 @@ export function useJitsiMeeting({
     };
   }, [ joined, switchDevice ]);
 
+  // GO 3 give-up tier: shown when the performance governor turns the background effect off
+  // because this device can't keep up on any available engine (see JitsiStreamBackgroundEffect's
+  // onGiveUp). Same one-shot toast shape as timeLimitToast/participantToast above.
+  const [ backgroundGiveUpMessage, setBackgroundGiveUpMessage ] = useState<string | null>(null);
+
+  // Restores the raw camera track and clears every effect-related ref -- exactly
+  // setVirtualBackground's own `!config` removal path below, factored out so the give-up callback
+  // (fired from inside the effect, not from a user action) can reuse it verbatim instead of
+  // duplicating the sender-sync logic.
+  const removeVirtualBackgroundEffect = useCallback(async () => {
+    const track = localVideoTrackRef.current;
+
+    virtualBackgroundRef.current = null;
+    if (track) {
+      await track.setEffect(undefined);
+      setLocalCameraStream(trackToStream(track));
+    }
+    effectAppliedTargetRef.current = null;
+    effectSenderHeightRef.current = null;
+    if (lowDataModeRef.current === 'auto' && manualMaxHeightRef.current === null) {
+      const room = roomRef.current;
+
+      if (room) {
+        const sendHeight = computeNonEffectSendHeight(networkStateRef.current, callSizeHeightRef.current);
+
+        void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+      }
+    }
+  }, []);
+
+  // Called from inside JitsiStreamBackgroundEffect (a plain class, not React) when the governor
+  // gives up -- fire-and-forget async since the callback itself must be synchronous.
+  const handleBackgroundGiveUp = useCallback(() => {
+    void removeVirtualBackgroundEffect();
+    const message = 'Background effects were turned off because this device can\'t keep up right now.';
+
+    setBackgroundGiveUpMessage(message);
+    setTimeout(() => setBackgroundGiveUpMessage((current) => (current === message ? null : current)), 8000);
+  }, [ removeVirtualBackgroundEffect ]);
+
   // Applies (blur/image) or clears (null) a virtual background on the local camera track.
   // Re-thrown to the caller on failure (model download failed, WebAssembly unsupported, etc.) so
   // the UI can show an error instead of silently doing nothing.
@@ -2457,6 +2574,21 @@ export function useJitsiMeeting({
         await track.setEffect(undefined);
         setLocalCameraStream(trackToStream(track));
       }
+      // Restore the sender to exactly what the non-effect policy would already be using --
+      // immediately, rather than leaving the effect-derived value in place until the next
+      // network-quality tick (a few seconds away). Applies only in auto mode with no manual cap;
+      // otherwise applyMediaQualityPolicy/setVideoQuality already own the sender constraint.
+      effectAppliedTargetRef.current = null;
+      effectSenderHeightRef.current = null;
+      if (lowDataModeRef.current === 'auto' && manualMaxHeightRef.current === null) {
+        const room = roomRef.current;
+
+        if (room) {
+          const sendHeight = computeNonEffectSendHeight(networkStateRef.current, callSizeHeightRef.current);
+
+          void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+        }
+      }
 
       return;
     }
@@ -2466,18 +2598,35 @@ export function useJitsiMeeting({
     }
 
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
-    const effect = await createVirtualBackgroundEffect(config);
+    const effect = await createVirtualBackgroundEffect(config, { onGiveUp: handleBackgroundGiveUp });
 
-    // Apply today's network- and call-size-driven cap immediately -- otherwise this would sit at
-    // the effect's own 720p default until the next network-quality tick (a few seconds away).
-    effect.setMaxOutputHeight?.(getBackgroundEffectMaxHeight(networkStateRef.current, callSizeHeightRef.current));
+    // Apply today's network- and call-size-driven target immediately -- otherwise this would sit
+    // at the effect's own 720p default until the next network-quality tick (a few seconds away).
+    // A brand-new effect instance has no previous applied target, so this is never subject to the
+    // step-up rate limit (same "previousTarget === null" bypass the periodic tick uses). Also
+    // applies the matching sender ceiling immediately, for the same reason.
+    const target = getTargetVideoHeight(
+        networkStateRef.current, callSizeHeightRef.current, networkMetricsRef.current.availableOutgoingBitrateKbps
+    );
+
+    effectAppliedTargetRef.current = target;
+    effectTargetStepUpAtRef.current = Date.now();
+    effect.setMaxOutputHeight?.(target);
+    const room = roomRef.current;
+
+    if (room && lowDataModeRef.current === 'auto' && manualMaxHeightRef.current === null) {
+      const producedHeight = effect.getCurrentOutputHeight?.() ?? target;
+
+      void Promise.resolve(room.setSenderVideoConstraint?.(producedHeight)).catch(() => undefined);
+      effectSenderHeightRef.current = producedHeight;
+    }
 
     if (track) {
       await track.setEffect(effect);
       setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };
-  }, []);
+  }, [ handleBackgroundGiveUp ]);
 
   // Toggles mic noise suppression (RNNoise) on/off. Re-thrown to the caller on failure (e.g.
   // AudioWorklet unsupported) so the UI can show an error instead of silently doing nothing.
@@ -2733,6 +2882,7 @@ export function useJitsiMeeting({
     stopRecording,
     switchDevice,
     setVirtualBackground,
+    backgroundGiveUpMessage,
     setLowDataMode,
     noiseSuppressionEnabled,
     toggleNoiseSuppression,

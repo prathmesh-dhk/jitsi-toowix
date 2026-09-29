@@ -1,0 +1,56 @@
+{
+  "requestedEngine": "mediapipe-cpu",
+  "headless": true,
+  "cpuThrottle": 4,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-720.mjpeg",
+  "actualEngineAtStart": "mediapipe-cpu",
+  "bench": {
+    "engine": "mediapipe-cpu",
+    "frames": 172,
+    "fps": 5.7,
+    "droppedFrames": 172,
+    "total": {
+      "average": 140.59302325581396,
+      "max": 197,
+      "min": 122,
+      "p95": 166
+    },
+    "segmentation": {
+      "average": 86.18604651162791,
+      "max": 120,
+      "min": 73,
+      "p95": 110
+    },
+    "readback": {
+      "average": 0.01744186046511628,
+      "max": 1,
+      "min": 0,
+      "p95": 0
+    },
+    "compositing": {
+      "average": 5.976744186046512,
+      "max": 13,
+      "min": 4,
+      "p95": 11
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 480,
+  "perfCapStepped": true,
+  "actualEngineAfterBench": "mediapipe-cpu",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "mediapipe-cpu",
+    "outputHeight": 480,
+    "avgTotalMs": 145.3,
+    "avgSegmentationMs": 89.2,
+    "avgReadbackMs": 0,
+    "avgCompositingMs": 6.8,
+    "droppedFrames": 6,
+    "jsHeapMB": 50.3
+  },
+  "consoleErrors": [
+    "INFO: Created TensorFlow Lite XNNPACK delegate for CPU."
+  ],
+  "exceptions": []
+}

@@ -5,3 +5,9 @@ dist-ssr/
 .env
 .env.*.local
 *.log
+
+# Phase 2 bench artifacts -- large media/results, never commit
+bench/media/
+bench/results/
+bench/screenshots/
+bench/scratch/

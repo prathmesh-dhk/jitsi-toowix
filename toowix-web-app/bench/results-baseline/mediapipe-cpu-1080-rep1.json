@@ -1,0 +1,66 @@
+{
+  "requestedEngine": "mediapipe-cpu",
+  "headless": true,
+  "cpuThrottle": null,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-1080.mjpeg",
+  "actualEngineAtStart": "mediapipe-cpu",
+  "bench": {
+    "engine": "mediapipe-cpu",
+    "frames": 353,
+    "fps": 11.8,
+    "droppedFrames": 353,
+    "total": {
+      "average": 50.91501416430595,
+      "max": 88,
+      "min": 37,
+      "p95": 74
+    },
+    "segmentation": {
+      "average": 30.507082152974505,
+      "max": 61,
+      "min": 23,
+      "p95": 46
+    },
+    "readback": {
+      "average": 0.0028328611898017,
+      "max": 1,
+      "min": 0,
+      "p95": 0
+    },
+    "compositing": {
+      "average": 0.6657223796033994,
+      "max": 2,
+      "min": 0,
+      "p95": 1
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 480,
+  "perfCapStepped": true,
+  "actualEngineAfterBench": "mediapipe-cpu",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "mediapipe-cpu",
+    "outputHeight": 480,
+    "avgTotalMs": 58,
+    "avgSegmentationMs": 29.9,
+    "avgReadbackMs": 0,
+    "avgCompositingMs": 0.5,
+    "droppedFrames": 11,
+    "jsHeapMB": 52.1
+  },
+  "consoleErrors": [
+    "INFO: Created TensorFlow Lite XNNPACK delegate for CPU."
+  ],
+  "exceptions": [],
+  "clipInfo": {
+    "file": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-1080.mjpeg",
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "contentW": 608,
+    "contentH": 1080,
+    "upscaled": true,
+    "label": "1080-UPSCALED-pillarboxed16x9",
+    "note": "Portrait source (478x850) pillarboxed: real content scaled to 608x1080, centered in a 1920x1080 black canvas (Chrome's fake-video-capture rejects portrait-dimensioned files)."
+  }
+}

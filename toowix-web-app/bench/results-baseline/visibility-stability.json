@@ -1,0 +1,7 @@
+{
+  "engine": "mediapipe-gpu",
+  "frameCountRightAfterResume": 18,
+  "frameCountTwoSecondsLater": 16,
+  "loopResumed": false,
+  "consoleErrors": []
+}

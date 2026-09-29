@@ -1,0 +1,64 @@
+{
+  "requestedEngine": "v1",
+  "headless": true,
+  "cpuThrottle": null,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-480.mjpeg",
+  "actualEngineAtStart": "v1",
+  "bench": {
+    "engine": "v1",
+    "frames": 503,
+    "fps": 16.8,
+    "droppedFrames": 73,
+    "total": {
+      "average": 25.691848906560637,
+      "max": 61,
+      "min": 20,
+      "p95": 41
+    },
+    "segmentation": {
+      "average": 25.178926441351887,
+      "max": 60,
+      "min": 19,
+      "p95": 41
+    },
+    "readback": {
+      "average": 0,
+      "max": 0,
+      "min": 0,
+      "p95": 0
+    },
+    "compositing": {
+      "average": 0.5089463220675944,
+      "max": 2,
+      "min": 0,
+      "p95": 1
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 720,
+  "perfCapStepped": false,
+  "actualEngineAfterBench": "v1",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "v1",
+    "outputHeight": 720,
+    "avgTotalMs": 27.4,
+    "avgSegmentationMs": 26.8,
+    "avgReadbackMs": 0,
+    "avgCompositingMs": 0.6,
+    "droppedFrames": 4,
+    "jsHeapMB": 5.5
+  },
+  "consoleErrors": [],
+  "exceptions": [],
+  "clipInfo": {
+    "file": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-480.mjpeg",
+    "canvasW": 854,
+    "canvasH": 480,
+    "contentW": 270,
+    "contentH": 480,
+    "upscaled": false,
+    "label": "480-pillarboxed16x9",
+    "note": "Portrait source (478x850) pillarboxed: real content scaled to 270x480, centered in a 854x480 black canvas (Chrome's fake-video-capture rejects portrait-dimensioned files)."
+  }
+}

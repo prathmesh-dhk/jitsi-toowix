@@ -166,18 +166,57 @@ export function getAudioMaxBitrateBps(state: NetworkState): number {
   return 40000;
 }
 
-// Output resolution cap for the virtual background/blur compositor. Scales down with a weaker
-// network (same direction as the rest of the call's video quality), but the good-network ceiling
-// is fixed at 720p regardless of call size -- 1080p was tried and measurably lagged even a 1-on-1
-// call: the effect re-segments and redraws every pixel on the CPU every frame (Canvas2D, no GPU,
-// plus a blur filter pass), and 1080p was more work than that pipeline can do in real time.
-export function getBackgroundEffectMaxHeight(state: NetworkState, callSizeMaxHeight: number): number {
-  const ceiling = Math.min(callSizeMaxHeight, 720);
+// The ONE shared decision for how sharp video is allowed to be while a background effect is
+// active -- used for BOTH the effect's own render/output height (JitsiStreamBackgroundEffect's
+// setMaxOutputHeight) and the sender's video-quality ceiling (useJitsiMeeting's periodic
+// network-quality effect), so the two can never disagree: the effect never renders more than the
+// sender is allowed to send, and the sender is never asked to send more than the effect actually
+// produces (see useJitsiMeeting.ts, which combines this with effect.getCurrentOutputHeight()).
+// The compositor's own real-time performance (JitsiStreamBackgroundEffect's _perfCap governor) is
+// a SEPARATE concern -- it protects against the CPU-bound lag a fixed 1080p target used to cause
+// on ordinary hardware. This function only decides what the network/call size justify asking for;
+// the effect combines it with what the machine can actually keep up with.
+export const BG_MIN_HEIGHT = 480;
+export const BG_MAX_HEIGHT = 1080;
+// Named separately from BG_MIN_HEIGHT (even though it's the same value today) so POOR can be
+// rolled back on its own -- e.g. back to the old, pre-effect 180 -- without touching the general
+// floor DEGRADED and the GOOD thin-pipe hold below also use.
+export const POOR_TARGET_HEIGHT = 480;
 
-  if (state === 'POOR') return 180;
-  if (state === 'DEGRADED' || state === 'RECOVERING') return Math.min(360, ceiling);
+// A GOOD networkState is debounced (see updateNetworkStateFromMetrics) and can lag a few seconds
+// behind reality. Reusing NETWORK_THRESHOLDS.poorBitrateKbps -- the one bitrate number the rest of
+// this file already calibrates against -- as the trigger to hold at 720 instead of the full 1080
+// ceiling catches a thin pipe sooner than waiting for the debounce to also call it DEGRADED/POOR,
+// rather than inventing a second, uncalibrated threshold. Per-resolution bandwidth tiers (e.g. "is
+// 1080p actually affordable at this bitrate") were considered and deliberately deferred -- this
+// codebase has no configured per-resolution bitrate numbers to base them on (simulcast is off
+// entirely) -- until real numbers are captured from a browser test; this remains the only
+// bandwidth signal this function uses.
+const GOOD_LOW_BANDWIDTH_KBPS = NETWORK_THRESHOLDS.poorBitrateKbps;
 
-  return ceiling;
+export function getTargetVideoHeight(
+    state: NetworkState,
+    callSizeMaxHeight: number,
+    availableOutgoingBitrateKbps?: number | null
+): number {
+  if (state === 'POOR') return POOR_TARGET_HEIGHT;
+
+  const ceiling = Math.min(callSizeMaxHeight, BG_MAX_HEIGHT);
+
+  if (state === 'DEGRADED' || state === 'RECOVERING') return Math.max(BG_MIN_HEIGHT, Math.min(720, ceiling));
+
+  // GOOD -- must never be lower than what a non-effect participant on the same network/call size
+  // would send (the existing non-effect formula is max(callSizeMaxHeight, 720)), so this floors
+  // at 720 regardless of call size or a thin live bandwidth sample; only the ceiling (up to 1080)
+  // moves with call size above that.
+  if (
+    typeof availableOutgoingBitrateKbps === 'number' && availableOutgoingBitrateKbps > 0
+    && availableOutgoingBitrateKbps < GOOD_LOW_BANDWIDTH_KBPS
+  ) {
+    return 720;
+  }
+
+  return Math.max(720, ceiling);
 }
 
 export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): string {

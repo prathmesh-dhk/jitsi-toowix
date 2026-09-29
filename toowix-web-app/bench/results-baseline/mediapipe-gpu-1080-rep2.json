@@ -1,0 +1,64 @@
+{
+  "requestedEngine": "mediapipe-gpu",
+  "headless": true,
+  "cpuThrottle": null,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-1080.mjpeg",
+  "actualEngineAtStart": "mediapipe-gpu",
+  "bench": {
+    "engine": "mediapipe-gpu",
+    "frames": 471,
+    "fps": 15.7,
+    "droppedFrames": 80,
+    "total": {
+      "average": 29.64968152866242,
+      "max": 51,
+      "min": 25,
+      "p95": 45
+    },
+    "segmentation": {
+      "average": 1.8789808917197452,
+      "max": 5,
+      "min": 1,
+      "p95": 3
+    },
+    "readback": {
+      "average": 16.197452229299362,
+      "max": 31,
+      "min": 13,
+      "p95": 22
+    },
+    "compositing": {
+      "average": 0.6666666666666666,
+      "max": 2,
+      "min": 0,
+      "p95": 1
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 480,
+  "perfCapStepped": true,
+  "actualEngineAfterBench": "mediapipe-gpu",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "mediapipe-gpu",
+    "outputHeight": 480,
+    "avgTotalMs": 30.1,
+    "avgSegmentationMs": 1.9,
+    "avgReadbackMs": 16.1,
+    "avgCompositingMs": 1,
+    "droppedFrames": 3,
+    "jsHeapMB": 84.1
+  },
+  "consoleErrors": [],
+  "exceptions": [],
+  "clipInfo": {
+    "file": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-1080.mjpeg",
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "contentW": 608,
+    "contentH": 1080,
+    "upscaled": true,
+    "label": "1080-UPSCALED-pillarboxed16x9",
+    "note": "Portrait source (478x850) pillarboxed: real content scaled to 608x1080, centered in a 1920x1080 black canvas (Chrome's fake-video-capture rejects portrait-dimensioned files)."
+  }
+}

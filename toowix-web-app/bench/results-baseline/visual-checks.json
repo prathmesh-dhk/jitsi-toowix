@@ -1,0 +1,23 @@
+{
+  "edgeCrop": [
+    {
+      "moment": "still",
+      "delayMs": 1000,
+      "file": "mask-debug-edgecrop-still.png"
+    },
+    {
+      "moment": "headturn",
+      "delayMs": 3000,
+      "file": "mask-debug-edgecrop-headturn.png"
+    },
+    {
+      "moment": "handraised",
+      "delayMs": 3000,
+      "file": "mask-debug-edgecrop-handraised.png"
+    }
+  ],
+  "edgeComparison": {
+    "v1": "edge-compare-v1.png",
+    "mediapipe-cpu": "edge-compare-mediapipe-cpu.png"
+  }
+}

@@ -2,7 +2,14 @@
 // TFLite WASM module + segmentation model once (cached across calls) and constructs the effect.
 // No Redux here (this app doesn't use it) -- callers get a rejected promise on failure instead
 // of a dispatched notification action.
-import JitsiStreamBackgroundEffect, { IVirtualBackground } from './JitsiStreamBackgroundEffect';
+//
+// Phase 2 adds a second, opt-in segmentation engine (MediaPipe Tasks Vision) selected via
+// readSegmentationEngineOverride() -- see mediaPipeSegmentation.ts for why that lives in its own
+// module (avoiding a circular import with JitsiStreamBackgroundEffect.ts) and for the ownership
+// rule on the cached MediaPipe segmenter. V1 (TFLite, below) remains the default and the engine
+// this file falls back to if MediaPipe fails to initialize.
+import JitsiStreamBackgroundEffect, { IVirtualBackground, ISegmentationEngineHandle } from './JitsiStreamBackgroundEffect';
+import { loadMediaPipeSegmenter, readSegmentationEngineOverride } from './mediaPipeSegmentation';
 
 // @ts-ignore -- plain Emscripten glue module, no types.
 import createTFLiteModule from './tfliteModule.js';
@@ -36,14 +43,46 @@ function loadTfliteOnce(): Promise<{ tflite: any }> {
   return modulePromise;
 }
 
+export interface ICreateVirtualBackgroundEffectOptions {
+  // GO 3 give-up tier: called if the performance governor exhausts both levers with no cheaper
+  // engine to fall back to (see JitsiStreamBackgroundEffect._giveUp). The effect has already
+  // stopped itself (no more CPU spent) by the time this fires -- the caller is expected to
+  // restore the raw camera track (never leave a black/frozen frame) and tell the user, and to not
+  // automatically re-apply a background for GIVE_UP_COOLDOWN_MS's duration (5 minutes; the effect
+  // itself does not enforce this, since a fresh instance from a device switch may legitimately
+  // work -- see the comment on that constant).
+  onGiveUp?: () => void;
+}
+
 export async function createVirtualBackgroundEffect(
-    virtualBackground: IVirtualBackground
+    virtualBackground: IVirtualBackground,
+    options: ICreateVirtualBackgroundEffectOptions = {}
 ): Promise<JitsiStreamBackgroundEffect> {
   if (typeof WebAssembly !== 'object') {
     throw new Error('WebAssembly is not supported in this browser');
   }
 
-  const { tflite } = await loadTfliteOnce();
+  const requestedEngine = readSegmentationEngineOverride();
 
-  return new JitsiStreamBackgroundEffect(tflite, virtualBackground);
+  if (requestedEngine === 'mediapipe-cpu' || requestedEngine === 'mediapipe-gpu') {
+    const delegate = requestedEngine === 'mediapipe-gpu' ? 'GPU' : 'CPU';
+
+    try {
+      const mediaPipeSegmenter = await loadMediaPipeSegmenter(delegate);
+      const engineHandle: ISegmentationEngineHandle = { engine: requestedEngine, mediaPipeSegmenter };
+
+      return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null);
+    } catch (err) {
+      // Creation failure (wasm/model download, GPU context unavailable, etc.) -- fall through to
+      // V1 below rather than surface a broken call to the person selecting a background. A
+      // DIFFERENT failure path -- MediaPipe creating successfully but then failing repeatedly
+      // mid-call -- is handled inside JitsiStreamBackgroundEffect itself (see loadV1Fallback).
+      console.warn(`[VirtualBackground] MediaPipe (${delegate}) failed to initialize, falling back to V1:`, err);
+    }
+  }
+
+  const { tflite } = await loadTfliteOnce();
+  const engineHandle: ISegmentationEngineHandle = { engine: 'v1', tflite };
+
+  return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null);
 }

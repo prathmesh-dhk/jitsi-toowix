@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node scripts/verify-mediapipe-assets.cjs && tsc && vite build",
+    "verify-mediapipe-assets": "node scripts/verify-mediapipe-assets.cjs",
     "preview": "vite preview",
     "test:recording:e2e": "node tests/recording-e2e.cjs"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "firebase": "^10.12.0",
     "lucide-react": "^0.379.0",
     "react": "^18.3.1",

@@ -1,0 +1,54 @@
+{
+  "requestedEngine": "mediapipe-gpu",
+  "headless": true,
+  "cpuThrottle": 4,
+  "clipPath": "C:\\Users\\xeon5\\Downloads\\jitsi-toowix\\toowix-web-app\\bench\\media\\clip-720.mjpeg",
+  "actualEngineAtStart": "mediapipe-gpu",
+  "bench": {
+    "engine": "mediapipe-gpu",
+    "frames": 317,
+    "fps": 10.5,
+    "droppedFrames": 317,
+    "total": {
+      "average": 60.413249211356465,
+      "max": 100,
+      "min": 49,
+      "p95": 80
+    },
+    "segmentation": {
+      "average": 12.053627760252366,
+      "max": 34,
+      "min": 7,
+      "p95": 20
+    },
+    "readback": {
+      "average": 17.958990536277604,
+      "max": 32,
+      "min": 14,
+      "p95": 22
+    },
+    "compositing": {
+      "average": 5.2933753943217665,
+      "max": 15,
+      "min": 3,
+      "p95": 11
+    }
+  },
+  "perfCapBeforeBench": 720,
+  "perfCapAfterBench": 480,
+  "perfCapStepped": true,
+  "actualEngineAfterBench": "mediapipe-gpu",
+  "silentlyFellBackToV1": false,
+  "lastOverlayMetrics": {
+    "engine": "mediapipe-gpu",
+    "outputHeight": 480,
+    "avgTotalMs": 60.3,
+    "avgSegmentationMs": 10.5,
+    "avgReadbackMs": 18.5,
+    "avgCompositingMs": 5.3,
+    "droppedFrames": 11,
+    "jsHeapMB": 26
+  },
+  "consoleErrors": [],
+  "exceptions": []
+}

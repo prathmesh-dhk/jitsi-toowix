@@ -43,6 +43,14 @@ function getBackgroundErrorMessage(error: unknown): string {
   if (normalized.includes('model') || normalized.includes('download') || normalized.includes('http')) {
     return 'The background engine could not load. Refresh the page and try again.';
   }
+  // GO 3 give-up tier: this exact string is not thrown from the apply() flow this function maps
+  // (the governor's give-up fires mid-call, surfaced separately via useJitsiMeeting's
+  // backgroundGiveUpMessage toast, not through this modal's error state) -- kept here anyway so a
+  // future caller that DOES route it through onSelect's rejection still gets a sensible message,
+  // rather than falling through to the generic one below.
+  if (normalized.includes("can't keep up") || normalized.includes('cannot keep up')) {
+    return "This device can't keep up with background effects right now. Try again in a few minutes.";
+  }
 
   return 'Could not apply this background. Keep your camera on and try again.';
 }
