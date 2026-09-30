@@ -2096,6 +2096,40 @@ export function MeetingRoomPage() {
 
     pipWin.addEventListener('pagehide', onPageHide);
 
+    // Real reported gap (2026-09-30): the main page's keyboard shortcuts (m mic, v camera, w
+    // tile view, f fullscreen -- see the handleKeyDown effect above) are registered on the MAIN
+    // window only. Document PiP is a genuinely separate window/document (that's the whole point
+    // of the API), so it never received those keydown events at all -- pressing 'm'/'v' while the
+    // PiP window had focus did nothing. Mirrors the SAME handler here, scoped to this PiP window,
+    // reusing the identical refs (never stale, same pattern the main handler already uses) so
+    // both stay in sync with exactly one behaviour each shortcut. Removed automatically when the
+    // window closes via pagehide below -- no separate cleanup path needed since the whole window
+    // (and its listeners) is discarded together.
+    const onPipKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+      }
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        toggleTileView();
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        toggleInCallMicRef.current();
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        toggleInCallVideoRef.current();
+      }
+      // 'f' (fullscreen) is deliberately NOT mirrored here -- fullscreening the PiP window itself
+      // is not a meaningful action the way it is on the main call window.
+    };
+
+    pipWin.addEventListener('keydown', onPipKeyDown);
+
     documentPipWindowRef.current = pipWin;
     const lc = pipLifecycleRef.current;
     lc.phase = 'open';

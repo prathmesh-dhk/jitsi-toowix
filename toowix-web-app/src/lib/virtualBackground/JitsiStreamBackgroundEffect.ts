@@ -114,17 +114,29 @@ const MEDIAPIPE_MASK_SMOOTHING_MIN = 0.05;
 // edge -- this is what read as a "disturbed"/muddy edge rather than a crisp one, independent of
 // and in addition to the temporal ghosting MASK_TEMPORAL_SMOOTHING already addresses. Values near
 // the extremes (confidently person or confidently background) are left almost unchanged; only the
-// ambiguous middle is pushed outward. MediaPipe-only (see _blendMaskValues) -- V1's runInference()
-// is pinned byte-for-byte unchanged, so this does not apply there. Applied AFTER temporal
-// smoothing, so it shapes each frame's already-stabilized value, not the raw noisy one.
+// ambiguous middle is pushed outward. Applied AFTER temporal smoothing, so it shapes each frame's
+// already-stabilized value, not the raw noisy one.
 // Exponent tuned down from an initial 0.6 -- steepening the transition also steepens the model's
 // own per-pixel NOISE right at the boundary (a value hovering around 0.5 from real sensor/model
 // jitter, not real edge motion, gets pushed to full-on/full-off), which showed up as visible
 // speckle/graininess right at the edge instead of a clean line. 0.8 is closer to linear (gentler),
 // trading some of the crispness gain for not amplifying that per-pixel noise into speckling.
 const SHARPEN_EXPONENT = 0.8;
+// Real reported defect (2026-09-30): the curve above alone still left a genuinely confident
+// foreground pixel (e.g. raw 0.9) at only ~233/255 alpha -- visibly translucent/"faded" body, not
+// the fully solid person a viewer expects, since the curve approaches but never actually reaches
+// 0/1 except at the true extremes. A pixel this confident is not an edge case that needs a soft
+// transition; it should just commit to fully opaque (or fully transparent, symmetric case).
+// MASK_EDGE_BAND is the only region that still gets the soft steepened curve -- everything more
+// confident than that is hard-clamped, which is what gives a solid body with a comparatively
+// thin, deliberately-feathered (not just "less blurred") edge band instead of a uniformly soft
+// silhouette.
+const MASK_HARD_OPAQUE_ABOVE = 0.75;
+const MASK_HARD_TRANSPARENT_BELOW = 0.25;
 
 function sharpenMaskAlpha(value: number): number {
+  if (value >= MASK_HARD_OPAQUE_ABOVE) return 1;
+  if (value <= MASK_HARD_TRANSPARENT_BELOW) return 0;
   const centered = value - 0.5;
   const steepened = Math.sign(centered) * Math.pow(Math.abs(centered) * 2, SHARPEN_EXPONENT) * 0.5;
 
@@ -1060,31 +1072,16 @@ export default class JitsiStreamBackgroundEffect {
     this._outputCanvasCtx.imageSmoothingQuality = 'high';
 
     // Draw the (blurred-edge) segmentation mask, scaled to the (possibly capped) output size.
-    // The blur radius scales with how many output pixels one mask pixel is being stretched into,
-    // instead of a flat 8px/4px regardless of source detail. That flat number was tuned against
-    // V1's coarse 256x144 source at a typical ~5x stretch (e.g. 720p output) -- fine there, but
-    // needlessly heavy (a muddy, "disturbed" edge) on MediaPipe's finer 512x288 source, which
-    // doesn't need nearly as much blur to hide upscaling blockiness at the same output size. This
-    // keeps V1 close to its previously-tuned amount (its ratio is usually near the reference) and
-    // gives MediaPipe a visibly crisper edge, both from the SAME formula rather than a hardcoded
-    // per-engine branch.
+    // Real reported defect (2026-09-30): the old ratio-scaled formula (tuned for an 8px/4px base
+    // against a coarse source) landed around 7-8px at typical call resolutions once BOTH engines
+    // settled on the same native 256x144 grid (MediaPipe's 512x288 experiment was reverted) --
+    // that reads as a soft/"faded" edge, not the sharp-with-a-little-feather look asked for. Both
+    // engines now also get an opacity-clamped, sharpened alpha (see sharpenMaskAlpha and
+    // _sharpenV1Mask) before this draw, so the mask itself already commits to a clean edge; this
+    // blur only needs to be enough to soften that edge's staircase/upscale blockiness, not to
+    // hide a muddy/unshaped mask the way the old heavier blur was compensating for.
     const supportsFilter = 'filter' in this._outputCanvasCtx;
-    const baseBlurPx = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 4 : 8;
-    // The finer MediaPipe mask (MEDIAPIPE_SEG_HEIGHT) gets a small FIXED blur instead of the
-    // ratio-scaled formula below -- the ratio formula (tried first) still landed around 4px at
-    // typical call resolutions, which read as feathered/soft rather than crisp. Raised back up
-    // from an initial 1/1.5px -- that was crisp, but a real low-confidence moment from the model
-    // (e.g. an arm against a low-contrast background) had too little blur left to let nearby
-    // confident (opaque) pixels average it back toward opaque, and showed through as an actual
-    // hole to the real background instead of a softer edge. A fine source mask still needs less
-    // blur than V1's coarse one to look sharp, just not this little -- 3/2.5px is the current
-    // middle ground between "crisp" and "never lets the real background show through."
-    const isFineMask = this._options.height >= this._mediaPipeSegHeight && this._mediaPipeSegHeight > SEG_HEIGHT;
-    const stretchRatio = outHeight / (this._options.height || outHeight);
-    const REFERENCE_STRETCH_RATIO = 5; // ~720 / 144, the ratio baseBlurPx was originally tuned against
-    const edgeBlurPx = isFineMask
-      ? (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 2.5 : 3)
-      : Math.max(1, Math.min(baseBlurPx, baseBlurPx * (stretchRatio / REFERENCE_STRETCH_RATIO)));
+    const edgeBlurPx = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 2 : 2.5;
 
     if (supportsFilter) this._outputCanvasCtx.filter = `blur(${edgeBlurPx}px)`;
     this._outputCanvasCtx.drawImage(
@@ -1147,6 +1144,21 @@ export default class JitsiStreamBackgroundEffect {
 
       this._smoothedMask[i] = smoothed;
       this._segmentationMask.data[(i * 4) + 3] = 255 * smoothed;
+    }
+    this._segmentationMaskCtx?.putImageData(this._segmentationMask, 0, 0);
+  }
+
+  // Post-processing wrapper around runInference() -- NOT part of it, called separately from
+  // _renderMask() so the pinned method above stays byte-for-byte untouched. Re-reads the alpha
+  // channel runInference() just wrote, applies sharpenMaskAlpha (opaque body, thin feathered
+  // edge -- see that function's comment) in place, and re-commits the result to the mask canvas.
+  _sharpenV1Mask() {
+    const data = this._segmentationMask.data;
+
+    for (let i = 0; i < this._segmentationPixelCount; i++) {
+      const alphaIndex = (i * 4) + 3;
+
+      data[alphaIndex] = 255 * sharpenMaskAlpha(data[alphaIndex] / 255);
     }
     this._segmentationMaskCtx?.putImageData(this._segmentationMask, 0, 0);
   }
@@ -1443,6 +1455,12 @@ export default class JitsiStreamBackgroundEffect {
 
       this.resizeSource(sourceFrame);
       this.runInference();
+      // Post-processing ONLY -- runInference() itself, above, is untouched (still pinned
+      // byte-for-byte by the V1 SAFETY test). Applies the SAME edge-sharpening/opacity-clamp
+      // curve MediaPipe already used (see sharpenMaskAlpha) to V1's raw alpha output, fixing a
+      // reported real defect: a translucent/"faded" body and soft edges on V1 (which, unlike
+      // MediaPipe, never had any shaping applied to its raw per-pixel confidence at all).
+      this._sharpenV1Mask();
       segmentationMs = Date.now() - segmentStart;
     } else {
       segmentationSucceeded = this._runMediaPipeInference(sourceFrame);

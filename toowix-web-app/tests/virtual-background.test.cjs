@@ -818,6 +818,28 @@ test('V1 SAFETY: the TFLite inference core (runInference, the EMA blend, the inp
   );
 });
 
+test('V1 edge/opacity fix (2026-09-30): _renderMask calls _sharpenV1Mask() as a POST-processing step after runInference(), never inside it', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/JitsiStreamBackgroundEffect.ts'), 'utf8').replace(/\r\n/g, '\n');
+
+  assert.match(
+      source,
+      /this\.resizeSource\(sourceFrame\);\n\s*this\.runInference\(\);[\s\S]*?this\._sharpenV1Mask\(\);/,
+      '_sharpenV1Mask() must be called strictly after runInference() returns, as a separate step -- runInference() itself stays untouched'
+  );
+});
+
+test('V1 edge/opacity fix: _sharpenV1Mask makes a confident pixel fully opaque and a low-confidence pixel fully transparent', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect._segmentationMask.data[3] = 255 * 0.9; // confidently person
+  s.effect._segmentationMask.data[7] = 255 * 0.1; // confidently background
+  s.effect._segmentationMask.data[11] = 255 * 0.5; // ambiguous -- should land near the middle, not clamped
+  s.effect._sharpenV1Mask();
+  assert.equal(s.effect._segmentationMask.data[3], 255, 'a confident foreground pixel must be fully opaque, not merely mostly-opaque');
+  assert.equal(s.effect._segmentationMask.data[7], 0, 'a confident background pixel must be fully transparent');
+  assert.ok(s.effect._segmentationMask.data[11] > 0 && s.effect._segmentationMask.data[11] < 255, 'an ambiguous pixel should still get the soft feathered curve, not be hard-clamped');
+});
+
 test('MediaPipe engine: a successful frame updates the mask and always closes it', () => {
   const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 5, maskHeight: 4, values: new Float32Array(20).fill(0.9) } });
 
@@ -830,10 +852,11 @@ test('MediaPipe engine: a successful frame updates the mask and always closes it
   // The first frame now snaps directly to the raw value (0.9) instead of being blended against a
   // zero-filled _smoothedMask -- the old (0 * 0.6) + (0.9 * 0.4) = 0.36 behavior was a real bug
   // (a visible fade-in flash the instant the effect turns on), fixed by special-casing frame one.
-  // 0.9 then passes through sharpenMaskAlpha (MediaPipe-only edge-crispening), landing at
-  // 255 * 0.91825... = 234 (Uint8ClampedArray rounding) -- not 255 * 0.9 = 229.5, since the raw
-  // value is shaped before being written to alpha, not written raw.
-  assert.equal(s.effect._segmentationMask.data[3], 234);
+  // 0.9 then passes through sharpenMaskAlpha -- since 0.9 >= MASK_HARD_OPAQUE_ABOVE (0.75), this
+  // now hard-clamps straight to fully opaque (255), not the softer steepened-curve value the mask
+  // used to land on -- see sharpenMaskAlpha's comment for the reported "faded body" defect this
+  // fixes: a confident foreground pixel must render fully solid, not merely mostly-opaque.
+  assert.equal(s.effect._segmentationMask.data[3], 255);
 });
 
 test('MediaPipe engine: mask.close() is called even when segmentForVideo throws', () => {
