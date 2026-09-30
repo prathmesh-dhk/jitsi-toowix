@@ -14,7 +14,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'virtual
 assert.match(
     source,
     /const requestedEngine = readSegmentationEngineOverride\(\);/,
-    'engine selection must come from readSegmentationEngineOverride() (see its own default in mediaPipeSegmentation.ts, currently mediapipe-gpu)'
+    'engine selection must come from readSegmentationEngineOverride() (see its own default in mediaPipeSegmentation.ts, currently v1)'
 );
 assert.match(
     source,
@@ -42,4 +42,4 @@ assert.match(
     'loadTfliteOnce must be passed to the effect so it can load V1 on demand for a mid-call fallback, without every engine paying for it upfront; onGiveUp, the init-time fallback reason, and onFallback must all be passed through'
 );
 
-console.log('PASS background engine selection: default per mediaPipeSegmentation.ts (currently mediapipe-gpu), MediaPipe failure falls back to V1');
+console.log('PASS background engine selection: default per mediaPipeSegmentation.ts (currently v1), MediaPipe failure falls back to V1');

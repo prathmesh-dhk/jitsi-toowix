@@ -30,10 +30,10 @@ function load(initialLocalStorage = {}, initialNow = 0, userAgent = 'Mozilla/5.0
   return { exports, localStorage, setNow: (v) => { nowValue = v; } };
 }
 
-test('readSegmentationEngineOverride defaults to mediapipe-gpu with nothing set', () => {
+test('readSegmentationEngineOverride defaults to v1 with nothing set', () => {
   const { exports } = load();
 
-  assert.equal(exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
+  assert.equal(exports.readSegmentationEngineOverride(), 'v1');
 });
 
 test('readSegmentationEngineOverride respects a valid stored override', () => {
@@ -42,20 +42,20 @@ test('readSegmentationEngineOverride respects a valid stored override', () => {
   assert.equal(load({ toowix_bg_engine: 'v1' }).exports.readSegmentationEngineOverride(), 'v1');
 });
 
-test('readSegmentationEngineOverride defaults to mediapipe-cpu on a mobile user agent (no GPU dependency)', () => {
+test('readSegmentationEngineOverride defaults to v1 on a mobile user agent too (both platforms revert to v1)', () => {
   const androidUa = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36';
   const iosUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-  assert.equal(load({}, 0, androidUa).exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
-  assert.equal(load({}, 0, iosUa).exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
-  // An explicit override still wins over the mobile default -- a dev/test forcing 'v1' or
+  assert.equal(load({}, 0, androidUa).exports.readSegmentationEngineOverride(), 'v1');
+  assert.equal(load({}, 0, iosUa).exports.readSegmentationEngineOverride(), 'v1');
+  // An explicit override still wins over the default -- a dev/test forcing 'mediapipe-cpu' or
   // 'mediapipe-gpu' on a mobile UA for comparison purposes must not be silently ignored.
   assert.equal(load({ toowix_bg_engine: 'mediapipe-gpu' }, 0, androidUa).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
 });
 
 test('readSegmentationEngineOverride ignores an invalid/garbage stored value and falls back to the default', () => {
-  assert.equal(load({ toowix_bg_engine: 'nonsense' }).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
-  assert.equal(load({ toowix_bg_engine: '' }).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
+  assert.equal(load({ toowix_bg_engine: 'nonsense' }).exports.readSegmentationEngineOverride(), 'v1');
+  assert.equal(load({ toowix_bg_engine: '' }).exports.readSegmentationEngineOverride(), 'v1');
 });
 
 test('readSegmentationEngineOverride does not throw if localStorage access itself throws (private mode)', () => {
@@ -69,7 +69,7 @@ test('readSegmentationEngineOverride does not throw if localStorage access itsel
     localStorage: { getItem() { throw new Error('SecurityError: access denied'); } },
     performance: { now: () => 0 }
   });
-  assert.equal(exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
+  assert.equal(exports.readSegmentationEngineOverride(), 'v1');
 });
 
 test('getNextMediaPipeTimestamp is monotonically increasing across calls at the same performance.now()', () => {

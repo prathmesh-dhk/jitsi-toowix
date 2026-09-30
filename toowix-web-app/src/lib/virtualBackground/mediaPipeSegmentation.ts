@@ -25,17 +25,33 @@ export type SegmentationEngine = 'v1' | 'mediapipe-cpu' | 'mediapipe-gpu';
 // (non-workstation) hardware and long-session robustness still apply and haven't been separately
 // re-validated -- V1 remains the automatic fallback (see _fallBackToV1/_giveUp in
 // JitsiStreamBackgroundEffect.ts) if MediaPipe fails to load or fails repeatedly mid-call.
-const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'mediapipe-gpu';
+// REVERTED to 'v1' on 2026-09-30. mediapipe-gpu was promoted to default for desktop earlier
+// today; shortly after, the SAME desktop user hit two real, live symptoms in the same session:
+// (1) "Connection interrupted -- attempting to reconnect" repeatedly, even on a reported 300Mbps
+// wired connection, with the call's own "Adjusting video quality" indicator active -- consistent
+// with LOCAL CPU/GPU contention (the effect's segmentation/compositing work starving the tab's
+// own WebRTC encode/pacing threads) being misread as a network problem, not an actual network
+// issue (JVB-side server/network health was checked directly and was fine). (2) A confirmed,
+// separate real bug (see JitsiStreamBackgroundEffect.ts's _giveUp/_drawRawPassthroughFrame) where
+// a struggling device left the outgoing Picture-in-Picture frame black -- itself evidence this
+// specific device was hitting the performance governor's floor-exhausted/give-up path, i.e.
+// genuinely too slow for the engine that was, until today, this user's default. Reverting the
+// DEFAULT back to 'v1' (proven for this entire engagement with no history of either symptom) is
+// the safe, immediately-reversible mitigation while both issues are still being isolated -- the
+// MediaPipe engines and their quality fixes (motion-adaptive smoothing, spatial hole-fill, edge
+// sharpening) remain fully intact and selectable via ?bgEngine=mediapipe-cpu/mediapipe-gpu, not
+// deleted, just no longer chosen automatically until this is re-validated on ordinary hardware.
+const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'v1';
+// Kept 'v1' too (was already the safer choice here since the mediapipe-gpu real-device finding
+// below) -- unaffected by today's revert above, restated for clarity now that BOTH platforms
+// default to 'v1' and the distinction between this constant and the one above is less obvious.
 // Real-device finding (2026-09-30, Android Chrome): mediapipe-gpu's real-device validation for
 // the commit above was desktop-only. On an Android phone, the GPU delegate either failed to
 // initialize or failed repeatedly mid-call (server logs showed the MediaPipe GPU wasm/model load
 // immediately followed ~30-45s later by V1's own wasm/model loading -- the automatic mid-call
 // fallback silently kicking in), leaving the user on plain V1 with none of the ghosting/hole-fill
-// fixes those are meant to provide. mediapipe-cpu has no GPU dependency and still gets all of the
-// same MediaPipe-only quality fixes (motion-adaptive smoothing, spatial hole-fill, edge
-// sharpening -- see JitsiStreamBackgroundEffect.ts), so it's the safer default on mobile until the
-// GPU delegate is actually validated there. Desktop keeps the GPU default from that commit.
-const DEFAULT_SEGMENTATION_ENGINE_MOBILE: SegmentationEngine = 'mediapipe-cpu';
+// fixes those are meant to provide.
+const DEFAULT_SEGMENTATION_ENGINE_MOBILE: SegmentationEngine = 'v1';
 
 function isMobileDevice(): boolean {
   try {

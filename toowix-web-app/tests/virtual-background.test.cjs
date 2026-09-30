@@ -698,6 +698,24 @@ test('GO 3 give-up tier: v1 already, floor exhausted, no cheaper engine -- calls
   assert.equal(giveUpCalls, 1);
 });
 
+test('GO 3 give-up tier: draws one real camera frame before stopping, so the track never freezes on a blank/black canvas', () => {
+  // Real bug found live (2026-09-30): the output canvas starts completely blank the instant
+  // startEffect() hands its captureStream() track to the caller, and stays that way until the
+  // first successful _renderMask() tick. If the governor gives up before that ever happens (a
+  // struggling device), the track's last-ever frame was that initial blank one -- black/frozen
+  // in the receiver's Picture-in-Picture window until the caller's async track swap completes.
+  const s = setup(true, { engine: 'v1' });
+
+  s.draws.length = 0; // clear whatever startEffect/prior renders already queued
+  assert.equal(s.effect.hasGivenUp(), false);
+  s.effect._giveUp('test');
+  assert.equal(s.effect.hasGivenUp(), true);
+  assert.ok(
+      s.draws.some((args) => args[0] === s.video),
+      '_giveUp must draw the real (unprocessed) camera frame directly, not leave the canvas blank'
+  );
+});
+
 test('GO 3 give-up tier: mediapipe-cpu, floor exhausted, v1 not measurably cheaper -- also gives up (not a silent no-op)', () => {
   let giveUpCalls = 0;
   const s = setup(true, { width: 1920, height: 1080, engine: 'mediapipe-cpu', onGiveUp: () => { giveUpCalls++; } });

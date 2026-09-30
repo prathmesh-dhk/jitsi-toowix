@@ -704,11 +704,44 @@ export default class JitsiStreamBackgroundEffect {
     this._hasGivenUp = true;
     this._gaveUpAt = Date.now();
     console.warn(`[VirtualBackground] Performance governor giving up -- ${reason}; turning the background effect off (no retry for ${Math.round(GIVE_UP_COOLDOWN_MS / 60000)} min, enforced by the caller).`);
+    // Real bug this closes: captureStream()'s track starts emitting from an ENTIRELY BLANK
+    // (transparent -> renders black) canvas the instant startEffect() hands it to the caller,
+    // and stays that way until the first successful _renderMask() tick draws something real. If
+    // the governor gives up before that ever happens (a slow device failing even the first few
+    // ticks), the track's last-ever frame is that initial blank one -- it then sits frozen/black
+    // for however long the caller's async onGiveUp takes to swap the track back to the raw
+    // camera (removeVirtualBackgroundEffect awaits track.setEffect(undefined), not instant).
+    // Drawing one real, unprocessed camera frame here -- best-effort, must never throw -- means
+    // whatever the receiver sees during that swap is a real picture of the person, not black.
+    this._drawRawPassthroughFrame();
     this._stopTimerLoop();
     try {
       this._onGiveUp?.();
     } catch (err) {
       console.warn('[VirtualBackground] onGiveUp callback threw:', err);
+    }
+  }
+
+  // Best-effort, no-segmentation direct camera draw -- see _giveUp's comment for why this exists.
+  // Deliberately does not touch this._segmentationMask/any mask state (this is not a real
+  // composited frame, just "something real instead of black"), and never throws: a failure here
+  // must not block give-up from completing and handing control back to the caller.
+  _drawRawPassthroughFrame() {
+    try {
+      if (!this._outputCanvasCtx || this._inputVideoElement.readyState < 2) return;
+      const width = this._outputCanvasElement.width;
+      const height = this._outputCanvasElement.height;
+
+      if (!width || !height) return;
+      this._outputCanvasCtx.globalCompositeOperation = 'copy';
+      // @ts-ignore
+      this._outputCanvasCtx.drawImage(
+          this._inputVideoElement,
+          0, 0, this._inputVideoElement.width || width, this._inputVideoElement.height || height,
+          0, 0, width, height
+      );
+    } catch (err) {
+      console.warn('[VirtualBackground] _drawRawPassthroughFrame failed (non-fatal):', err);
     }
   }
 
