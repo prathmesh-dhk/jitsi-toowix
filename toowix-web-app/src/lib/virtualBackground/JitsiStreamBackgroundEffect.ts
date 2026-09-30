@@ -1124,7 +1124,17 @@ export default class JitsiStreamBackgroundEffect {
     // blur only needs to be enough to soften that edge's staircase/upscale blockiness, not to
     // hide a muddy/unshaped mask the way the old heavier blur was compensating for.
     const supportsFilter = 'filter' in this._outputCanvasCtx;
-    const edgeBlurPx = backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE ? 2 : 2.5;
+    // Real reported defect (2026-09-30): a fixed 2/2.5px blur was tuned against the output canvas,
+    // but the mask itself is only ever this._options.width x this._options.height (256x144) --
+    // stretched up to outWidth x outHeight, often a 4-8x jump at typical call resolutions. Each
+    // mask pixel's hard-clamped (near-binary, see sharpenMaskAlpha) edge lands on a whole block of
+    // output pixels, and a blur far narrower than that block (2-2.5px against a 4-8px block) barely
+    // touches it -- visible as a staircase/blocky edge, worst on fine detail like hairline. The fix
+    // is to scale the blur with the actual mask->output upscale factor so it spans roughly one
+    // source-mask-pixel's footprint (enough to erase the block edges into a clean line), capped so
+    // a very large call window doesn't drift into a soft/faded look.
+    const maskUpscale = Math.max(outWidth / this._options.width, outHeight / this._options.height);
+    const edgeBlurPx = Math.min(8, Math.max(2, maskUpscale * 0.6));
 
     if (supportsFilter) this._outputCanvasCtx.filter = `blur(${edgeBlurPx}px)`;
     this._outputCanvasCtx.drawImage(
