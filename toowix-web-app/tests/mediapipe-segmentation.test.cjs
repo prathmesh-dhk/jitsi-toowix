@@ -107,7 +107,7 @@ test('getNextMediaPipeTimestamp never goes backwards even if performance.now() b
   assert.ok(second > first, `expected second (${second}) > first (${first}) despite performance.now() going backwards`);
 });
 
-test('readMediaPipeSegSizeOverride: no override set returns null (caller uses its own 512x288 default)', () => {
+test('readMediaPipeSegSizeOverride: no override set returns null (caller uses its native 256x144 default)', () => {
   assert.equal(load().exports.readMediaPipeSegSizeOverride(), null);
 });
 

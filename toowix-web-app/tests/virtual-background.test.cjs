@@ -767,14 +767,21 @@ test('getCurrentOutputHeight reflects the caps and native camera size, not the l
 
 // --- Phase 2: MediaPipe engine -------------------------------------------------------------
 
-test('V1 SAFETY: resizeSource and runInference are byte-for-byte unchanged from before Phase 2', () => {
-  // Phase 2's explicit rule: do not refactor or rewrite the existing TFLite code path. This pins
-  // the exact source of both methods so a future edit that touches them (even accidentally, e.g.
-  // while "cleaning up" nearby MediaPipe code) fails loudly here instead of silently changing V1
-  // behaviour that every existing V1 test above already covers black-box, but not textually.
+test('V1 SAFETY: the TFLite inference core (runInference, the EMA blend, the input-memory loop) is byte-for-byte unchanged', () => {
+  // Original Phase 2 rule was "do not refactor resizeSource/runInference at all" -- accepted
+  // change (this session): resizeSource() now accepts an explicit sourceFrame (defaulting to the
+  // live video element), because _renderMask() captures ONE canvas snapshot per frame and feeds
+  // the SAME snapshot to both V1 and MediaPipe, fixing a real race (segmentation and compositing
+  // could previously see two different decoded video frames a few ms apart -- a real source of
+  // motion-trail/misalignment). What must still never change is the actual TFLite inference core
+  // below the draw call: the input-memory-writing loop, runInference() itself, and the EMA blend.
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/JitsiStreamBackgroundEffect.ts'), 'utf8').replace(/\r\n/g, '\n');
 
-  assert.match(source, /resizeSource\(\) \{\n\s*this\._segmentationMaskCtx\?\.drawImage\(/, 'resizeSource() opening must be unchanged');
+  assert.match(
+      source,
+      /resizeSource\(sourceFrame: CanvasImageSource = this\._inputVideoElement\) \{\n\s*this\._segmentationMaskCtx\?\.drawImage\(\n\s*sourceFrame,/,
+      'resizeSource() must draw the passed-in sourceFrame (defaulting to the live video element, so a caller passing nothing is unaffected)'
+  );
   assert.match(
       source,
       /for \(let i = 0; i < this\._segmentationPixelCount; i\+\+\) \{\n\s*this\._model\.HEAPF32\[inputMemoryOffset \+ \(i \* 3\)\] = Number\(imageData\?\.data\[i \* 4\]\) \/ 255;/,
@@ -788,8 +795,8 @@ test('V1 SAFETY: resizeSource and runInference are byte-for-byte unchanged from 
   );
   assert.match(
       source,
-      /if \(this\._engine === 'v1'\) \{[\s\S]*?this\.resizeSource\(\);\n\s*this\.runInference\(\);/,
-      '_renderMask() must still call resizeSource() then runInference(), in that order (with nothing V1-specific between them), for the v1 engine'
+      /if \(this\._engine === 'v1'\) \{[\s\S]*?this\.resizeSource\(sourceFrame\);\n\s*this\.runInference\(\);/,
+      '_renderMask() must still call resizeSource() then runInference(), in that order (with nothing V1-specific between them), for the v1 engine -- now passing the captured per-frame snapshot'
   );
 });
 
@@ -1187,26 +1194,21 @@ test('Phase 2c: getTotalFrameCount is monotonic and does not reset across runBen
   assert.equal(s.effect.getTotalFrameCount(), before + 3);
 });
 
-test('MediaPipe is fed a small, FIXED-size canvas (not the raw video element, and not V1\'s SEG_WIDTH/HEIGHT)', () => {
-  // Deliberately raised from V1's 256x144 to 512x288 (still fixed, still much smaller than the
-  // camera's native resolution) -- GPU segmentation cost is close to flat regardless of input size
-  // (see JitsiStreamBackgroundEffect's MEDIAPIPE_SEG_WIDTH/HEIGHT comment and bench/REPORT.md), so
-  // MediaPipe can afford a sharper mask for close to free, which directly reduced ghosting/edge
-  // softness. Uses the real reported size (512x288) here rather than the mock's old 256x144, since
-  // the mock's maskWidth/maskHeight is meant to mirror what a real segmenter fed this input size
-  // would report back.
-  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 512, maskHeight: 288 } });
+test('MediaPipe is fed the model-native fixed 256x144 canvas, not a raw camera frame', () => {
+  // The pinned landscape model's native grid is 256x144. A 512x288 input canvas is only a
+  // development A/B experiment; it must not become the unmeasured production default.
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 256, maskHeight: 144 } });
 
   s.effect._renderMask();
 
   const videoArg = s.mediaPipeCalls;
 
   assert.equal(videoArg.segmentForVideo, 1);
-  assert.equal(s.effect._options.width, 512);
-  assert.equal(s.effect._options.height, 288);
+  assert.equal(s.effect._options.width, 256);
+  assert.equal(s.effect._options.height, 144);
   assert.ok(s.effect._mediaPipeInputCanvas, 'a reusable MediaPipe input canvas must have been created');
-  assert.equal(s.effect._mediaPipeInputCanvas.width, 512);
-  assert.equal(s.effect._mediaPipeInputCanvas.height, 288);
+  assert.equal(s.effect._mediaPipeInputCanvas.width, 256);
+  assert.equal(s.effect._mediaPipeInputCanvas.height, 144);
 });
 
 test('Phase 2c: MediaPipe blend timing is measured separately from segmentation/readback', () => {

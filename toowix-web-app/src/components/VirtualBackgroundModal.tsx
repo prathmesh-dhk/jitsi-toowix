@@ -142,6 +142,11 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
         <div style={{ fontSize: '12px', color: '#9AA0A6', marginBottom: '16px' }}>
           Blur or replace what's behind you. Runs entirely on your device.
         </div>
+        {busyKey && (
+          <div style={{ fontSize: '12px', color: '#8AB4F8', marginTop: '-8px', marginBottom: '12px' }}>
+            Preparing background…
+          </div>
+        )}
 
         {!isSupported ? (
           <div

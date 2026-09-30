@@ -2628,7 +2628,16 @@ export function useJitsiMeeting({
     }
 
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
-    const effect = await createVirtualBackgroundEffect(config, { onFallback: handleBackgroundFallback, onGiveUp: handleBackgroundGiveUp });
+    // An old effect can finish a delayed fallback/give-up after the user has selected a newer
+    // background. Its callback must never clear that newer track/effect.
+    const effect = await createVirtualBackgroundEffect(config, {
+      onFallback: (reason) => {
+        if (!isStaleCall()) handleBackgroundFallback(reason);
+      },
+      onGiveUp: () => {
+        if (!isStaleCall()) handleBackgroundGiveUp();
+      }
+    });
 
     if (isStaleCall()) {
       // A newer setVirtualBackground call has already started (another switch, or a removal)

@@ -86,11 +86,10 @@ export function readSegmentationEngineOverride(): SegmentationEngine {
   return isMobileDevice() ? DEFAULT_SEGMENTATION_ENGINE_MOBILE : DEFAULT_SEGMENTATION_ENGINE;
 }
 
-// Dev-only A/B override for MediaPipe's segmentation input size -- the default (512x288, set in
-// JitsiStreamBackgroundEffect.ts's MEDIAPIPE_SEG_WIDTH/HEIGHT) was promoted from 256x144 with NO
-// recorded benchmark evidence for either edge quality or ms cost (see the EDGE-STATUS status
-// report item 4) -- this lets that comparison actually be run, on a real webcam, without editing
-// code. ?bgSegSize=256 or ?bgSegSize=512 (or localStorage.setItem('toowix_bg_seg_size', '256')),
+// Dev-only A/B override for MediaPipe's segmentation source canvas. Production uses the pinned
+// model's native 256x144 grid; 512 is available only to measure whether upscaling before model
+// preprocessing has any real visual benefit on a webcam. ?bgSegSize=256 or ?bgSegSize=512
+// (or localStorage.setItem('toowix_bg_seg_size', '256')),
 // same URL-param-first/write-through pattern as readSegmentationEngineOverride above. Gated out of
 // production builds -- same reasoning as backgroundDebugTools.ts's isProductionBuild.
 export type MediaPipeSegSize = 256 | 512;
@@ -109,7 +108,7 @@ function isValidSegSize(value: string | null): value is '256' | '512' {
 }
 
 // Returns null when no override is set (or in production) -- the caller (JitsiStreamBackground
-// Effect.ts) falls back to its own MEDIAPIPE_SEG_WIDTH/HEIGHT default (512x288) in that case, so
+// Effect.ts) falls back to its own native 256x144 MEDIAPIPE_SEG_WIDTH/HEIGHT default in that case, so
 // this function never needs to know or duplicate that default itself.
 export function readMediaPipeSegSizeOverride(): MediaPipeSegSize | null {
   if (isProductionBuild()) return null;
