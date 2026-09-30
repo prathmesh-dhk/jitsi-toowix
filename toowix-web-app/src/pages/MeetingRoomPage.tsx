@@ -5438,8 +5438,11 @@ export function MeetingRoomPage() {
               )}
 
             </div>
-          ) : !tileViewEnabled ? (
-            /* Speaker View (Jitsi tile-view OFF): one large pinned participant + filmstrip sidebar */
+          ) : !tileViewEnabled && !activePanel ? (
+            /* Speaker View (Jitsi tile-view OFF): one large pinned participant + filmstrip sidebar.
+               Skipped whenever a side panel (chat/people/etc) is open -- the big spotlight stage plus a
+               separate filmstrip doesn't fit next to a panel, so we fall through to the plain resizable
+               tile grid below instead of rendering a redundant middle stage. */
             <div
               className="tw-stage-row"
               style={{
