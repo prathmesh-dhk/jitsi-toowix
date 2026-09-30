@@ -131,8 +131,16 @@ const SHARPEN_EXPONENT = 0.8;
 // confident than that is hard-clamped, which is what gives a solid body with a comparatively
 // thin, deliberately-feathered (not just "less blurred") edge band instead of a uniformly soft
 // silhouette.
-const MASK_HARD_OPAQUE_ABOVE = 0.75;
-const MASK_HARD_TRANSPARENT_BELOW = 0.25;
+// Narrowed further on 2026-09-30 after live feedback that hands specifically still looked
+// translucent/"like I can see the image through" at the 0.75/0.25 band -- hands are a genuinely
+// harder region for a lightweight segmentation model (thin, fast-moving, easily confused with
+// background at the fingers), so their raw confidence tends to land in the 0.5-0.75 range that
+// the wider band still treated as "ambiguous, feather it." Narrowing the soft zone to 0.55-0.45
+// pulls that range into the hard-opaque/transparent clamp instead, at the cost of a slightly
+// thinner true feather (a real, accepted tradeoff -- prioritizing a solid, sharp body over a
+// wider soft transition).
+const MASK_HARD_OPAQUE_ABOVE = 0.55;
+const MASK_HARD_TRANSPARENT_BELOW = 0.45;
 
 function sharpenMaskAlpha(value: number): number {
   if (value >= MASK_HARD_OPAQUE_ABOVE) return 1;
@@ -467,6 +475,41 @@ export default class JitsiStreamBackgroundEffect {
       this._virtualImage = document.createElement('img');
       this._virtualImage.crossOrigin = 'anonymous';
       this._virtualImage.src = virtualBackground.virtualSource ?? '';
+    }
+  }
+
+  // Real reported defect (2026-09-30): switching backgrounds (blur strength, or to a different
+  // image) used to tear down this whole effect and build a BRAND NEW one via
+  // createVirtualBackgroundEffect() -- a new instance means a fresh performance governor with no
+  // learned-cost history, starting back at the top tier (1080p/30fps) every single time, which is
+  // exactly what produced the reported "changing background is laggy, ~5fps" symptom: the
+  // governor had to re-discover this device's real capability from scratch after every switch,
+  // dropping frames for a few seconds each time instead of staying at whatever tier it had
+  // already proven this device can sustain. This lets the CALLER (useJitsiMeeting) update an
+  // already-running effect's background config in place instead, keeping the same engine,
+  // governor state, and learned-cost table across a switch. Only the background-specific state
+  // below changes; segmentation/compositing/governor code is untouched by this method.
+  setVirtualBackground(virtualBackground: IVirtualBackground) {
+    const previous = this._options.virtualBackground;
+
+    this._options.virtualBackground = virtualBackground;
+    if (virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
+      const nextSrc = virtualBackground.virtualSource ?? '';
+
+      if (!this._virtualImage) {
+        this._virtualImage = document.createElement('img');
+        this._virtualImage.crossOrigin = 'anonymous';
+      }
+      // Only reassign .src (which restarts image decode) if it actually changed -- switching
+      // blur strength while already on an image background, for example, must not re-decode.
+      if (this._virtualImage.src !== nextSrc && this._virtualImage.getAttribute('src') !== nextSrc) {
+        this._virtualImage.src = nextSrc;
+      }
+    } else if (previous.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
+      // Leaving an image background -- no need to keep decoding/holding it; the readyState checks
+      // in _renderMask() only gate the IMAGE branch, so this is safe to leave alone either way,
+      // but clearing the source stops a background decode/network fetch that's no longer needed.
+      try { this._virtualImage.removeAttribute('src'); } catch { /* best-effort only */ }
     }
   }
 

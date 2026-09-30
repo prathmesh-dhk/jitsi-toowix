@@ -2627,6 +2627,23 @@ export function useJitsiMeeting({
       throw new Error('Turn on your camera before applying a background.');
     }
 
+    // Real reported defect (2026-09-30): switching backgrounds (blur strength, or to a different
+    // image) on the SAME camera track used to tear down and recreate the whole effect every time
+    // -- a fresh performance governor with no learned-cost history, causing a real lag spike
+    // (governor re-discovering the device's tier from scratch) and, since it's also a brand new
+    // captureStream() track, a real risk window for PiP/self-view to be looking at a stale/absent
+    // stream mid-switch. If an effect is already running on this exact track and hasn't given up,
+    // just update its background config in place (see JitsiStreamBackgroundEffect.setVirtualBackground)
+    // instead -- same engine, same governor state, same outgoing track the whole time.
+    const existing = virtualBackgroundRef.current;
+
+    if (existing?.effect && existing.effect.hasGivenUp?.() !== true && track === localVideoTrackRef.current) {
+      existing.effect.setVirtualBackground(config);
+      virtualBackgroundRef.current = { config, effect: existing.effect };
+
+      return;
+    }
+
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     // An old effect can finish a delayed fallback/give-up after the user has selected a newer
     // background. Its callback must never clear that newer track/effect.

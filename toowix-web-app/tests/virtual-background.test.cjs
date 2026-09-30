@@ -45,7 +45,18 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     hidden: false,
     createElement(kind) {
       if (kind === 'video') return video;
-      if (kind === 'img') return { complete: true, naturalWidth: 640 };
+      if (kind === 'img') {
+        let src = '';
+
+        return {
+          complete: true, naturalWidth: 640,
+          get src() { return src; },
+          set src(v) { src = v; },
+          hasAttribute: (name) => name === 'src' && src !== '',
+          removeAttribute: (name) => { if (name === 'src') src = ''; },
+          getAttribute: (name) => (name === 'src' ? src : null)
+        };
+      }
       const context = makeContext();
       return { width: 0, height: 0, getContext: () => context, captureStream: () => ({ canvas: true }) };
     }
@@ -838,6 +849,29 @@ test('V1 edge/opacity fix: _sharpenV1Mask makes a confident pixel fully opaque a
   assert.equal(s.effect._segmentationMask.data[3], 255, 'a confident foreground pixel must be fully opaque, not merely mostly-opaque');
   assert.equal(s.effect._segmentationMask.data[7], 0, 'a confident background pixel must be fully transparent');
   assert.ok(s.effect._segmentationMask.data[11] > 0 && s.effect._segmentationMask.data[11] < 255, 'an ambiguous pixel should still get the soft feathered curve, not be hard-clamped');
+});
+
+test('setVirtualBackground: updates config in place without touching engine/governor state (fixes the "changing background is laggy" defect)', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect._perfCap = 480; // simulate a governor that already learned this device needs 480p
+  s.effect._perfFpsCap = 15;
+  s.effect.setVirtualBackground({ backgroundType: 'blur', blurValue: 8 });
+  assert.equal(s.effect._options.virtualBackground.blurValue, 8);
+  // The whole point: switching background must NOT reset governor state back to the top tier.
+  assert.equal(s.effect._perfCap, 480);
+  assert.equal(s.effect._perfFpsCap, 15);
+});
+
+test('setVirtualBackground: switching to an image background creates/updates _virtualImage; switching away clears its src', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.equal(s.effect._virtualImage.src.endsWith('/images/one.jpg'), true);
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/two.jpg' });
+  assert.equal(s.effect._virtualImage.src.endsWith('/images/two.jpg'), true);
+  s.effect.setVirtualBackground({ backgroundType: 'blur', blurValue: 25 });
+  assert.equal(s.effect._virtualImage.hasAttribute('src'), false);
 });
 
 test('MediaPipe engine: a successful frame updates the mask and always closes it', () => {

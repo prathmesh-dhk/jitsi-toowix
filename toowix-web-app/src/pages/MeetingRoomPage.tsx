@@ -1124,6 +1124,18 @@ export function MeetingRoomPage() {
   // one large pinned participant with the rest in a filmstrip sidebar. Shortcut 'W' toggles.
   const [tileViewEnabled, setTileViewEnabled] = useState(true);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
+  // Real reported bug (2026-09-30): pinning a participant only lasted until the dominant speaker
+  // changed again -- the auto speaker-view-follow effect below shared the SAME state as a manual
+  // pin, so it silently overwrote whoever was pinned the next time someone else spoke. A pin is
+  // supposed to be sticky (stays until explicitly unpinned), not a toggle that reverts on its own.
+  // This ref is the single source of truth for "is the CURRENT pinnedParticipantId a manual pin"
+  // -- the auto-follow effect checks it and does nothing while it's true; setPinnedManually is the
+  // only way user-initiated pin/unpin clicks should set pinnedParticipantId from here on.
+  const manuallyPinnedRef = useRef(false);
+  const setPinnedManually = useCallback((id: string | null) => {
+    manuallyPinnedRef.current = id !== null;
+    setPinnedParticipantId(id);
+  }, []);
   const toggleTileView = useCallback(() => {
     // Do not wait for an animation or a stale selected tile before changing layout.
     setTileViewEnabled((enabled) => !enabled);
@@ -3460,6 +3472,9 @@ export function MeetingRoomPage() {
   // fires again the next time the dominant speaker genuinely changes.
   useEffect(() => {
     if (!jitsiMeeting.dominantSpeakerId) return;
+    // A manual pin is sticky -- it must stay exactly who the user pinned regardless of who talks
+    // next, until they explicitly unpin (see setPinnedManually above).
+    if (manuallyPinnedRef.current) return;
     const isLocal = jitsiMeeting.dominantSpeakerId === jitsiMeeting.localParticipantId;
 
     setPinnedParticipantId(isLocal ? 'local' : jitsiMeeting.dominantSpeakerId);
@@ -5596,7 +5611,7 @@ export function MeetingRoomPage() {
                       }}
                     >
                       <div
-                        onClick={() => setPinnedParticipantId('local')}
+                        onClick={() => setPinnedManually('local')}
                         title="Pin yourself"
                         style={{
                           width: '100%',
@@ -5686,7 +5701,7 @@ export function MeetingRoomPage() {
                         return (
                           <div
                             key={p.id}
-                            onClick={() => setPinnedParticipantId(p.id)}
+                            onClick={() => setPinnedManually(p.id)}
                             style={{
                               width: '100%',
                               aspectRatio: '16 / 9',
@@ -5818,7 +5833,7 @@ export function MeetingRoomPage() {
                 // clicking the small pin button in its corner -- matches Google Meet's tile
                 // double-click behavior instead of requiring the tiny pin icon to be hit exactly.
                 onDoubleClick={() => {
-                  setPinnedParticipantId('local');
+                  setPinnedManually('local');
                   setTileViewEnabled(false);
                 }}
                 style={{
@@ -5923,7 +5938,7 @@ export function MeetingRoomPage() {
                 <button
                   onClick={(event) => {
                     event.stopPropagation();
-                    setPinnedParticipantId('local');
+                    setPinnedManually('local');
                     setTileViewEnabled(false);
                   }}
                   title="Pin yourself"
@@ -5978,7 +5993,7 @@ export function MeetingRoomPage() {
                     onDoubleClick={() => {
                       const isPinned = pinnedParticipantId === remote.id;
 
-                      setPinnedParticipantId(isPinned ? null : remote.id);
+                      setPinnedManually(isPinned ? null : remote.id);
                       setTileViewEnabled(isPinned);
                     }}
                     style={{
@@ -6002,7 +6017,7 @@ export function MeetingRoomPage() {
                       onClick={(event) => {
                         event.stopPropagation();
                         const isPinned = pinnedParticipantId === remote.id;
-                        setPinnedParticipantId(isPinned ? null : remote.id);
+                        setPinnedManually(isPinned ? null : remote.id);
                         setTileViewEnabled(isPinned);
                       }}
                       title={pinnedParticipantId === remote.id ? `Unpin ${remote.name}` : `Pin ${remote.name}`}
