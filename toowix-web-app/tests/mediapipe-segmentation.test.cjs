@@ -7,7 +7,14 @@ const ts = require('typescript');
 
 // Real localStorage-backed and performance.now()-backed behaviour, not browser primitives, so
 // this runs the actual compiled module rather than mocking around it.
-function load(initialLocalStorage = {}, initialNow = 0, userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36', { prod = false, search = '' } = {}) {
+// glRenderer: null -> no WebGL context at all ('none' tier); a string -> the UNMASKED_RENDERER_
+// WEBGL value a real GPU/software probe would read. noExtension: true -> WebGL works but
+// WEBGL_debug_renderer_info itself is unavailable (some privacy-hardened browsers block it).
+function load(
+    initialLocalStorage = {}, initialNow = 0,
+    userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/154.0.0.0 Safari/537.36',
+    { prod = false, search = '', glRenderer = null, noExtension = false } = {}
+) {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/mediaPipeSegmentation.ts'), 'utf8');
   // vm.runInNewContext runs this as a plain script, where `import.meta` is a syntax error
   // regardless of guards around it -- same fix as tests/virtual-background.test.cjs uses.
@@ -24,30 +31,67 @@ function load(initialLocalStorage = {}, initialNow = 0, userAgent = 'Mozilla/5.0
   const navigator = { userAgent };
   const location = { search };
   const exports = {};
+  const glContext = glRenderer === null ? null : {
+    getExtension: (name) => (name === 'WEBGL_debug_renderer_info' && !noExtension
+      ? { UNMASKED_RENDERER_WEBGL: 'UNMASKED_RENDERER_WEBGL' }
+      : null),
+    getParameter: () => glRenderer
+  };
+  const document = {
+    createElement: (tag) => (tag === 'canvas' ? { getContext: () => glContext } : {})
+  };
 
-  vm.runInNewContext(code, { exports, localStorage, performance, navigator, location, URLSearchParams });
+  vm.runInNewContext(code, { exports, localStorage, performance, navigator, location, URLSearchParams, document });
 
   return { exports, localStorage, setNow: (v) => { nowValue = v; } };
 }
 
-test('readSegmentationEngineOverride defaults to v1 with nothing set', () => {
-  const { exports } = load();
+test('readSegmentationEngineOverride: desktop with NO WebGL context at all falls back to v1', () => {
+  const { exports } = load({}, 0, undefined, { glRenderer: null });
 
   assert.equal(exports.readSegmentationEngineOverride(), 'v1');
 });
 
-test('readSegmentationEngineOverride respects a valid stored override', () => {
-  assert.equal(load({ toowix_bg_engine: 'mediapipe-cpu' }).exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
-  assert.equal(load({ toowix_bg_engine: 'mediapipe-gpu' }).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
-  assert.equal(load({ toowix_bg_engine: 'v1' }).exports.readSegmentationEngineOverride(), 'v1');
+test('probeGpuTier/detectDefaultEngine: desktop with a real (non-software) GPU renderer -> mediapipe-gpu', () => {
+  const s = load({}, 0, undefined, { glRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0)' });
+
+  assert.equal(s.exports.probeGpuTier(), 'gpu');
+  assert.equal(s.exports.readSegmentationEngineOverride(), 'mediapipe-gpu');
 });
 
-test('readSegmentationEngineOverride defaults to v1 on a mobile user agent too (both platforms revert to v1)', () => {
+test('probeGpuTier/detectDefaultEngine: desktop with a software-emulated renderer -> mediapipe-cpu, not mediapipe-gpu', () => {
+  for (const renderer of [
+    'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)',
+    'llvmpipe (LLVM 15.0.7, 256 bits)',
+    'Microsoft Basic Render Driver'
+  ]) {
+    const s = load({}, 0, undefined, { glRenderer: renderer });
+
+    assert.equal(s.exports.probeGpuTier(), 'cpu', `expected 'cpu' tier for renderer: ${renderer}`);
+    assert.equal(s.exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
+  }
+});
+
+test('probeGpuTier: WebGL works but WEBGL_debug_renderer_info is unavailable -> ambiguous, treated as cpu (the safe side)', () => {
+  const s = load({}, 0, undefined, { glRenderer: 'irrelevant -- getExtension returns null before this is read', noExtension: true });
+
+  assert.equal(s.exports.probeGpuTier(), 'cpu');
+  assert.equal(s.exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
+});
+
+test('readSegmentationEngineOverride respects a valid stored override, regardless of GPU capability', () => {
+  assert.equal(load({ toowix_bg_engine: 'mediapipe-cpu' }, 0, undefined, { glRenderer: 'NVIDIA GeForce RTX 4070' }).exports.readSegmentationEngineOverride(), 'mediapipe-cpu');
+  assert.equal(load({ toowix_bg_engine: 'v1' }, 0, undefined, { glRenderer: 'NVIDIA GeForce RTX 4070' }).exports.readSegmentationEngineOverride(), 'v1');
+});
+
+test('readSegmentationEngineOverride defaults to v1 on a mobile user agent regardless of GPU capability (real-device finding: GPU delegate failed on Android)', () => {
   const androidUa = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36';
   const iosUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-  assert.equal(load({}, 0, androidUa).exports.readSegmentationEngineOverride(), 'v1');
-  assert.equal(load({}, 0, iosUa).exports.readSegmentationEngineOverride(), 'v1');
+  // Even with a "real GPU" renderer string, mobile must still stay on v1 -- the capability probe
+  // is deliberately NOT trusted on mobile given the confirmed live GPU-delegate failure there.
+  assert.equal(load({}, 0, androidUa, { glRenderer: 'Adreno (TM) 730' }).exports.readSegmentationEngineOverride(), 'v1');
+  assert.equal(load({}, 0, iosUa, { glRenderer: 'Apple GPU' }).exports.readSegmentationEngineOverride(), 'v1');
   // An explicit override still wins over the default -- a dev/test forcing 'mediapipe-cpu' or
   // 'mediapipe-gpu' on a mobile UA for comparison purposes must not be silently ignored.
   assert.equal(load({ toowix_bg_engine: 'mediapipe-gpu' }, 0, androidUa).exports.readSegmentationEngineOverride(), 'mediapipe-gpu');

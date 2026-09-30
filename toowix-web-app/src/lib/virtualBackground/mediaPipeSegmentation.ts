@@ -13,45 +13,35 @@
 // THIRD_PARTY_NOTICES.md for its exact source URL, pinned generation, size and SHA-256.
 export type SegmentationEngine = 'v1' | 'mediapipe-cpu' | 'mediapipe-gpu';
 
-// This was 'v1' through Phase 2/3 -- mediapipe-gpu was kept strictly opt-in, based on a concern
-// (see mediapipe/mediapipe#5681) that GPU-backed mask readback could cost 80-100ms/frame, far
-// past budget, and on this repo's own bench/REPORT.md flagging real caveats (workstation-GPU-only
-// measurements, an unexplained headed-run slowdown, an untested tab-visibility-resume case).
-// Promoted to default after this session's real-device validation (motion-adaptive smoothing,
-// spatial hole-fill, higher-res segmentation, edge sharpening -- all MediaPipe-only, see
-// JitsiStreamBackgroundEffect.ts) measurably fixed the ghosting/hole/edge-softness issues V1 has
-// no equivalent fix for, and this repo's actual measured readback cost (8-25ms in bench/REPORT.md)
-// was well under the cited worst case. The bench report's caveats about untested typical
-// (non-workstation) hardware and long-session robustness still apply and haven't been separately
-// re-validated -- V1 remains the automatic fallback (see _fallBackToV1/_giveUp in
-// JitsiStreamBackgroundEffect.ts) if MediaPipe fails to load or fails repeatedly mid-call.
-// REVERTED to 'v1' on 2026-09-30. mediapipe-gpu was promoted to default for desktop earlier
-// today; shortly after, the SAME desktop user hit two real, live symptoms in the same session:
-// (1) "Connection interrupted -- attempting to reconnect" repeatedly, even on a reported 300Mbps
-// wired connection, with the call's own "Adjusting video quality" indicator active -- consistent
-// with LOCAL CPU/GPU contention (the effect's segmentation/compositing work starving the tab's
-// own WebRTC encode/pacing threads) being misread as a network problem, not an actual network
-// issue (JVB-side server/network health was checked directly and was fine). (2) A confirmed,
-// separate real bug (see JitsiStreamBackgroundEffect.ts's _giveUp/_drawRawPassthroughFrame) where
-// a struggling device left the outgoing Picture-in-Picture frame black -- itself evidence this
-// specific device was hitting the performance governor's floor-exhausted/give-up path, i.e.
-// genuinely too slow for the engine that was, until today, this user's default. Reverting the
-// DEFAULT back to 'v1' (proven for this entire engagement with no history of either symptom) is
-// the safe, immediately-reversible mitigation while both issues are still being isolated -- the
-// MediaPipe engines and their quality fixes (motion-adaptive smoothing, spatial hole-fill, edge
-// sharpening) remain fully intact and selectable via ?bgEngine=mediapipe-cpu/mediapipe-gpu, not
-// deleted, just no longer chosen automatically until this is re-validated on ordinary hardware.
-const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'v1';
-// Kept 'v1' too (was already the safer choice here since the mediapipe-gpu real-device finding
-// below) -- unaffected by today's revert above, restated for clarity now that BOTH platforms
-// default to 'v1' and the distinction between this constant and the one above is less obvious.
-// Real-device finding (2026-09-30, Android Chrome): mediapipe-gpu's real-device validation for
-// the commit above was desktop-only. On an Android phone, the GPU delegate either failed to
-// initialize or failed repeatedly mid-call (server logs showed the MediaPipe GPU wasm/model load
-// immediately followed ~30-45s later by V1's own wasm/model loading -- the automatic mid-call
-// fallback silently kicking in), leaving the user on plain V1 with none of the ghosting/hole-fill
-// fixes those are meant to provide.
-const DEFAULT_SEGMENTATION_ENGINE_MOBILE: SegmentationEngine = 'v1';
+// History: 'v1' through Phase 2/3 (mediapipe-gpu strictly opt-in, over concerns about GPU-backed
+// mask readback cost -- see mediapipe/mediapipe#5681). Promoted to a blanket default for ALL
+// desktop users on 2026-09-30 after this session's real-device validation fixed real quality
+// issues V1 has no equivalent fix for -- then REVERTED back to a blanket 'v1' hours later, the
+// same day, when that blanket default caused two real, live symptoms for a desktop user with an
+// ordinary (non-workstation) machine: "Connection interrupted" even on a good wired connection
+// (consistent with local CPU/GPU contention starving the tab's own WebRTC threads, not an actual
+// network problem -- JVB/server health was checked directly and was fine), and a confirmed black
+// Picture-in-Picture frame from the performance governor's give-up path -- i.e. that SPECIFIC
+// device was genuinely too weak for the engine every desktop user was being defaulted to.
+//
+// Neither blanket choice is right: a real discrete GPU should get mediapipe-gpu (its quality
+// fixes, at a cost this repo's own bench/REPORT.md measured as small on capable hardware); a
+// weak/integrated GPU or a software-rendered browser should NOT be defaulted into that same cost.
+// detectDefaultEngine() below replaces both blanket constants with an actual one-time capability
+// probe (WEBGL_debug_renderer_info's unmasked renderer string) so each device gets routed to the
+// engine it can actually run well, instead of every user sharing one guess. The existing runtime
+// governor (duty-cycle resolution/fps stepping, mid-call fallback, give-up -- see
+// JitsiStreamBackgroundEffect.ts) is UNCHANGED and still adapts live within whichever engine this
+// picks; this only changes which engine a session STARTS on.
+const FALLBACK_ENGINE: SegmentationEngine = 'v1';
+
+// Known software/CPU-emulated WebGL renderer strings -- these report a WebGL context that WORKS,
+// but every draw call is emulated in software (SwiftShader, llvmpipe/Mesa's software rasterizer,
+// Windows' "Microsoft Basic Render Driver", a headless/virtualized GPU with no real driver). A
+// session on one of these has no real GPU to give mediapipe-gpu's near-flat segmentation cost --
+// it would pay the SAME (or worse) cost as CPU delegate for none of the benefit, so it's treated
+// as "no real GPU" here even though the browser itself reports WebGL as available.
+const SOFTWARE_RENDERER_PATTERN = /swiftshader|llvmpipe|software|microsoft basic render|vmware|virtualbox|basic render driver/i;
 
 function isMobileDevice(): boolean {
   try {
@@ -61,6 +51,60 @@ function isMobileDevice(): boolean {
   } catch {
     return false;
   }
+}
+
+// One-time, synchronous, best-effort GPU capability probe. Creates a throwaway canvas purely to
+// query WEBGL_debug_renderer_info -- never kept, never rendered to, costs a few ms at most and
+// only runs once (cached below). Returns:
+//  - 'gpu'  -- a real (non-software) GPU renderer string was found.
+//  - 'cpu'  -- WebGL is available but the renderer looks software-emulated, OR the unmasked
+//              renderer string couldn't be read (some privacy-hardened browsers block the
+//              extension entirely) -- ambiguous cases default to the SAFER (no-GPU) answer.
+//  - 'none' -- no WebGL context could be created at all.
+export function probeGpuTier(): 'cpu' | 'gpu' | 'none' {
+  try {
+    if (typeof document === 'undefined') return 'none';
+    const canvas = document.createElement('canvas');
+    const gl = (canvas.getContext('webgl2') || canvas.getContext('webgl')) as WebGLRenderingContext | null;
+
+    if (!gl) return 'none';
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+
+    if (!debugInfo) return 'cpu'; // WebGL works, but can't identify the renderer -- assume no real GPU.
+    const renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '');
+
+    if (!renderer || SOFTWARE_RENDERER_PATTERN.test(renderer)) return 'cpu';
+
+    return 'gpu';
+  } catch {
+    return 'cpu'; // Detection itself failing is not evidence of a real GPU -- stay on the safe side.
+  }
+}
+
+let cachedDefaultEngine: SegmentationEngine | null = null;
+
+// The actual per-device default, used only when no explicit override (URL param/localStorage) is
+// set -- see readSegmentationEngineOverride below. Mobile keeps the confirmed-safe 'v1' outright
+// (real-device evidence below showed the GPU delegate failing there regardless of what WebGL
+// itself reports); desktop gets routed by the real capability probe. Cached after the first call
+// since the probe result cannot change within a single page session.
+export function detectDefaultEngine(): SegmentationEngine {
+  if (cachedDefaultEngine) return cachedDefaultEngine;
+  if (isMobileDevice()) {
+    // Real-device finding (2026-09-30, Android Chrome): the GPU delegate either failed to
+    // initialize or failed repeatedly mid-call (server logs showed the MediaPipe GPU wasm/model
+    // load immediately followed ~30-45s later by V1's own wasm/model loading -- the automatic
+    // mid-call fallback silently kicking in). Not re-tested against mediapipe-cpu specifically on
+    // mobile, so 'v1' (the confirmed-safe path) stays the mobile default rather than guessing.
+    cachedDefaultEngine = 'v1';
+
+    return cachedDefaultEngine;
+  }
+  const tier = probeGpuTier();
+
+  cachedDefaultEngine = tier === 'gpu' ? 'mediapipe-gpu' : tier === 'cpu' ? 'mediapipe-cpu' : FALLBACK_ENGINE;
+
+  return cachedDefaultEngine;
 }
 
 // Override, e.g. from a browser console: localStorage.setItem('toowix_bg_engine', 'v1'), or via
@@ -99,7 +143,7 @@ export function readSegmentationEngineOverride(): SegmentationEngine {
     // localStorage can be unavailable (private mode, a restricted embed) -- the default is safe.
   }
 
-  return isMobileDevice() ? DEFAULT_SEGMENTATION_ENGINE_MOBILE : DEFAULT_SEGMENTATION_ENGINE;
+  return detectDefaultEngine();
 }
 
 // Dev-only A/B override for MediaPipe's segmentation source canvas. Production uses the pinned
