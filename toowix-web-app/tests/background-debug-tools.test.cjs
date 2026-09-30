@@ -5,9 +5,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-function load(store = {}) {
+function load(store = {}, prod = false) {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/backgroundDebugTools.ts'), 'utf8');
-  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  // vm.runInNewContext runs this as a plain script, where `import.meta` is a syntax error
+  // regardless of guards around it -- same fix as tests/virtual-background.test.cjs uses.
+  const patchedSource = source.replace(/import\.meta/g, `({env:{PROD:${prod}}})`);
+  const code = ts.transpileModule(patchedSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
   const localStorage = { getItem: (key) => (key in store ? store[key] : null) };
   const exports = {};
 
@@ -30,9 +33,19 @@ test('debug flags turn on only with the exact string "1"', () => {
   assert.equal(load({ toowix_bg_debug_overlay: '1' }).isOverlayDebugEnabled(), true);
 });
 
+test('GO 3 hardening: debug flags are forced OFF in a production build, even with the flag explicitly set', () => {
+  assert.equal(load({ toowix_bg_debug_mask: '1' }, true).isMaskDebugEnabled(), false);
+  assert.equal(load({ toowix_bg_debug_overlay: '1' }, true).isOverlayDebugEnabled(), false);
+  // Same flag, non-production build -- confirms the harness/test itself isn't just broken.
+  assert.equal(load({ toowix_bg_debug_mask: '1' }, false).isMaskDebugEnabled(), true);
+});
+
 test('debug flags do not throw if localStorage access itself throws', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/backgroundDebugTools.ts'), 'utf8');
-  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  // vm.runInNewContext runs this as a plain script, where `import.meta` is a syntax error
+  // regardless of guards around it -- same fix as tests/virtual-background.test.cjs uses.
+  const patchedSource = source.replace(/import\.meta/g, '({env:{}})');
+  const code = ts.transpileModule(patchedSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
   const exports = {};
 
   vm.runInNewContext(code, { exports, localStorage: { getItem() { throw new Error('denied'); } } });

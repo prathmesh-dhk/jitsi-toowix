@@ -110,7 +110,7 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     Date,
     require: (id) => {
       if (id === './mediaPipeSegmentation') {
-        return { getNextMediaPipeTimestamp: () => ++mediaPipeTimestampCounter };
+        return { getNextMediaPipeTimestamp: () => ++mediaPipeTimestampCounter, readMediaPipeSegSizeOverride: () => null };
       }
       if (id === './backgroundDebugTools') {
         // Real math (needed if a test explicitly flips the flags below to exercise the debug

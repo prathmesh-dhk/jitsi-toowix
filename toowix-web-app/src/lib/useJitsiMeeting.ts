@@ -2565,6 +2565,21 @@ export function useJitsiMeeting({
     setTimeout(() => setBackgroundGiveUpMessage((current) => (current === message ? null : current)), 8000);
   }, [ removeVirtualBackgroundEffect ]);
 
+  // GO 3 hardening: visible-fallback-toast, so a fallback (a different/degraded engine than
+  // requested, effect keeps running) is never silent -- previously only console.warn. Unlike
+  // handleBackgroundGiveUp, this does NOT remove the effect; the background stays on, just on a
+  // fallback engine. Same one-shot toast shape as the others; `reason` is logged (not shown
+  // verbatim to the user -- it's an internal diagnostic string, e.g. a raw error message).
+  const [ backgroundFallbackMessage, setBackgroundFallbackMessage ] = useState<string | null>(null);
+  const handleBackgroundFallback = useCallback((reason: string) => {
+    // eslint-disable-next-line no-console
+    console.warn('[VirtualBackground] fallback:', reason);
+    const message = 'Switched to a different background engine for better performance on this device.';
+
+    setBackgroundFallbackMessage(message);
+    setTimeout(() => setBackgroundFallbackMessage((current) => (current === message ? null : current)), 8000);
+  }, []);
+
   // Applies (blur/image) or clears (null) a virtual background on the local camera track.
   // Re-thrown to the caller on failure (model download failed, WebAssembly unsupported, etc.) so
   // the UI can show an error instead of silently doing nothing.
@@ -2613,7 +2628,7 @@ export function useJitsiMeeting({
     }
 
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
-    const effect = await createVirtualBackgroundEffect(config, { onGiveUp: handleBackgroundGiveUp });
+    const effect = await createVirtualBackgroundEffect(config, { onFallback: handleBackgroundFallback, onGiveUp: handleBackgroundGiveUp });
 
     if (isStaleCall()) {
       // A newer setVirtualBackground call has already started (another switch, or a removal)
@@ -2662,7 +2677,7 @@ export function useJitsiMeeting({
       setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };
-  }, [ handleBackgroundGiveUp ]);
+  }, [ handleBackgroundFallback, handleBackgroundGiveUp ]);
 
   // Toggles mic noise suppression (RNNoise) on/off. Re-thrown to the caller on failure (e.g.
   // AudioWorklet unsupported) so the UI can show an error instead of silently doing nothing.
@@ -2919,6 +2934,7 @@ export function useJitsiMeeting({
     switchDevice,
     setVirtualBackground,
     backgroundGiveUpMessage,
+    backgroundFallbackMessage,
     setLowDataMode,
     noiseSuppressionEnabled,
     toggleNoiseSuppression,

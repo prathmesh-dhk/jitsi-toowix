@@ -26,6 +26,27 @@ export type SegmentationEngine = 'v1' | 'mediapipe-cpu' | 'mediapipe-gpu';
 // re-validated -- V1 remains the automatic fallback (see _fallBackToV1/_giveUp in
 // JitsiStreamBackgroundEffect.ts) if MediaPipe fails to load or fails repeatedly mid-call.
 const DEFAULT_SEGMENTATION_ENGINE: SegmentationEngine = 'mediapipe-gpu';
+// Real-device finding (2026-09-30, Android Chrome): mediapipe-gpu's real-device validation for
+// the commit above was desktop-only. On an Android phone, the GPU delegate either failed to
+// initialize or failed repeatedly mid-call (server logs showed the MediaPipe GPU wasm/model load
+// immediately followed ~30-45s later by V1's own wasm/model loading -- the automatic mid-call
+// fallback silently kicking in), leaving the user on plain V1 with none of the ghosting/hole-fill
+// fixes those are meant to provide. mediapipe-cpu has no GPU dependency and still gets all of the
+// same MediaPipe-only quality fixes (motion-adaptive smoothing, spatial hole-fill, edge
+// sharpening -- see JitsiStreamBackgroundEffect.ts), so it's the safer default on mobile until the
+// GPU delegate is actually validated there. Desktop keeps the GPU default from that commit.
+const DEFAULT_SEGMENTATION_ENGINE_MOBILE: SegmentationEngine = 'mediapipe-cpu';
+
+function isMobileDevice(): boolean {
+  try {
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  } catch {
+    return false;
+  }
+}
+
 // Override, e.g. from a browser console: localStorage.setItem('toowix_bg_engine', 'v1'), or via
 // the ?bgEngine= URL param (see readSegmentationEngineOverride below) -- useful for comparing
 // against V1 or forcing CPU delegate for debugging.
@@ -62,7 +83,56 @@ export function readSegmentationEngineOverride(): SegmentationEngine {
     // localStorage can be unavailable (private mode, a restricted embed) -- the default is safe.
   }
 
-  return DEFAULT_SEGMENTATION_ENGINE;
+  return isMobileDevice() ? DEFAULT_SEGMENTATION_ENGINE_MOBILE : DEFAULT_SEGMENTATION_ENGINE;
+}
+
+// Dev-only A/B override for MediaPipe's segmentation input size -- the default (512x288, set in
+// JitsiStreamBackgroundEffect.ts's MEDIAPIPE_SEG_WIDTH/HEIGHT) was promoted from 256x144 with NO
+// recorded benchmark evidence for either edge quality or ms cost (see the EDGE-STATUS status
+// report item 4) -- this lets that comparison actually be run, on a real webcam, without editing
+// code. ?bgSegSize=256 or ?bgSegSize=512 (or localStorage.setItem('toowix_bg_seg_size', '256')),
+// same URL-param-first/write-through pattern as readSegmentationEngineOverride above. Gated out of
+// production builds -- same reasoning as backgroundDebugTools.ts's isProductionBuild.
+export type MediaPipeSegSize = 256 | 512;
+const SEG_SIZE_STORAGE_KEY = 'toowix_bg_seg_size';
+
+function isProductionBuild(): boolean {
+  try {
+    return Boolean((import.meta as any)?.env?.PROD);
+  } catch {
+    return false;
+  }
+}
+
+function isValidSegSize(value: string | null): value is '256' | '512' {
+  return value === '256' || value === '512';
+}
+
+// Returns null when no override is set (or in production) -- the caller (JitsiStreamBackground
+// Effect.ts) falls back to its own MEDIAPIPE_SEG_WIDTH/HEIGHT default (512x288) in that case, so
+// this function never needs to know or duplicate that default itself.
+export function readMediaPipeSegSizeOverride(): MediaPipeSegSize | null {
+  if (isProductionBuild()) return null;
+  try {
+    if (typeof location !== 'undefined') {
+      const fromUrl = new URLSearchParams(location.search).get('bgSegSize');
+
+      if (isValidSegSize(fromUrl)) {
+        localStorage.setItem(SEG_SIZE_STORAGE_KEY, fromUrl);
+
+        return Number(fromUrl) as MediaPipeSegSize;
+      }
+    }
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(SEG_SIZE_STORAGE_KEY) : null;
+
+    if (isValidSegSize(stored)) {
+      return Number(stored) as MediaPipeSegSize;
+    }
+  } catch {
+    // localStorage can be unavailable (private mode, a restricted embed) -- no override.
+  }
+
+  return null;
 }
 
 const MEDIAPIPE_WASM_BASE_PATH = '/libs/mediapipe/wasm';

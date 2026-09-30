@@ -16,7 +16,22 @@ export function isOverlayDebugEnabled(): boolean {
 // console command by hand. ?bgDebug=1 draws a live on-canvas readout (engine, resolution, per-
 // stage timing) directly on the video, so which engine is actually running is visible on screen,
 // not just inferable from console output.
+// GO 3 hardening: excludes every debug tool (mask overlay, text overlay, and by extension
+// window.__bgBench/__benchToggle, which are only registered while an effect with these flags
+// possible is running -- see JitsiStreamBackgroundEffect.ts) from production builds outright,
+// the same import.meta.env.PROD gate readGovTimescale() in JitsiStreamBackgroundEffect.ts uses.
+// Checked FIRST and unconditionally, so a URL param or a localStorage value set by mistake (or by
+// someone probing a production tab) can never enable these in a real deployment.
+function isProductionBuild(): boolean {
+  try {
+    return Boolean((import.meta as any)?.env?.PROD);
+  } catch {
+    return false;
+  }
+}
+
 function readFlag(storageKey: string, urlParam: string): boolean {
+  if (isProductionBuild()) return false;
   try {
     if (typeof location !== 'undefined') {
       const fromUrl = new URLSearchParams(location.search).get(urlParam);

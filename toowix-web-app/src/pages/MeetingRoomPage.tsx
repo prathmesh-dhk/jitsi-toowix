@@ -3803,7 +3803,25 @@ export function MeetingRoomPage() {
       try {
         effect?.stopEffect();
         const { createVirtualBackgroundEffect } = await import('../lib/virtualBackground/createVirtualBackgroundEffect');
-        const created = await createVirtualBackgroundEffect(prejoinBackground);
+        // GO 3 hardening: the lobby preview previously had no onGiveUp at all -- if the governor
+        // gave up here, the effect would just sit stopped with no raw-camera fallback wired up.
+        // This mirrors the in-call handler's core behaviour (restore the raw stream, never a
+        // black/frozen frame) without the full toast system, which lives in useJitsiMeeting and
+        // isn't reachable from this standalone lobby effect.
+        const created = await createVirtualBackgroundEffect(prejoinBackground, {
+          onGiveUp: () => {
+            // eslint-disable-next-line no-console
+            console.warn('[MeetingRoomPage] prejoin background gave up -- restoring the raw camera preview.');
+            if (cancelled) return;
+            const currentStream = media.stream.current;
+            const previewEl = media.preview.current;
+
+            if (previewEl && currentStream) {
+              previewEl.srcObject = currentStream;
+              previewEl.play().catch(() => { });
+            }
+          }
+        });
 
         if (cancelled) return;
         effect = created;
@@ -8339,8 +8357,8 @@ export function MeetingRoomPage() {
           </div>
         )}
 
-        {/* Floating Toast Notification (Raise Hand, Recording, Participant Join/Leave, Time Limit, PiP Hint) */}
-        {(handRaisedToast || recordingToast || participantToast || timeLimitToast || pipHintToast) && (
+        {/* Floating Toast Notification (Raise Hand, Recording, Participant Join/Leave, Time Limit, PiP Hint, Background Fallback/Give-up) */}
+        {(handRaisedToast || recordingToast || participantToast || timeLimitToast || pipHintToast || jitsiMeeting.backgroundFallbackMessage || jitsiMeeting.backgroundGiveUpMessage) && (
           <div
             style={{
               position: 'fixed',
@@ -8426,6 +8444,40 @@ export function MeetingRoomPage() {
                   <Clock size={14} color="#202124" />
                 </div>
                 <span>{timeLimitToast}</span>
+              </>
+            ) : jitsiMeeting.backgroundGiveUpMessage ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#F9AB00',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Clock size={14} color="#202124" />
+                </div>
+                <span>{jitsiMeeting.backgroundGiveUpMessage}</span>
+              </>
+            ) : jitsiMeeting.backgroundFallbackMessage ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#1A73E8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Clock size={14} color="#FFFFFF" />
+                </div>
+                <span>{jitsiMeeting.backgroundFallbackMessage}</span>
               </>
             ) : (
               <>

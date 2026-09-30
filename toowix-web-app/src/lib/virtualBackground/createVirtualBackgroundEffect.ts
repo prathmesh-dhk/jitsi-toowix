@@ -52,6 +52,10 @@ export interface ICreateVirtualBackgroundEffectOptions {
   // itself does not enforce this, since a fresh instance from a device switch may legitimately
   // work -- see the comment on that constant).
   onGiveUp?: () => void;
+  // Visible-fallback-toast requirement: called the moment the effect falls back to a different
+  // engine than requested (init-time GPU/CPU failure, or a mid-call failure streak) -- unlike
+  // onGiveUp, the effect keeps running (on the fallback engine), it's just not the one asked for.
+  onFallback?: (reason: string) => void;
 }
 
 export async function createVirtualBackgroundEffect(
@@ -63,6 +67,10 @@ export async function createVirtualBackgroundEffect(
   }
 
   const requestedEngine = readSegmentationEngineOverride();
+  // Diagnostics (see EDGE-STATUS task item 2): the real error that caused an init-time fallback
+  // to v1, if one happened -- passed into the effect so the overlay/console can show it, not just
+  // silently swallowed into a generic "falling back" log with no visibility past this call site.
+  let initFallbackReason: string | null = null;
 
   if (requestedEngine === 'mediapipe-cpu' || requestedEngine === 'mediapipe-gpu') {
     const delegate = requestedEngine === 'mediapipe-gpu' ? 'GPU' : 'CPU';
@@ -71,18 +79,21 @@ export async function createVirtualBackgroundEffect(
       const mediaPipeSegmenter = await loadMediaPipeSegmenter(delegate);
       const engineHandle: ISegmentationEngineHandle = { engine: requestedEngine, mediaPipeSegmenter };
 
-      return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null);
+      return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null, null, options.onFallback ?? null);
     } catch (err) {
       // Creation failure (wasm/model download, GPU context unavailable, etc.) -- fall through to
       // V1 below rather than surface a broken call to the person selecting a background. A
       // DIFFERENT failure path -- MediaPipe creating successfully but then failing repeatedly
       // mid-call -- is handled inside JitsiStreamBackgroundEffect itself (see loadV1Fallback).
-      console.warn(`[VirtualBackground] MediaPipe (${delegate}) failed to initialize, falling back to V1:`, err);
+      const message = err instanceof Error ? err.message : String(err);
+
+      initFallbackReason = `MediaPipe (${delegate}) failed to initialize: ${message}`;
+      console.warn(`[VirtualBackground] ${initFallbackReason} -- falling back to V1.`);
     }
   }
 
   const { tflite } = await loadTfliteOnce();
   const engineHandle: ISegmentationEngineHandle = { engine: 'v1', tflite };
 
-  return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null);
+  return new JitsiStreamBackgroundEffect(engineHandle, virtualBackground, loadTfliteOnce, options.onGiveUp ?? null, initFallbackReason, options.onFallback ?? null);
 }

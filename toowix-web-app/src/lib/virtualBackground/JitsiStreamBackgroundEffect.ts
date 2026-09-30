@@ -14,7 +14,7 @@ import {
   TIMEOUT_TICK,
   timerWorkerScript
 } from './TimerWorker';
-import { getNextMediaPipeTimestamp, type SegmentationEngine } from './mediaPipeSegmentation';
+import { getNextMediaPipeTimestamp, readMediaPipeSegSizeOverride, type SegmentationEngine } from './mediaPipeSegmentation';
 import { computeStats, isMaskDebugEnabled, isOverlayDebugEnabled, roundTo1Decimal } from './backgroundDebugTools';
 
 export const VIRTUAL_BACKGROUND_TYPE = {
@@ -56,6 +56,9 @@ const SEG_HEIGHT = 144;
 // ratio as SEG_WIDTH x SEG_HEIGHT, just 2x the linear resolution (4x the pixels).
 const MEDIAPIPE_SEG_WIDTH = 512;
 const MEDIAPIPE_SEG_HEIGHT = 288;
+// Dev-only A/B override (?bgSegSize=256|512) -- see readMediaPipeSegSizeOverride's comment. 144 is
+// MEDIAPIPE_SEG_WIDTH/HEIGHT's own 16:9 ratio (512:288 = 16:9), so 256 maps to 256x144 to match.
+const MEDIAPIPE_SEG_SIZE_256: { height: number; width: number } = { height: 144, width: 256 };
 
 // Segmentation always runs at the small fixed size above, but compositing (drawing the mask +
 // sharp foreground + blurred/image background together) happens at full camera resolution every
@@ -364,6 +367,12 @@ export default class JitsiStreamBackgroundEffect {
   // scaling with camera resolution. Created once in startEffect, reused every frame.
   _mediaPipeInputCanvas: HTMLCanvasElement | null = null;
   _mediaPipeInputCtx: CanvasRenderingContext2D | null = null;
+  // Resolved once in the constructor (see readMediaPipeSegSizeOverride) -- MEDIAPIPE_SEG_WIDTH/
+  // HEIGHT (512x288) unless the dev-only ?bgSegSize=256 override is set, in which case 256x144.
+  // Read once, not per-frame: the override is meant to be compared across separate page loads
+  // (A/B), not changed mid-call.
+  _mediaPipeSegWidth = MEDIAPIPE_SEG_WIDTH;
+  _mediaPipeSegHeight = MEDIAPIPE_SEG_HEIGHT;
   // Settings' reported frameRate (falls back to 30) -- read once in startEffect, used by the
   // render-time-aware timer loop below.
   _frameRate = 30;
@@ -378,6 +387,17 @@ export default class JitsiStreamBackgroundEffect {
   _hasGivenUp = false;
   _gaveUpAt: number | null = null;
   _onGiveUp: (() => void) | null = null;
+  _onFallback: ((reason: string) => void) | null = null;
+  // Diagnostics-only (see EDGE-STATUS task item 1/2). The engine this effect FIRST resolved to at
+  // creation (before any mid-call fallback) -- set once in the constructor, never mutated -- so
+  // the debug overlay can show "started X, now on Y" instead of just the current engine, which
+  // alone can't distinguish "always been v1" from "fell back to v1 mid-call".
+  _engineAtStart: SegmentationEngine;
+  // Diagnostics-only. Set whenever a fallback (init-time engine-selection fallback, passed in via
+  // the constructor, OR a mid-call fallback via _fallBackToV1/_giveUp) actually happens, to the
+  // real reason/error string -- never cleared, so it answers "did a fallback happen this session
+  // and why" for the whole lifetime of the effect, not just the instant it occurred.
+  _lastFallbackReason: string | null = null;
   _resumeInput = () => {
     if (!this._stream || document.hidden) return;
     void this._inputVideoElement.play().catch((error: unknown) => {
@@ -393,9 +413,35 @@ export default class JitsiStreamBackgroundEffect {
       engineHandle: ISegmentationEngineHandle,
       virtualBackground: IVirtualBackground,
       loadV1Fallback: (() => Promise<{ tflite: any }>) | null = null,
-      onGiveUp: (() => void) | null = null
+      onGiveUp: (() => void) | null = null,
+      // Diagnostics-only. When createVirtualBackgroundEffect.ts requested a MediaPipe engine but
+      // had to fall back to v1 at CREATION time (GPU/CPU init failed), it passes the real reason
+      // here so the overlay/console can report it -- distinct from a MID-CALL fallback, which is
+      // detected and recorded on its own (see _fallBackToV1/_giveUp).
+      initFallbackReason: string | null = null,
+      // Called the moment _lastFallbackReason becomes non-null (init-time OR mid-call) -- the
+      // visible-fallback-toast requirement. Fires with the reason string; unlike onGiveUp this
+      // does NOT mean the effect stopped, only that it's now running a different/degraded engine
+      // than requested.
+      onFallback: ((reason: string) => void) | null = null
   ) {
     this._onGiveUp = onGiveUp;
+    this._onFallback = onFallback;
+    const segSizeOverride = readMediaPipeSegSizeOverride();
+
+    if (segSizeOverride === 256) {
+      this._mediaPipeSegWidth = MEDIAPIPE_SEG_SIZE_256.width;
+      this._mediaPipeSegHeight = MEDIAPIPE_SEG_SIZE_256.height;
+    }
+    this._engineAtStart = engineHandle.engine;
+    this._lastFallbackReason = initFallbackReason;
+    if (initFallbackReason) {
+      try {
+        this._onFallback?.(initFallbackReason);
+      } catch (err) {
+        console.warn('[VirtualBackground] onFallback callback threw:', err);
+      }
+    }
     // Workaround for a Firefox issue (https://bugzilla.mozilla.org/show_bug.cgi?id=1388974):
     // a canvas needs its context requested once before captureStream() works reliably.
     this._outputCanvasElement = document.createElement('canvas');
@@ -894,8 +940,8 @@ export default class JitsiStreamBackgroundEffect {
     // could need it later even if this effect started on v1.
     if (!this._mediaPipeInputCanvas) {
       this._mediaPipeInputCanvas = document.createElement('canvas');
-      this._mediaPipeInputCanvas.width = MEDIAPIPE_SEG_WIDTH;
-      this._mediaPipeInputCanvas.height = MEDIAPIPE_SEG_HEIGHT;
+      this._mediaPipeInputCanvas.width = this._mediaPipeSegWidth;
+      this._mediaPipeInputCanvas.height = this._mediaPipeSegHeight;
       this._mediaPipeInputCtx = this._mediaPipeInputCanvas.getContext('2d');
     }
 
@@ -1016,7 +1062,7 @@ export default class JitsiStreamBackgroundEffect {
     // hole to the real background instead of a softer edge. A fine source mask still needs less
     // blur than V1's coarse one to look sharp, just not this little -- 3/2.5px is the current
     // middle ground between "crisp" and "never lets the real background show through."
-    const isFineMask = this._options.height >= MEDIAPIPE_SEG_HEIGHT;
+    const isFineMask = this._options.height >= this._mediaPipeSegHeight && this._mediaPipeSegHeight > SEG_HEIGHT;
     const stretchRatio = outHeight / (this._options.height || outHeight);
     const REFERENCE_STRETCH_RATIO = 5; // ~720 / 144, the ratio baseBlurPx was originally tuned against
     const edgeBlurPx = isFineMask
@@ -1234,7 +1280,7 @@ export default class JitsiStreamBackgroundEffect {
           // @ts-ignore
           this._inputVideoElement,
           0, 0, this._inputVideoElement.width, this._inputVideoElement.height,
-          0, 0, MEDIAPIPE_SEG_WIDTH, MEDIAPIPE_SEG_HEIGHT
+          0, 0, this._mediaPipeSegWidth, this._mediaPipeSegHeight
       );
 
       const result = segmenter.segmentForVideo(this._mediaPipeInputCanvas, timestamp);
@@ -1285,6 +1331,14 @@ export default class JitsiStreamBackgroundEffect {
       this._frameErrorReported = true;
     }
     if (this._mediaPipeConsecutiveErrors >= MEDIAPIPE_CONSECUTIVE_ERROR_FALLBACK_THRESHOLD) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this._lastFallbackReason = `${MEDIAPIPE_CONSECUTIVE_ERROR_FALLBACK_THRESHOLD} consecutive segmentation failures (last: ${message})`;
+      try {
+        this._onFallback?.(this._lastFallbackReason);
+      } catch (err) {
+        console.warn('[VirtualBackground] onFallback callback threw:', err);
+      }
       this._fallBackToV1();
     }
   }
@@ -1300,7 +1354,7 @@ export default class JitsiStreamBackgroundEffect {
       return;
     }
     this._mediaPipeFallbackInProgress = true;
-    console.warn('[VirtualBackground] MediaPipe failed repeatedly during this call -- switching to the V1 engine for the rest of it.');
+    console.warn(`[VirtualBackground] MediaPipe failed repeatedly during this call (${this._lastFallbackReason ?? 'reason unknown'}) -- switching to the V1 engine for the rest of it.`);
     void (async () => {
       try {
         if (!this._loadV1Fallback) {
@@ -1456,7 +1510,16 @@ export default class JitsiStreamBackgroundEffect {
 
     this._lastOverlayMetrics = {
       engine: this._engine,
+      // Diagnostics (EDGE-STATUS task item 1): distinguishes "always been this engine" from "fell
+      // back here mid-call" -- engineAtStart never changes, engine can (see _fallBackToV1).
+      engineAtStart: this._engineAtStart,
+      fallbackReason: this._lastFallbackReason ?? 'none',
       outputHeight: Math.min(this._maxOutputHeight, this._perfCap),
+      fpsTier: this._perfFpsCap,
+      // Diagnostics (?bgSegSize=256|512 A/B override) -- only meaningful for the MediaPipe
+      // engines; V1 always segments at its own fixed SEG_WIDTH/HEIGHT (256x144), unaffected by
+      // this override, so it's shown regardless of engine rather than only when MediaPipe-active.
+      mediaPipeSegSize: `${this._mediaPipeSegWidth}x${this._mediaPipeSegHeight}`,
       avgTotalMs: roundTo1Decimal(avgTotalMs),
       avgSegmentationMs: roundTo1Decimal(avgSegmentationMs),
       avgReadbackMs: roundTo1Decimal(avgReadbackMs),
@@ -1532,8 +1595,10 @@ export default class JitsiStreamBackgroundEffect {
     }
     const metrics = this._lastOverlayMetrics;
     const lines = [
-      `engine: ${metrics.engine}`,
-      `out: ${metrics.outputHeight}p`,
+      `engine: ${metrics.engine}${metrics.engineAtStart !== metrics.engine ? ` (started: ${metrics.engineAtStart})` : ''}`,
+      `fallback: ${metrics.fallbackReason}`,
+      `out: ${metrics.outputHeight}p @ ${metrics.fpsTier}fps`,
+      `seg size: ${metrics.mediaPipeSegSize}`,
       `total: ${metrics.avgTotalMs}ms`,
       `seg: ${metrics.avgSegmentationMs}ms`,
       `readback: ${metrics.avgReadbackMs}ms`,
@@ -1626,13 +1691,15 @@ export default class JitsiStreamBackgroundEffect {
   }
 }
 
-// Phase 2b: window.__bgBench(seconds) -- always registered (no flag needed to make it available;
-// it only ever does anything when actually called), routes to whichever effect instance is
-// currently active (startEffect/stopEffect below keep this in sync). Returns a rejected promise
-// rather than throwing synchronously if nothing is active, since callers await it from a console.
+// Phase 2b: window.__bgBench(seconds) -- routes to whichever effect instance is currently active
+// (startEffect/stopEffect below keep this in sync). Returns a rejected promise rather than
+// throwing synchronously if nothing is active, since callers await it from a console.
+// GO 3 hardening: excluded from production builds outright (see isProductionBuild's comment in
+// backgroundDebugTools.ts) -- this was previously registered unconditionally for every user, a
+// real gap this closes, not just a theoretical one.
 let activeDebugEffect: JitsiStreamBackgroundEffect | null = null;
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && !(import.meta as any)?.env?.PROD) {
   (window as any).__bgBench = (seconds: number) => {
     if (!activeDebugEffect) {
       return Promise.reject(new Error('No virtual background effect is currently active.'));

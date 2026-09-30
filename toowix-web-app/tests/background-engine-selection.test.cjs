@@ -28,8 +28,8 @@ assert.match(
 );
 assert.match(
     source,
-    /catch \(err\) \{[\s\S]*?console\.warn\(`\[VirtualBackground\] MediaPipe \(\$\{delegate\}\) failed to initialize, falling back to V1:`, err\);[\s\S]*?\}/,
-    'a MediaPipe creation failure must be caught and logged, then fall through to V1 below -- never left to reject the whole call'
+    /catch \(err\) \{[\s\S]*?initFallbackReason = `MediaPipe \(\$\{delegate\}\) failed to initialize: \$\{message\}`;[\s\S]*?console\.warn\(`\[VirtualBackground\] \$\{initFallbackReason\} -- falling back to V1\.`\);[\s\S]*?\}/,
+    'a MediaPipe creation failure must be caught, its reason recorded (for the diagnostics overlay) and logged, then fall through to V1 below -- never left to reject the whole call'
 );
 assert.match(
     source,
@@ -38,8 +38,8 @@ assert.match(
 );
 assert.match(
     source,
-    /return new JitsiStreamBackgroundEffect\(engineHandle, virtualBackground, loadTfliteOnce, options\.onGiveUp \?\? null\);/,
-    'loadTfliteOnce must be passed to the effect so it can load V1 on demand for a mid-call fallback, without every engine paying for it upfront; onGiveUp must be passed through for the performance-governor give-up tier'
+    /return new JitsiStreamBackgroundEffect\(engineHandle, virtualBackground, loadTfliteOnce, options\.onGiveUp \?\? null, initFallbackReason, options\.onFallback \?\? null\);/,
+    'loadTfliteOnce must be passed to the effect so it can load V1 on demand for a mid-call fallback, without every engine paying for it upfront; onGiveUp, the init-time fallback reason, and onFallback must all be passed through'
 );
 
 console.log('PASS background engine selection: default per mediaPipeSegmentation.ts (currently mediapipe-gpu), MediaPipe failure falls back to V1');
