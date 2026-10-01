@@ -57,6 +57,7 @@ import {
 } from 'lucide-react';
 import { persistChatMessage, uploadChatImage, resolveChatImageUrl, fetchChatHistory, MAX_CHAT_IMAGE_BYTES } from '../lib/chatApi';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
+import { isSpeakingNow } from '../lib/speakingStore';
 import {
   playChatMessageTone,
   playMeetingEndedTone,
@@ -1660,7 +1661,8 @@ export function MeetingRoomPage() {
     theme: IParticipantColorTheme,
     videoEl: HTMLVideoElement | null,
     muted: boolean,
-    raisedHand: boolean
+    raisedHand: boolean,
+    speaking: boolean
   ) => {
     // 1. Tile Background — matches EXACT main stage tile background
     ctx.fillStyle = theme.tileBg;
@@ -1732,6 +1734,23 @@ export function MeetingRoomPage() {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('✋', x + 16, y + 16);
+    }
+
+    // 6. Speaking cue -- a pulsing blue ring around the card, matching the same talking-cue look
+    // used on every participant tile in the main meeting view (see SpeakingOverlay.tsx). That
+    // component is DOM/CSS and can't run inside this canvas-drawn PiP frame, so this redraws the
+    // same ring with Canvas2D, phased off Date.now() -- the draw loop already re-runs at 10fps
+    // (see startPipDraw), so the glow pulses the same way without any extra timer of its own.
+    if (speaking) {
+      const phase = (Math.sin((Date.now() % 1200) / 1200 * Math.PI * 2) + 1) / 2;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(138,180,248,0.95)';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = 'rgba(138,180,248,0.65)';
+      ctx.shadowBlur = 6 + phase * 10;
+      drawRoundRect(ctx, x + 1.5, y + 1.5, w - 3, h - 3, 13);
+      ctx.stroke();
+      ctx.restore();
     }
   };
 
@@ -1922,6 +1941,20 @@ export function MeetingRoomPage() {
       }
       ctx.restore();
 
+      // Speaking cue on the self-view bubble -- same pulsing ring as the card layout below.
+      if (isSpeakingNow('local')) {
+        const phase = (Math.sin((Date.now() % 1200) / 1200 * Math.PI * 2) + 1) / 2;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(138,180,248,0.95)';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = 'rgba(138,180,248,0.65)';
+        ctx.shadowBlur = 6 + phase * 10;
+        ctx.beginPath();
+        ctx.arc(bubbleCx, bubbleCy, bubbleR + 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       // Muted-mic badge on the self-view bubble (top-right of the circle)
       if (localMuted) {
         ctx.fillStyle = '#EA4335';
@@ -1973,7 +2006,7 @@ export function MeetingRoomPage() {
       allParticipants.forEach((p, i) => {
         const cy = HEADER_H + PADDING + i * (cardH + GAP);
         const videoEl = p.isLocal ? localVid : pipRemoteVideoRefs.current.get(p.id) || null;
-        drawParticipantCard(ctx, PADDING, cy, W - PADDING * 2, cardH, p.name, p.theme, videoEl, p.muted, p.raisedHand);
+        drawParticipantCard(ctx, PADDING, cy, W - PADDING * 2, cardH, p.name, p.theme, videoEl, p.muted, p.raisedHand, isSpeakingNow(p.id));
       });
     }
 

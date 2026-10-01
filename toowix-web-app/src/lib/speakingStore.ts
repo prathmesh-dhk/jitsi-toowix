@@ -58,6 +58,12 @@ export function clearSpeaking(id: string) {
   set(id, false);
 }
 
+// Non-hook snapshot read, for callers outside React's render cycle (e.g. a setInterval-driven
+// canvas draw loop like the PiP composite frame) that can't use useSyncExternalStore.
+export function isSpeakingNow(id: string | undefined): boolean {
+  return id ? speaking.get(id) || false : false;
+}
+
 export function useSpeaking(id: string | undefined): boolean {
   return useSyncExternalStore(
     (cb) => {
