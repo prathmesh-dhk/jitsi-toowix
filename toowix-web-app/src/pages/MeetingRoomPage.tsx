@@ -5438,11 +5438,15 @@ export function MeetingRoomPage() {
               )}
 
             </div>
-          ) : !tileViewEnabled && !activePanel ? (
-            /* Speaker View (Jitsi tile-view OFF): one large pinned participant + filmstrip sidebar.
-               Skipped whenever a side panel (chat/people/etc) is open -- the big spotlight stage plus a
-               separate filmstrip doesn't fit next to a panel, so we fall through to the plain resizable
-               tile grid below instead of rendering a redundant middle stage. */
+          ) : (!tileViewEnabled || activePanel) ? (
+            /* Speaker View: one large stage (pinned participant, or the live dominant speaker when
+               nothing is manually pinned -- see manuallyPinnedRef/setPinnedManually) + filmstrip
+               sidebar. Also used whenever a side panel (chat/people/etc) is open, even with tile
+               view otherwise on -- a full grid crammed next to a 380px panel read as a cluttered,
+               redundant layout; a single auto-following spotlight stage is what's wanted there
+               instead, matching Meet's own panel-open behaviour. The stage swaps automatically
+               as the dominant speaker changes (the same effect that drives this when tile view is
+               off), not just on manual pin. */
             <div
               className="tw-stage-row"
               style={{
