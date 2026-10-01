@@ -285,8 +285,6 @@ import { SecuritySection } from './components/settings/SecuritySection';
 import { StorageSection } from './components/settings/StorageSection';
 import { RsvpPage } from './pages/RsvpPage';
 import { RecordingWatchPage } from './pages/RecordingWatchPage';
-import { AuthCallback } from './pages/AuthCallback';
-import { AuthSilentCallback } from './pages/AuthSilentCallback';
 
 // The meeting implementation includes media previews, call controls, and optional meeting
 // features. Loading it only on a /meet route keeps the marketing, auth, dashboard and RSVP
@@ -328,8 +326,6 @@ export default function App() {
           <Route path="/meet-direct/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><DirectMeetingRoomPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signin" element={<LoginPage />} />
-          <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/auth/silent-callback" element={<AuthSilentCallback />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/register" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
