@@ -7608,7 +7608,7 @@ export function MeetingRoomPage() {
                   }}
                 >
                   <Sparkles size={16} />
-                  Select background
+                  Change background
                 </button>
                 <button
                   onClick={() => {

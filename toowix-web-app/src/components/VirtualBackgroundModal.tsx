@@ -130,7 +130,7 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={{ fontSize: '16px', fontWeight: 600, color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Sparkles size={18} color="#8AB4F8" /> Select background
+            <Sparkles size={18} color="#8AB4F8" /> Change background
           </span>
           <button
             onClick={onClose}
