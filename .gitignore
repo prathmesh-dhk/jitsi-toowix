@@ -180,6 +180,14 @@ test-results
 .env
 .env.*
 !.env.example
+
+# Local, unfinished Keycloak/OIDC integration. Keep these out of shared history
+# until the authentication migration is approved and complete.
+/toowix-web-app/src/auth/
+/toowix-web-app/src/pages/AuthCallback.tsx
+/toowix-web-app/src/pages/AuthSilentCallback.tsx
+/toowix-backend/src/middleware/requireToowixAuth.ts
+
 toowix-backend/.env
 toowix-web-app/.env
 toowix-backend/node_modules

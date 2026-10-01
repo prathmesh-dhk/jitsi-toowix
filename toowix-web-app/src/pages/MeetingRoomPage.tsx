@@ -4563,7 +4563,7 @@ export function MeetingRoomPage() {
             .tw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-template-rows: none !important; grid-auto-rows: minmax(120px, 1fr) !important; gap: 8px !important; overflow-y: auto !important; }
             .tw-grid[data-count="1"] { grid-template-columns: minmax(0, 1fr) !important; }
             .tw-grid[data-count="2"] { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
-            .tw-grid > div { border-radius: 14px !important; }
+            .tw-grid > div { border-radius: 14px !important; aspect-ratio: auto !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; }
             .tw-toolbar { left: 8px !important; right: 8px !important; transform: none !important; bottom: calc(8px + env(safe-area-inset-bottom)) !important; height: 60px !important; padding: 0 10px !important; gap: 4px !important; justify-content: space-between !important; border-radius: 30px !important; }
             .tw-toolbar button[title="Select microphone"],
             .tw-toolbar button[title="Select camera"],
@@ -5845,12 +5845,18 @@ export function MeetingRoomPage() {
                 height: '100%',
                 maxHeight: 'calc(100vh - 170px)',
                 display: 'grid',
+                // Columns size to their content (max-content), not an equal 1fr share of the full
+                // width -- a 1fr column stayed full-width even though each card's actual width is
+                // now derived from the row height via its 16:9 aspect ratio (see the card styles
+                // below), leaving a large dead gap between cards. justifyContent: 'center' then
+                // centers the resulting (narrower-than-container) grid as a whole.
                 gridTemplateColumns:
                   remoteParticipants.length + allShares.length + 1 > 6
-                    ? `repeat(${Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6)))}, minmax(0, 1fr))`
+                    ? `repeat(${Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6)))}, max-content)`
                     : remoteParticipants.length + allShares.length <= 3
-                      ? 'repeat(2, 1fr)'
-                      : 'repeat(3, 1fr)',
+                      ? 'repeat(2, max-content)'
+                      : 'repeat(3, max-content)',
+                justifyContent: 'center',
                 gridTemplateRows:
                   remoteParticipants.length + allShares.length + 1 > 6
                     ? `repeat(${Math.ceil((remoteParticipants.length + allShares.length + 1) / Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6))))}, minmax(0, 1fr))`
@@ -5858,8 +5864,12 @@ export function MeetingRoomPage() {
                       ? '1fr'
                       : 'repeat(2, 1fr)',
                 gap: '16px',
-                alignItems: 'stretch',
-                justifyItems: 'stretch',
+                // Each card fills its row height (explicit height: 100%) and derives its own
+                // width from that via aspect-ratio (16:9), rather than stretching to fill the
+                // column -- 'center' on both axes centers the resulting fixed-ratio box in its
+                // cell instead of letting it hug a default edge.
+                alignItems: 'center',
+                justifyItems: 'center',
               }}
             >
               {/* Screen shares appear as tiles, newest first */}
@@ -5877,8 +5887,16 @@ export function MeetingRoomPage() {
                   setTileViewEnabled(false);
                 }}
                 style={{
-                  width: '100%',
+                  // Sized from height, not width: the row's actual available height can be less
+                  // than (column width / 16 * 9), so deriving height from a full-width card and
+                  // then clamping with maxHeight broke the ratio instead of preserving it. Filling
+                  // height and deriving width from THAT (capped by maxWidth) is the same approach
+                  // as object-fit: contain, and the card centers in its cell via the grid
+                  // container's alignItems/justifyItems: 'center'.
+                  width: 'auto',
                   height: '100%',
+                  maxWidth: '100%',
+                  aspectRatio: '16 / 9',
                   minHeight: 0,
                   borderRadius: '24px',
                   overflow: 'hidden',
@@ -6037,8 +6055,12 @@ export function MeetingRoomPage() {
                       setTileViewEnabled(isPinned);
                     }}
                     style={{
-                      width: '100%',
+                      // See the matching comment on the local-participant card above -- sized from
+                      // height (capped by maxWidth), not width capped by maxHeight.
+                      width: 'auto',
                       height: '100%',
+                      maxWidth: '100%',
+                      aspectRatio: '16 / 9',
                       minHeight: 0,
                       borderRadius: '24px',
                       overflow: 'hidden',
