@@ -40,7 +40,18 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     clearRect() {}
   });
   let plays = 0;
-  const video = { readyState: 2, videoWidth: width, videoHeight: height, setAttribute() {}, pause() {}, play() { plays++; return Promise.resolve(); } };
+  let rvfcCallback = null;
+  let rvfcNextHandle = 1;
+  const video = {
+    readyState: 2, videoWidth: width, videoHeight: height, setAttribute() {}, pause() {},
+    play() { plays++; return Promise.resolve(); },
+    // Mirrors the real requestVideoFrameCallback/cancelVideoFrameCallback contract closely enough
+    // for tests: stores the single pending callback (the effect only ever has one in flight) and
+    // hands back an incrementing handle id (0 is a valid handle, so production code must never
+    // treat it as falsy -- tests exercise that by starting the counter at 1 anyway for clarity).
+    requestVideoFrameCallback(cb) { rvfcCallback = cb; return rvfcNextHandle++; },
+    cancelVideoFrameCallback() { rvfcCallback = null; }
+  };
   const document = Object.assign(new EventTarget(), {
     hidden: false,
     createElement(kind) {
@@ -159,7 +170,9 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
   return {
     effect, track, document, window, draws, video, warnings, plays: () => plays, mediaPipeCalls, loadV1FallbackCalls, textOverlayCalls,
     setMaskDebug: (v) => { maskDebugFlag = v; },
-    setOverlayDebug: (v) => { overlayDebugFlag = v; }
+    setOverlayDebug: (v) => { overlayDebugFlag = v; },
+    // Fires the currently-pending requestVideoFrameCallback, simulating a new camera frame.
+    triggerVideoFrame: () => { if (rvfcCallback) rvfcCallback(); }
   };
 }
 
@@ -227,13 +240,14 @@ test('background blur downsamples before blurring even when Canvas2D.filter is s
   assert.equal(s.draws.at(-1)[0], s.effect._blurCanvas);
 });
 
-test('a transient frame error does not stop the worker schedule', () => {
+test('a transient frame error does not stop the video-frame schedule', () => {
   const s = setup();
-  const worker = s.effect._maskFrameTimerWorker;
+  assert.ok(s.effect._rvfcHandle !== null, 'loop should already be scheduled from startEffect');
   s.effect._renderMask = () => { throw new Error('temporarily unavailable'); };
-  const before = worker.messages.length;
-  worker.onmessage({ data: { id: 3 } });
-  assert.equal(worker.messages.length, before + 1);
+  const handleBefore = s.effect._rvfcHandle;
+  s.triggerVideoFrame();
+  assert.ok(s.effect._rvfcHandle !== null, 'a thrown render error must not stop the loop from rescheduling');
+  assert.notEqual(s.effect._rvfcHandle, handleBefore, 'a new requestVideoFrameCallback must have been registered');
 });
 
 test('setMaxOutputHeight always clamps to [480, 1080]', () => {
@@ -700,7 +714,7 @@ test('GO 3 give-up tier: v1 already, floor exhausted, no cheaper engine -- calls
   s.effect._handlePerfFloorExhausted();
   assert.equal(giveUpCalls, 1);
   assert.equal(s.effect.hasGivenUp(), true);
-  assert.equal(s.effect._maskFrameTimerWorker, null, 'the timer loop must be stopped, not left running to burn CPU');
+  assert.equal(s.effect._rvfcHandle, null, 'the frame loop must be stopped, not left running to burn CPU');
   assert.ok(s.warnings.some((w) => String(w.join(' ')).includes('giving up')));
 
   // Idempotent -- a second call (e.g. a stray governor tick before the caller reacts) must not
@@ -1210,13 +1224,11 @@ test('Phase 2c: runBenchmark reports blend and a residual that reconciles total 
   assert.equal(result.residualMs, 1);
 });
 
-test('Phase 2c: frame loop schedules the next tick at max(MIN_TICK_GAP_MS, 1000/frameRate - elapsedRenderMs)', () => {
+test('Phase 2c: frame loop gates the next render at max(MIN_TICK_GAP_MS, 1000/frameRate - elapsedRenderMs)', () => {
   const s = setup(true, { engine: 'v1' });
-  const worker = s.effect._maskFrameTimerWorker;
 
-  // First tick (before any render) must still be the unchanged 1000/30 -- _lastRenderElapsedMs
-  // starts at 0.
-  assert.ok(Math.abs(worker.messages.at(-1).timeMs - (1000 / 30)) < 0.001);
+  // Before any render, the gate is still the unchanged 1000/30 -- _lastRenderElapsedMs starts at 0.
+  assert.ok(Math.abs(s.effect._nextTickDelayMs() - (1000 / 30)) < 0.001);
 
   // A fast (near-0ms) render should schedule close to the full 1000/frameRate period.
   s.effect._lastRenderElapsedMs = 2;
@@ -1235,7 +1247,6 @@ test('Phase 2c: frame loop schedules the next tick at max(MIN_TICK_GAP_MS, 1000/
 
 test('Phase 2c: MIN_TICK_GAP_MS floors the delay so a very fast render never schedules a ~0ms tick', () => {
   const s = setup(true, { engine: 'v1' });
-  const worker = s.effect._maskFrameTimerWorker;
 
   s.effect.resizeSource = () => {};
   s.effect.runInference = () => {};

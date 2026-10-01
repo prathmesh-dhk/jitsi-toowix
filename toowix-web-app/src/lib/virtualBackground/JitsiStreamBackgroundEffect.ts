@@ -8,12 +8,6 @@
 // internal interface below (_runMediaPipeInference), selected only via the dev-only
 // readSegmentationEngineOverride() flag -- V1 (resizeSource/runInference, unchanged from before
 // Phase 2) remains the default and the mid-call fallback target if MediaPipe fails repeatedly.
-import {
-  CLEAR_TIMEOUT,
-  SET_TIMEOUT,
-  TIMEOUT_TICK,
-  timerWorkerScript
-} from './TimerWorker';
 import { getNextMediaPipeTimestamp, readMediaPipeSegSizeOverride, type SegmentationEngine } from './mediaPipeSegmentation';
 import { computeStats, isMaskDebugEnabled, isOverlayDebugEnabled, roundTo1Decimal } from './backgroundDebugTools';
 
@@ -279,7 +273,10 @@ const GIVE_UP_COOLDOWN_MS = 5 * 60 * 1000;
 
 export default class JitsiStreamBackgroundEffect {
   _inputVideoElement: HTMLVideoElement;
-  _maskFrameTimerWorker: Worker | null = null;
+  // Handle returned by HTMLVideoElement.requestVideoFrameCallback -- null means the loop is
+  // currently stopped (see _startTimerLoop/_stopTimerLoop).
+  _rvfcHandle: number | null = null;
+  _lastRenderAt = 0;
   _model: any;
   _options: { height: number; virtualBackground: IVirtualBackground; width: number };
   _outputCanvasCtx: CanvasRenderingContext2D | null = null;
@@ -1039,26 +1036,34 @@ export default class JitsiStreamBackgroundEffect {
     }
   }
 
-  // Phase 2c: the next tick's delay is render-time-aware (elapsedRenderMs subtracted from the
-  // target frame period) instead of a fixed 1000/30 -- a slow frame no longer "borrows" from the
-  // next one, and a fast frame (mediapipe-gpu at 480p, for example) is no longer held to a fixed
-  // 30fps ceiling it could exceed. MIN_TICK_GAP_MS keeps a floor so the main thread always gets
-  // idle time between ticks even when rendering is very fast. Everything else about the loop is
-  // unchanged: never two renders at once (still driven by this same single onmessage handler),
-  // no backlog (still exactly one SET_TIMEOUT posted per tick), the skip conditions inside
-  // _renderMask are untouched, and the once-only error log is untouched.
-  // Phase 3: the target period now uses getCurrentFrameRate() (min of the camera's native rate
-  // and the governor's fps lever), not the raw camera frameRate -- this is the ONLY place the fps
-  // lever actually changes runtime behaviour; captureStream() itself is untouched (see
-  // getCurrentFrameRate's doc comment).
+  // Phase 2c: kept as a pure helper -- the minimum gap that must have elapsed since the last
+  // render before another one is allowed, render-time-aware (elapsedRenderMs subtracted from the
+  // target frame period) so a slow frame doesn't "borrow" from the next one and a fast frame
+  // (mediapipe-gpu at 480p, for example) isn't held to a fixed 30fps ceiling it could exceed.
+  // MIN_TICK_GAP_MS floors it so the main thread always gets idle time even when rendering is
+  // very fast. The target period uses getCurrentFrameRate() (min of the camera's native rate and
+  // the governor's fps lever) -- this is the ONLY place the fps lever actually changes runtime
+  // behaviour; captureStream() itself is untouched (see getCurrentFrameRate's doc comment).
   _nextTickDelayMs(): number {
     return Math.max(MIN_TICK_GAP_MS, (1000 / this.getCurrentFrameRate()) - this._lastRenderElapsedMs);
   }
 
+  // Real reported defect (2026-10-01): the previous loop drove _renderMask() off a Worker/
+  // setTimeout timer with its own guessed delay, decoupled from when the camera actually delivers
+  // a new frame -- it could re-render a frame it had already processed, or fire slightly out of
+  // phase with real frame arrival, both visible as micro-stutter even when the average fps looked
+  // fine. requestVideoFrameCallback instead fires exactly once per genuinely new decoded video
+  // frame, giving the same tight native pacing a plain <video> playback gets. The fps governor
+  // still gets a say: _nextTickDelayMs() (unchanged, still render-time-aware) gates whether THIS
+  // particular frame callback actually renders, so a lowered fps tier still skips frames exactly
+  // as before -- only the trigger that drives the loop has changed, not what decides to render.
   _startTimerLoop() {
-    this._maskFrameTimerWorker = new Worker(timerWorkerScript, { name: 'VirtualBackground timer' });
-    this._maskFrameTimerWorker.onmessage = (response: MessageEvent) => {
-      if (response.data.id === TIMEOUT_TICK) {
+    const onVideoFrame = () => {
+      if (this._rvfcHandle === null) return; // stopped mid-flight; do not reschedule
+      const now = Date.now();
+
+      if (now - this._lastRenderAt >= this._nextTickDelayMs()) {
+        this._lastRenderAt = now;
         try {
           this._renderMask();
         } catch (error) {
@@ -1067,23 +1072,20 @@ export default class JitsiStreamBackgroundEffect {
             console.warn('[VirtualBackground] Frame processing failed:', error);
             this._frameErrorReported = true;
           }
-        } finally {
-          this._maskFrameTimerWorker?.postMessage({ id: SET_TIMEOUT, timeMs: this._nextTickDelayMs() });
         }
+      }
+      if (this._rvfcHandle !== null) {
+        this._rvfcHandle = this._inputVideoElement.requestVideoFrameCallback(onVideoFrame);
       }
     };
 
-    // Poll readiness too: loadeddata alone may not fire again after a mobile interruption.
-    // _lastRenderElapsedMs is still 0 here (no frame has rendered yet), so this first delay is the
-    // same 1000/frameRate as before Phase 2c.
-    this._maskFrameTimerWorker.postMessage({ id: SET_TIMEOUT, timeMs: this._nextTickDelayMs() });
+    this._rvfcHandle = this._inputVideoElement.requestVideoFrameCallback(onVideoFrame);
   }
 
   _stopTimerLoop() {
-    if (this._maskFrameTimerWorker) {
-      this._maskFrameTimerWorker.postMessage({ id: CLEAR_TIMEOUT });
-      this._maskFrameTimerWorker.terminate();
-      this._maskFrameTimerWorker = null;
+    if (this._rvfcHandle !== null) {
+      this._inputVideoElement.cancelVideoFrameCallback(this._rvfcHandle);
+      this._rvfcHandle = null;
     }
   }
 
