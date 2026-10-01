@@ -285,6 +285,8 @@ import { SecuritySection } from './components/settings/SecuritySection';
 import { StorageSection } from './components/settings/StorageSection';
 import { RsvpPage } from './pages/RsvpPage';
 import { RecordingWatchPage } from './pages/RecordingWatchPage';
+import { AuthCallback } from './pages/AuthCallback';
+import { AuthSilentCallback } from './pages/AuthSilentCallback';
 
 // The meeting implementation includes media previews, call controls, and optional meeting
 // features. Loading it only on a /meet route keeps the marketing, auth, dashboard and RSVP
@@ -296,12 +298,23 @@ function MeetingRouteLoader() {
   return <main aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--color-text-secondary)' }}>Preparing meeting…</main>;
 }
 
+// Root route (bare domain / typed-in URL with the path stripped): a logged-in visitor must land
+// straight on /dashboard, never see the marketing HomePage in between. Checked synchronously from
+// localStorage (same cached-credentials signal AccountGuard's initial state uses) so this redirect
+// happens on the very first render, with no flash of HomePage first. AccountGuard still does its
+// own background session re-verification once on /dashboard, same as a direct /dashboard visit --
+// this only decides which page to render first, not whether the cached session is still valid.
+function RootRoute() {
+  const isLoggedIn = !!localStorage.getItem('toowix_user') || !!localStorage.getItem('toowix_session_token');
+  return isLoggedIn ? <Navigate to="/dashboard" replace /> : <HomePage />;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<RootRoute />} />
           <Route path="/rsvp" element={<RsvpPage />} />
           <Route path="/recordings/:id" element={<RecordingWatchPage />} />
           <Route path="/recording/:id" element={<RecordingWatchPage />} />
@@ -315,6 +328,8 @@ export default function App() {
           <Route path="/meet-direct/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><DirectMeetingRoomPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signin" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/auth/silent-callback" element={<AuthSilentCallback />} />
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/register" element={<SignupPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
