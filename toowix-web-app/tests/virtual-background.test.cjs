@@ -288,8 +288,11 @@ test('Phase 3 governor: steps DOWN under sustained overload, respects a cooldown
   const s = setup(true, { width: 1920, height: 1080, engine: 'v1' });
 
   s.effect.setMaxOutputHeight(1080); // network/call-size target allows the full ceiling throughout
-  assert.equal(s.effect._perfCap, 1080);
-  assert.equal(s.effect._perfFpsCap, 30);
+  // This test is specifically about step-DOWN mechanics, so it starts the governor pinned at the
+  // top tier regardless of the effect's actual (now bottom-tier) starting default -- see "Phase 3
+  // governor: state resets when the effect (re)starts" for that default itself.
+  s.effect._perfCap = 1080;
+  s.effect._perfFpsCap = 30;
 
   // 60ms is used throughout (not 40) so duty stays over PERF_DUTY_DOWN (0.75) even once fps has
   // reached its floor (15fps): 60*15/1000 = 0.9, still over -- otherwise the fps lever alone
@@ -389,13 +392,21 @@ test('Phase 3 governor: state resets when the effect (re)starts', () => {
   const s = setup(true, { width: 1920, height: 1080 });
 
   s.effect.setMaxOutputHeight(1080);
+  // Force the governor away from its (now bottom-tier) starting point so the reset below is
+  // actually exercised, not trivially true because nothing moved.
+  s.effect._perfCap = 1080;
+  s.effect._perfFpsCap = 30;
   s.effect._perfDutyOverBudgetSince = Date.now() - 1100;
   s.effect._updatePerfGovernor(40);
   assert.notEqual(s.effect._perfFpsCap, 30);
 
   s.effect.startEffect({ getVideoTracks: () => [s.track] });
-  assert.equal(s.effect._perfCap, 1080);
-  assert.equal(s.effect._perfFpsCap, 30);
+  // Real reported defect (2026-10-01): resets to the BOTTOM tier, not the top -- starting a fresh
+  // effect at 1080p/30fps meant every call's first few seconds ran at the heaviest possible
+  // compositing cost before the governor could react, visible as a hang right when a background
+  // was applied. See the field declaration's comment in JitsiStreamBackgroundEffect.ts.
+  assert.equal(s.effect._perfCap, 480);
+  assert.equal(s.effect._perfFpsCap, 15);
   assert.equal(s.effect._frameMsEma, 0);
   assert.equal(s.effect._perfDutyOverBudgetSince, null);
   assert.equal(s.effect._perfDutyUnderBudgetSince, null);
@@ -410,7 +421,7 @@ test('Phase 3 governor: state resets when the effect (re)starts', () => {
 test('Phase 3 governor: getCurrentFrameRate is min(native frameRate, fps lever)', () => {
   const s = setup(true, { engine: 'v1' });
 
-  assert.equal(s.effect.getCurrentFrameRate(), 30); // native 30fps, fps lever starts at 30
+  assert.equal(s.effect.getCurrentFrameRate(), 15); // native 30fps, but fps lever starts at the bottom tier (15)
   s.effect._perfFpsCap = 15;
   assert.equal(s.effect.getCurrentFrameRate(), 15);
   s.effect._perfFpsCap = 30;
@@ -448,6 +459,10 @@ test('C1 fake clock: sustain windows are measured against a controllable clock, 
   Date.now = () => fakeNow;
   try {
     s.effect.setMaxOutputHeight(1080);
+    // Pinned at the top tier -- this test is about sustain-window timing, not the (now bottom-tier)
+    // starting default, and needs headroom to step fps down from 30 to observe the mechanics.
+    s.effect._perfCap = 1080;
+    s.effect._perfFpsCap = 30;
     s.effect._updatePerfGovernor(60); // over budget, sets _perfDutyOverBudgetSince = fakeNow
     assert.equal(s.effect._perfFpsCap, 30, 'must not step before the sustain window elapses');
 
@@ -1227,6 +1242,10 @@ test('Phase 2c: runBenchmark reports blend and a residual that reconciles total 
 test('Phase 2c: frame loop gates the next render at max(MIN_TICK_GAP_MS, 1000/frameRate - elapsedRenderMs)', () => {
   const s = setup(true, { engine: 'v1' });
 
+  // This test is about the formula's mechanics, not the governor's (now bottom-tier) starting fps
+  // -- pin the fps lever at the top so 1000/30 below is meaningful.
+  s.effect._perfFpsCap = 30;
+
   // Before any render, the gate is still the unchanged 1000/30 -- _lastRenderElapsedMs starts at 0.
   assert.ok(Math.abs(s.effect._nextTickDelayMs() - (1000 / 30)) < 0.001);
 
@@ -1251,6 +1270,9 @@ test('Phase 2c: MIN_TICK_GAP_MS floors the delay so a very fast render never sch
   s.effect.resizeSource = () => {};
   s.effect.runInference = () => {};
   s.effect.runPostProcessing = () => {};
+  // Pinned at the top fps tier so 1000/30 - 50 is actually negative, exercising the floor -- at
+  // the (now bottom-tier) default fps of 15, 1000/15 - 50 stays positive and never needs it.
+  s.effect._perfFpsCap = 30;
 
   // Simulate a render that took longer than one whole frame period -- 1000/30 - 50 would be
   // negative without the floor.

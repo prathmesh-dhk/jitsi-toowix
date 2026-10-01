@@ -305,10 +305,19 @@ export default class JitsiStreamBackgroundEffect {
     _frameErrorReported = false;
     _maxOutputHeight = DEFAULT_MAX_OUTPUT_HEIGHT;
     _smoothedMask: Float32Array | null = null;
-    // Performance governor state -- see PERF_*/FPS_TIERS constants above. _perfCap/_perfFpsCap both
-    // start at the top tier; real hardware that can't sustain it steps down within about a second.
-    _perfCap = PERF_TIERS[PERF_TIERS.length - 1];
-    _perfFpsCap = FPS_TIERS[FPS_TIERS.length - 1];
+    // Performance governor state -- see PERF_*/FPS_TIERS constants above. Real reported defect
+    // (2026-10-01): starting at the top tier meant every call began background compositing at up
+    // to 1080p/30fps -- the heaviest possible per-frame cost -- and only stepped down after a full
+    // PERF_DUTY_DOWN_SUSTAIN_MS of sustained overload, so the very first seconds (often visible as
+    // a hang right when the background is applied, worse once the person starts moving and
+    // segmentation cost varies more) were spent at the most expensive setting before any
+    // mitigation could react. Starting at the bottom tier instead means every device's first frames
+    // are the cheapest possible; a capable device still reaches the top tier via the normal
+    // step-up logic (PERF_DUTY_UP_SUSTAIN_MS of comfortably-fast rendering per step, already
+    // covered by the C3 recovery test), just a few seconds later instead of paying for peak
+    // quality nobody asked to wait through.
+    _perfCap = PERF_TIERS[0];
+    _perfFpsCap = FPS_TIERS[0];
     _frameMsEma = 0;
     _perfDutyOverBudgetSince: number | null = null;
     _perfDutyUnderBudgetSince: number | null = null;
@@ -963,8 +972,9 @@ export default class JitsiStreamBackgroundEffect {
         this._smoothedMask = null;
         // Fresh performance governor state -- a previous camera/effect instance's measured frame
         // times say nothing about this one (different resolution, different device might be in use).
-        this._perfCap = PERF_TIERS[PERF_TIERS.length - 1];
-        this._perfFpsCap = FPS_TIERS[FPS_TIERS.length - 1];
+        // Starts at the bottom tier, not the top -- see the field declaration's comment above.
+        this._perfCap = PERF_TIERS[0];
+        this._perfFpsCap = FPS_TIERS[0];
         this._frameMsEma = 0;
         this._perfDutyOverBudgetSince = null;
         this._perfDutyUnderBudgetSince = null;
