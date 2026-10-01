@@ -91,6 +91,8 @@ import { SecurityOptionsModal } from '../components/SecurityOptionsModal';
 import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
 import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
 import { PollsModal, type IPoll } from '../components/PollsModal';
+import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
+import { calculateMeetingLayout } from '../lib/meetingLayout';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -138,76 +140,24 @@ export interface IParticipantColorTheme {
 }
 
 export const PARTICIPANT_COLOR_THEMES: IParticipantColorTheme[] = [
-  // 0: Blue Theme
-  {
-    name: 'blue',
-    avatarBg: '#1A73E8',
-    tileBg: '#162842',
-    badgeBg: 'rgba(15, 28, 46, 0.85)',
-    ringColor: '#4285F4',
-  },
-  // 1: Pink / Rose Theme
-  {
-    name: 'pink',
-    avatarBg: '#D81B60',
-    tileBg: '#3B1828',
-    badgeBg: 'rgba(43, 17, 29, 0.85)',
-    ringColor: '#F06292',
-  },
-  // 2: Purple / Violet Theme
-  {
-    name: 'purple',
-    avatarBg: '#8E24AA',
-    tileBg: '#30183B',
-    badgeBg: 'rgba(34, 17, 42, 0.85)',
-    ringColor: '#BA68C8',
-  },
-  // 3: Teal / Cyan Theme
-  {
-    name: 'teal',
-    avatarBg: '#00897B',
-    tileBg: '#142E2B',
-    badgeBg: 'rgba(14, 32, 30, 0.85)',
-    ringColor: '#4DB6AC',
-  },
-  // 4: Amber / Orange Theme
-  {
-    name: 'orange',
-    avatarBg: '#FB8C00',
-    tileBg: '#3D2510',
-    badgeBg: 'rgba(43, 26, 11, 0.85)',
-    ringColor: '#FFB74D',
-  },
-  // 5: Olive Green Theme
-  {
-    name: 'green',
-    avatarBg: '#558B2F',
-    tileBg: '#284414',
-    badgeBg: 'rgba(30, 51, 15, 0.85)',
-    ringColor: '#81C995',
-  },
-  // 6: Crimson Red Theme
-  {
-    name: 'red',
-    avatarBg: '#E53935',
-    tileBg: '#3B1818',
-    badgeBg: 'rgba(42, 17, 17, 0.85)',
-    ringColor: '#EF5350',
-  },
-  // 7: Indigo Theme
-  {
-    name: 'indigo',
-    avatarBg: '#3949AB',
-    tileBg: '#1A1E3D',
-    badgeBg: 'rgba(18, 21, 43, 0.85)',
-    ringColor: '#7986CB',
-  },
+  { name: 'deep-blue', avatarBg: '#2962C5', tileBg: '#101D35', badgeBg: 'rgba(10,20,38,.9)', ringColor: '#74A7FF' },
+  { name: 'teal', avatarBg: '#087E72', tileBg: '#102D2B', badgeBg: 'rgba(8,35,33,.9)', ringColor: '#57C8BA' },
+  { name: 'forest', avatarBg: '#367B48', tileBg: '#142B1A', badgeBg: 'rgba(14,33,19,.9)', ringColor: '#86CC91' },
+  { name: 'olive', avatarBg: '#77861F', tileBg: '#2E3313', badgeBg: 'rgba(34,37,11,.9)', ringColor: '#B9C85A' },
+  { name: 'mustard', avatarBg: '#B17B16', tileBg: '#36270F', badgeBg: 'rgba(42,30,9,.9)', ringColor: '#E4B851' },
+  { name: 'terracotta', avatarBg: '#B75C3A', tileBg: '#382019', badgeBg: 'rgba(43,22,16,.9)', ringColor: '#E99A79' },
+  { name: 'burgundy', avatarBg: '#8E2948', tileBg: '#32141E', badgeBg: 'rgba(41,13,22,.9)', ringColor: '#D97898' },
+  { name: 'purple', avatarBg: '#703AAB', tileBg: '#271737', badgeBg: 'rgba(28,14,42,.9)', ringColor: '#B98BE8' },
+  { name: 'indigo', avatarBg: '#4255A5', tileBg: '#171B38', badgeBg: 'rgba(16,19,43,.9)', ringColor: '#91A2EC' },
+  { name: 'rose', avatarBg: '#B84572', tileBg: '#371827', badgeBg: 'rgba(43,13,27,.9)', ringColor: '#EC91B2' },
+  { name: 'charcoal', avatarBg: '#51606A', tileBg: '#1D2328', badgeBg: 'rgba(20,25,29,.9)', ringColor: '#A9BBC7' },
+  { name: 'ocean', avatarBg: '#176C95', tileBg: '#112938', badgeBg: 'rgba(10,29,40,.9)', ringColor: '#71B9DB' },
+  { name: 'plum', avatarBg: '#8B417D', tileBg: '#30192F', badgeBg: 'rgba(38,14,35,.9)', ringColor: '#D58AC6' },
+  { name: 'copper', avatarBg: '#9D6432', tileBg: '#332316', badgeBg: 'rgba(39,25,13,.9)', ringColor: '#D9A76F' },
+  { name: 'slate', avatarBg: '#4B6173', tileBg: '#19232C', badgeBg: 'rgba(18,27,34,.9)', ringColor: '#9AB5C8' },
 ];
 
-export function getParticipantColorTheme(identifier: string, forceIndex?: number): IParticipantColorTheme {
-  if (typeof forceIndex === 'number') {
-    return PARTICIPANT_COLOR_THEMES[Math.abs(forceIndex) % PARTICIPANT_COLOR_THEMES.length];
-  }
+export function getParticipantColorTheme(identifier: string, _forceIndex?: number): IParticipantColorTheme {
   let hash = 0;
   const str = (identifier || '').trim().toLowerCase();
   for (let i = 0; i < str.length; i++) {
@@ -1121,6 +1071,30 @@ export function MeetingRoomPage() {
     new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   );
   const [activePanel, setActivePanel] = useState<'chat' | 'people' | 'info' | 'host' | 'activities' | null>(null);
+  // The visible meeting canvas is the source of truth for gallery sizing. It changes not only
+  // with browser resizing, but also when a side panel, fullscreen, or mobile layout changes.
+  const meetingCanvasRef = useRef<HTMLDivElement | null>(null);
+  const [meetingCanvasSize, setMeetingCanvasSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = meetingCanvasRef.current;
+    if (!element) return;
+    const update = () => {
+      const { width, height } = element.getBoundingClientRect();
+      setMeetingCanvasSize((previous) => (
+        Math.abs(previous.width - width) < 1 && Math.abs(previous.height - height) < 1
+          ? previous
+          : { width, height }
+      ));
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [hasJoined]);
   // Jitsi-style tile view toggle: ON (default) shows the equal-size participant grid; OFF shows
   // one large pinned participant with the rest in a filmstrip sidebar. Shortcut 'W' toggles.
   const [tileViewEnabled, setTileViewEnabled] = useState(true);
@@ -3713,7 +3687,9 @@ export function MeetingRoomPage() {
   ].sort((a, b) => b.startedAt - a.startedAt);
   const primaryShare = allShares[0];
   const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
-  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || (anyScreenShare && !tileViewEnabled);
+  // A presentation is always an explicit layout mode. It must not depend on the gallery toggle:
+  // a screen share always keeps its stage and right-side participant rail on desktop.
+  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || anyScreenShare;
   const tileBeforeShareRef = useRef(true);
   const wasSharingRef = useRef(false);
   useEffect(() => {
@@ -4518,6 +4494,23 @@ export function MeetingRoomPage() {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
     const isSpeaking = media.level > 0.05 && !inCallMuted;
     const localTheme = getParticipantColorTheme(displayName || 'You', 0);
+    const totalGalleryParticipants = remoteParticipants.length + 1;
+    // Do not let a too-tall wrapping gallery feed its own expanded height back into
+    // ResizeObserver. The actual stage is bounded by the top bar and bottom toolbar.
+    const viewportWidth = typeof window === 'undefined' ? meetingCanvasSize.width : window.innerWidth;
+    const viewportStageHeight = typeof window === 'undefined' ? meetingCanvasSize.height : window.innerHeight - 160;
+    const galleryLayout = calculateMeetingLayout({
+      participantCount: totalGalleryParticipants,
+      width: Math.max(1, viewportWidth - (activePanel ? 432 : 56)),
+      // `tw-main` has 4px top + 88px bottom padding to keep the toolbar clear;
+      // the gallery adds 12px of its own safe inner padding.
+      // ResizeObserver measures its border box, so omit that reserved area before
+      // choosing card rows; otherwise a two-row gallery overflows the viewport.
+      height: Math.max(1, Math.min(meetingCanvasSize.height - 124, viewportStageHeight)),
+      mode: 'gallery',
+      sidePanelOpen: Boolean(activePanel),
+      gap: 12,
+    });
 
     return (
       <div
@@ -4560,10 +4553,8 @@ export function MeetingRoomPage() {
             [style*="calc(100% - 380px)"] { max-width: 100% !important; }
             [style*="calc(100vh - 170px)"] { max-height: calc(100dvh - 140px) !important; }
             .tw-solo { aspect-ratio: auto !important; max-width: 100% !important; width: 100% !important; border-radius: 16px !important; }
-            .tw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-template-rows: none !important; grid-auto-rows: minmax(120px, 1fr) !important; gap: 8px !important; overflow-y: auto !important; }
-            .tw-grid[data-count="1"] { grid-template-columns: minmax(0, 1fr) !important; }
-            .tw-grid[data-count="2"] { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: repeat(2, minmax(0, 1fr)) !important; }
-            .tw-grid > div { border-radius: 14px !important; aspect-ratio: auto !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; }
+            .tw-grid { gap: 8px !important; overflow: hidden !important; align-content: center !important; }
+            .tw-grid > div { border-radius: 14px !important; max-width: 100% !important; }
             .tw-toolbar { left: 8px !important; right: 8px !important; transform: none !important; bottom: calc(8px + env(safe-area-inset-bottom)) !important; height: 60px !important; padding: 0 10px !important; gap: 4px !important; justify-content: space-between !important; border-radius: 30px !important; }
             .tw-toolbar button[title="Select microphone"],
             .tw-toolbar button[title="Select camera"],
@@ -4892,8 +4883,10 @@ export function MeetingRoomPage() {
         {/* 2. MAIN PARTICIPANT STAGE CONTAINER (Clear margins, 24px radius, 16:9 ratio, responsive) */}
         <div
           className="tw-main"
+          ref={meetingCanvasRef}
           style={{
             flex: 1,
+            minHeight: 0,
             width: '100%',
             display: 'flex',
             alignItems: 'center',
@@ -5111,6 +5104,23 @@ export function MeetingRoomPage() {
                   <ScreenShareTile key={share.key} stream={share.stream} label={share.name} compact />
                 ))}
                 {/* Local user card */}
+                <MeetingParticipantCard
+                  participantId="local"
+                  name={`${displayName || 'You'} (You)`}
+                  avatarUrl={localAvatarUrl}
+                  stream={inCallStream}
+                  videoEnabled={inCallVideo}
+                  muted={Boolean(inCallMuted)}
+                  raisedHand={isHandRaised}
+                  theme={localTheme}
+                  compact
+                  mirrored
+                  style={{ width: '100%', aspectRatio: '16 / 9' }}
+                  onVideoElement={setInCallVideoNode}
+                  isPinned={pinnedParticipantId === 'local'}
+                  onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
+                />
+                {false && (
                 <div
                   style={{
                     width: '100%',
@@ -5150,7 +5160,7 @@ export function MeetingRoomPage() {
                       }}
                     >
                       {localAvatarUrl ? (
-                        <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                        <img src={localAvatarUrl || undefined} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
                       ) : (
                         participantInitial
                       )}
@@ -5213,13 +5223,28 @@ export function MeetingRoomPage() {
                       <MicOff size={13} color="#F87171" />
                     </div>
                   )}
-                </div>
+                </div>)}
 
                 {/* Remote participant cards */}
                 {remoteParticipants.map((remote, idx) => {
                   const rTheme = getParticipantColorTheme(remote.name, idx + 1);
                   const rInitial = (remote.name.trim() || 'P').charAt(0).toUpperCase();
-                  return (
+                  return <MeetingParticipantCard
+                    key={remote.id || idx}
+                    participantId={remote.id}
+                    name={remote.name}
+                    avatarUrl={remote.avatarUrl}
+                    stream={remote.stream}
+                    videoEnabled={remote.video}
+                    muted={remote.muted}
+                    raisedHand={remote.raisedHand}
+                    theme={rTheme}
+                    compact
+                    style={{ width: '100%', aspectRatio: '16 / 9' }}
+                    isPinned={pinnedParticipantId === remote.id}
+                    onPin={() => { setPinnedManually(pinnedParticipantId === remote.id ? null : remote.id); setTileViewEnabled(false); }}
+                  />;
+                  if (false) return (
                     <div
                       key={remote.id || idx}
                       style={{
@@ -5640,10 +5665,11 @@ export function MeetingRoomPage() {
                     <div
                       className="tw-speaker-filmstrip"
                       style={{
-                        width: '220px',
-                        minWidth: '220px',
-                        display: 'flex',
-                        flexDirection: 'column',
+                        width: activePanel || meetingCanvasSize.width < 980 ? '240px' : '464px',
+                        minWidth: activePanel || meetingCanvasSize.width < 980 ? '240px' : '464px',
+                        display: 'grid',
+                        gridTemplateColumns: activePanel || meetingCanvasSize.width < 980 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
+                        alignContent: 'start',
                         gap: '12px',
                         overflowY: 'auto',
                         maxHeight: '100%',
@@ -5738,7 +5764,23 @@ export function MeetingRoomPage() {
                         const t = getParticipantColorTheme(p.name, idx + 2);
                         const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
 
-                        return (
+                        return <MeetingParticipantCard
+                          key={p.id}
+                          participantId={p.id}
+                          name={p.name}
+                          avatarUrl={p.avatarUrl}
+                          stream={p.stream}
+                          videoEnabled={p.video}
+                          muted={p.muted}
+                          raisedHand={p.raisedHand}
+                          theme={t}
+                          compact
+                          style={{ width: '100%', aspectRatio: '16 / 9' }}
+                          isPinned={pinnedParticipantId === p.id}
+                          onPin={() => setPinnedManually(pinnedParticipantId === p.id ? null : p.id)}
+                          onDoubleClick={() => setPinnedManually(p.id)}
+                        />;
+                        if (false) return (
                           <div
                             key={p.id}
                             onClick={() => setPinnedManually(p.id)}
@@ -5843,33 +5885,17 @@ export function MeetingRoomPage() {
                 flex: 1,
                 maxWidth: activePanel ? 'calc(100% - 380px)' : '100%',
                 height: '100%',
-                maxHeight: 'calc(100vh - 170px)',
-                display: 'grid',
-                // Columns size to their content (max-content), not an equal 1fr share of the full
-                // width -- a 1fr column stayed full-width even though each card's actual width is
-                // now derived from the row height via its 16:9 aspect ratio (see the card styles
-                // below), leaving a large dead gap between cards. justifyContent: 'center' then
-                // centers the resulting (narrower-than-container) grid as a whole.
-                gridTemplateColumns:
-                  remoteParticipants.length + allShares.length + 1 > 6
-                    ? `repeat(${Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6)))}, max-content)`
-                    : remoteParticipants.length + allShares.length <= 3
-                      ? 'repeat(2, max-content)'
-                      : 'repeat(3, max-content)',
+                maxHeight: '100%',
+                minHeight: 0,
+                padding: '8px 12px 16px',
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexWrap: 'wrap',
                 justifyContent: 'center',
-                gridTemplateRows:
-                  remoteParticipants.length + allShares.length + 1 > 6
-                    ? `repeat(${Math.ceil((remoteParticipants.length + allShares.length + 1) / Math.min(remoteParticipants.length + allShares.length + 1, Math.ceil(Math.sqrt((remoteParticipants.length + allShares.length + 1) * 1.6))))}, minmax(0, 1fr))`
-                    : remoteParticipants.length + allShares.length === 1
-                      ? '1fr'
-                      : 'repeat(2, 1fr)',
-                gap: '16px',
-                // Each card fills its row height (explicit height: 100%) and derives its own
-                // width from that via aspect-ratio (16:9), rather than stretching to fill the
-                // column -- 'center' on both axes centers the resulting fixed-ratio box in its
-                // cell instead of letting it hug a default edge.
+                alignContent: 'center',
+                gap: '12px',
                 alignItems: 'center',
-                justifyItems: 'center',
+                overflow: 'hidden',
               }}
             >
               {/* Screen shares appear as tiles, newest first */}
@@ -5877,6 +5903,27 @@ export function MeetingRoomPage() {
                 <ScreenShareTile key={share.key} stream={share.stream} label={share.name} />
               ))}
               {/* 1. Local Participant Card */}
+              <MeetingParticipantCard
+                participantId="local"
+                name={`${displayName || 'You'} (You)`}
+                avatarUrl={localAvatarUrl}
+                stream={inCallStream}
+                videoEnabled={inCallVideo}
+                muted={Boolean(inCallMuted)}
+                raisedHand={isHandRaised}
+                theme={localTheme}
+                speaking={isSpeaking}
+                mirrored
+                style={{
+                  width: `${galleryLayout.cardWidth}px`, height: `${galleryLayout.cardHeight}px`,
+                  maxWidth: '100%', aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
+                }}
+                onVideoElement={setInCallVideoNode}
+                isPinned={pinnedParticipantId === 'local'}
+                onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
+                onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
+              />
+              {false && (
               <div
                 key="local-participant"
                 // Double-click a tile to pin it and switch to speaker (stage) view, same as
@@ -5893,10 +5940,10 @@ export function MeetingRoomPage() {
                   // height and deriving width from THAT (capped by maxWidth) is the same approach
                   // as object-fit: contain, and the card centers in its cell via the grid
                   // container's alignItems/justifyItems: 'center'.
-                  width: 'auto',
-                  height: '100%',
+                  width: `${galleryLayout.cardWidth}px`,
+                  height: `${galleryLayout.cardHeight}px`,
                   maxWidth: '100%',
-                  aspectRatio: '16 / 9',
+                  aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
                   minHeight: 0,
                   borderRadius: '24px',
                   overflow: 'hidden',
@@ -5948,7 +5995,7 @@ export function MeetingRoomPage() {
                       }}
                     >
                       {localAvatarUrl ? (
-                        <img src={localAvatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                        <img src={localAvatarUrl || undefined} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
                       ) : (
                         participantInitial
                       )}
@@ -6037,13 +6084,43 @@ export function MeetingRoomPage() {
                     <Hand size={18} color="#202124" />
                   </div>
                 )}
-              </div>
+              </div>)}
 
               {/* 2. Remote Participants Cards: Card background matches their avatar icon color! */}
               {remoteParticipants.map((remote, idx) => {
                 const remoteTheme = getParticipantColorTheme(remote.name, idx + 1);
                 const initial = (remote.name.trim() || 'P').charAt(0).toUpperCase();
-                return (
+                return <MeetingParticipantCard
+                  key={remote.id || idx}
+                  participantId={remote.id}
+                  name={remote.name}
+                  avatarUrl={remote.avatarUrl}
+                  stream={remote.stream}
+                  videoEnabled={remote.video}
+                  muted={remote.muted}
+                  raisedHand={remote.raisedHand}
+                  theme={remoteTheme}
+                  speaking={isSpeakingNow(remote.id)}
+                  style={{
+                    width: `${galleryLayout.cardWidth}px`,
+                    height: `${galleryLayout.cardHeight}px`,
+                    maxWidth: '100%',
+                    aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
+                  }}
+                  isPinned={pinnedParticipantId === remote.id}
+                  onPin={() => {
+                    const isPinned = pinnedParticipantId === remote.id;
+                    setPinnedManually(isPinned ? null : remote.id);
+                    setTileViewEnabled(isPinned);
+                  }}
+                  onDoubleClick={() => {
+                    const isPinned = pinnedParticipantId === remote.id;
+                    setPinnedManually(isPinned ? null : remote.id);
+                    setTileViewEnabled(isPinned);
+                  }}
+                  onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
+                />;
+                if (false) return (
                   <div
                     key={remote.id || idx}
                     // Double-click a tile to pin it and switch to speaker (stage) view, same as
@@ -6057,10 +6134,10 @@ export function MeetingRoomPage() {
                     style={{
                       // See the matching comment on the local-participant card above -- sized from
                       // height (capped by maxWidth), not width capped by maxHeight.
-                      width: 'auto',
-                      height: '100%',
+                      width: `${galleryLayout.cardWidth}px`,
+                      height: `${galleryLayout.cardHeight}px`,
                       maxWidth: '100%',
-                      aspectRatio: '16 / 9',
+                      aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
                       minHeight: 0,
                       borderRadius: '24px',
                       overflow: 'hidden',
