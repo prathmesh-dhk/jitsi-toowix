@@ -47,6 +47,7 @@ export function MeetingParticipantCard({
 
   return (
     <div
+      data-participant-id={participantId}
       onDoubleClick={onDoubleClick}
       style={{
         position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0,

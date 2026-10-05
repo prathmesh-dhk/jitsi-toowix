@@ -1,7 +1,7 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { useJitsiMeeting } from '../lib/useJitsiMeeting';
-import { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
@@ -92,7 +92,9 @@ import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
 import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
 import { PollsModal, type IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
-import { calculateMeetingLayout } from '../lib/meetingLayout';
+import { useStableMeetingLayout } from '../lib/meetingLayout';
+
+const RESIZE_DEBUG = false;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -1074,6 +1076,7 @@ export function MeetingRoomPage() {
   // The visible meeting canvas is the source of truth for gallery sizing. It changes not only
   // with browser resizing, but also when a side panel, fullscreen, or mobile layout changes.
   const meetingCanvasRef = useRef<HTMLDivElement | null>(null);
+  const galleryGridRef = useRef<HTMLDivElement | null>(null);
   const [meetingCanvasSize, setMeetingCanvasSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     const element = meetingCanvasRef.current;
@@ -4490,27 +4493,79 @@ export function MeetingRoomPage() {
   // ===========================================================================
   // STAGE 2: IN-MEETING VIEW (Google Meet Visual Truth Matching Image 1)
   // ===========================================================================
+  // Gallery sizing is computed unconditionally (not inside `if (hasJoined)`) because
+  // useStableMeetingLayout is a real hook. Its previous-structure ref must persist across renders.
+  const totalGalleryParticipants = remoteParticipants.length + 1;
+  // Do not let a too-tall wrapping gallery feed its own expanded height back into
+  // ResizeObserver. The actual stage is bounded by the top bar and bottom toolbar.
+  const viewportWidth = typeof window === 'undefined' ? meetingCanvasSize.width : window.innerWidth;
+  const viewportStageHeight = typeof window === 'undefined' ? meetingCanvasSize.height : window.innerHeight - 160;
+  const galleryLayout = useStableMeetingLayout({
+    participantCount: totalGalleryParticipants,
+    width: Math.max(1, viewportWidth - (activePanel ? 432 : 56)),
+    // `tw-main` has 4px top + 88px bottom padding to keep the toolbar clear;
+    // the gallery adds 12px of its own safe inner padding.
+    // ResizeObserver measures its border box, so omit that reserved area before
+    // choosing card rows; otherwise a two-row gallery overflows the viewport.
+    height: Math.max(1, Math.min(meetingCanvasSize.height - 124, viewportStageHeight)),
+    mode: 'gallery',
+    sidePanelOpen: Boolean(activePanel),
+    gap: 12,
+  });
+
+  // FLIP for structural gallery changes (column count / rows / ratio). Continuous size changes
+  // during a drag are left to the cards' own sizing; only a real structure change animates, so
+  // cards slide from their old positions instead of teleporting. Cards are found by the stable
+  // data-participant-id attribute, never by array index. Rects are read once per commit, and any
+  // running animations are cancelled first so stale transforms never leak into a measurement.
+  const galleryStructureKey = `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`;
+  const galleryStructureRef = useRef('');
+  const galleryRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  useLayoutEffect(() => {
+    const root = galleryGridRef.current;
+    if (!root) return;
+    const cards = Array.from(root.querySelectorAll<HTMLElement>('[data-participant-id]'));
+    cards.forEach((card) => card.getAnimations().forEach((animation) => animation.cancel()));
+    const nextRects = new Map<string, DOMRect>();
+    cards.forEach((card) => {
+      const id = card.dataset.participantId;
+      if (id) nextRects.set(id, card.getBoundingClientRect());
+    });
+    const previousStructure = galleryStructureRef.current;
+    const structureChanged = previousStructure !== '' && previousStructure !== galleryStructureKey;
+    const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (structureChanged && !reduceMotion) {
+      const previousRects = galleryRectsRef.current;
+      cards.forEach((card) => {
+        const id = card.dataset.participantId;
+        const before = id ? previousRects.get(id) : undefined;
+        const after = id ? nextRects.get(id) : undefined;
+        if (!before || !after) return;
+        const dx = before.left - after.left;
+        const dy = before.top - after.top;
+        const sx = after.width > 0 ? before.width / after.width : 1;
+        const sy = after.height > 0 ? before.height / after.height : 1;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return;
+        card.animate(
+          [
+            { transformOrigin: 'top left', transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
+            { transformOrigin: 'top left', transform: 'translate(0px, 0px) scale(1, 1)' },
+          ],
+          { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
+        );
+      });
+      if (RESIZE_DEBUG) {
+        console.table({ from: previousStructure, to: galleryStructureKey, cards: cards.length });
+      }
+    }
+    galleryStructureRef.current = galleryStructureKey;
+    galleryRectsRef.current = nextRects;
+  });
+
   if (hasJoined) {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
     const isSpeaking = media.level > 0.05 && !inCallMuted;
     const localTheme = getParticipantColorTheme(displayName || 'You', 0);
-    const totalGalleryParticipants = remoteParticipants.length + 1;
-    // Do not let a too-tall wrapping gallery feed its own expanded height back into
-    // ResizeObserver. The actual stage is bounded by the top bar and bottom toolbar.
-    const viewportWidth = typeof window === 'undefined' ? meetingCanvasSize.width : window.innerWidth;
-    const viewportStageHeight = typeof window === 'undefined' ? meetingCanvasSize.height : window.innerHeight - 160;
-    const galleryLayout = calculateMeetingLayout({
-      participantCount: totalGalleryParticipants,
-      width: Math.max(1, viewportWidth - (activePanel ? 432 : 56)),
-      // `tw-main` has 4px top + 88px bottom padding to keep the toolbar clear;
-      // the gallery adds 12px of its own safe inner padding.
-      // ResizeObserver measures its border box, so omit that reserved area before
-      // choosing card rows; otherwise a two-row gallery overflows the viewport.
-      height: Math.max(1, Math.min(meetingCanvasSize.height - 124, viewportStageHeight)),
-      mode: 'gallery',
-      sidePanelOpen: Boolean(activePanel),
-      gap: 12,
-    });
 
     return (
       <div
@@ -5878,6 +5933,7 @@ export function MeetingRoomPage() {
           ) : (
             /* Multi-Participant Responsive Grid: Every participant has card background matching their avatar icon color */
             <div
+              ref={galleryGridRef}
               className="tw-grid"
               data-count={remoteParticipants.length + allShares.length + 1}
               style={{
