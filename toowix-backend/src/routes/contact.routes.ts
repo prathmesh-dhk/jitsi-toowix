@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import mongoose from 'mongoose';
 import { AuthenticatedRequest, verifyFirebaseToken } from '../middleware/auth';
+import { contactsRateLimiter } from '../middleware/rateLimit';
 import { Contact } from '../models/Contact';
 
 const router = Router();
@@ -11,7 +12,10 @@ const ownerOf = (req: AuthenticatedRequest) => String((req.accountUser as any)?.
 const present = (c: any) => ({ id: String(c._id), name: c.name, email: c.email });
 
 // Every route is scoped to the signed-in user: a contact book is private to its owner.
+// contactsRateLimiter is registered AFTER verifyFirebaseToken so it can key by that same user
+// (see keyByUserOrIp in middleware/rateLimit.ts) instead of falling back to per-IP.
 router.use(verifyFirebaseToken);
+router.use(contactsRateLimiter);
 
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {

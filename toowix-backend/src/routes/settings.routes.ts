@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { verifyFirebaseToken } from '../middleware/auth';
+import { settingsRateLimiter } from '../middleware/rateLimit';
 import {
   getSettingsHandler,
   updateProfileSettingsHandler,
@@ -17,7 +18,10 @@ import {
 
 const router = Router();
 
+// settingsRateLimiter is registered AFTER verifyFirebaseToken so it can key by the signed-in
+// user (see keyByUserOrIp in middleware/rateLimit.ts) instead of falling back to per-IP.
 router.use(verifyFirebaseToken);
+router.use(settingsRateLimiter);
 
 router.get('/', getSettingsHandler);
 router.patch('/profile', updateProfileSettingsHandler);

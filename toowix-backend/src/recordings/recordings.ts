@@ -181,7 +181,29 @@ export const ingestRecordingHandler = async (req: Request, res: Response): Promi
     }
 
     const slug = roomSlug.trim().toLowerCase();
-    let meeting: any = await Meeting.findOne({ roomSlug: slug });
+    // Meeting.findOne (by roomSlug) and Recording.findOne (by recordingSessionId) read different
+    // collections by different keys, and neither's result feeds into the other's query -- they're
+    // the only pair of lookups in this function safe to fire together. Everything else below stays
+    // exactly as conditionally sequential as before:
+    //   - RecordingHold.findOne only runs when `meeting` comes back empty, so it genuinely depends
+    //     on Meeting.findOne's result and can't be started before it resolves.
+    //   - Company.findById only runs when the resolved meeting actually has a companyId. Firing it
+    //     unconditionally just to parallelize would add a query (and a policy check) for requests
+    //     that should never have been subject to one.
+    //   - inspectRecording (the ffprobe + full ffmpeg decode, by far the slowest step here, with a
+    //     10-minute timeout) deliberately still runs only after every rejection below it (missing
+    //     meeting, disabled-by-policy, session-id conflict, already-Ready) has had its chance to
+    //     return first. Starting that decode speculatively in parallel with the lookups above would
+    //     waste the one genuinely expensive resource in this function on requests that end in a
+    //     404/403/409 before ever needing the result.
+    // (One observable difference from the strictly-sequential version: Recording.findOne now always
+    // executes once per call, including on the "meeting not found" 404 path, where it previously
+    // never ran. That's a single cheap indexed read on an uncommon error path, not a behavior change
+    // in anything the caller can see -- the response and all writes are identical.)
+    let [ meeting, recording ]: [ any, any ] = await Promise.all([
+      Meeting.findOne({ roomSlug: slug }),
+      Recording.findOne({ recordingSessionId }),
+    ]);
     if (!meeting) {
       // The meeting record may already be gone (ended/expired) while the recorder was still
       // processing -- use the owner snapshot taken when recording started.
@@ -203,7 +225,6 @@ export const ingestRecordingHandler = async (req: Request, res: Response): Promi
       }
     }
 
-    let recording = await Recording.findOne({ recordingSessionId });
     if (recording && String(recording.meetingId) !== String(meeting._id)) { res.status(409).json({ error: 'Recording session belongs to another meeting' }); return; }
     if (recording?.status === 'Ready') { res.json({ recording }); return; }
     if (!recording) {

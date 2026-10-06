@@ -15,11 +15,12 @@ router.post('/signup', authRateLimiter, verifyIdentityToken, signupHandler);
 // Tue-BE-1: Email verification sync
 router.post('/verify-email', verifyIdentityToken, verifyEmailHandler);
 
-// Sends our own Toowix-branded E1 template instead of Firebase's default verification email
+// Sends our own Toowix-branded E1 template instead of Firebase's default verification email.
+// Only a valid Firebase ID token is required here (verifyIdentityToken), not a full app session
+// or a verified email (verifyFirebaseToken) -- both callers (SignupPage right after account
+// creation, and EmailVerificationPage's resend) need this to work precisely when no app session
+// exists yet and the email is still unverified, which verifyFirebaseToken would reject.
 router.post('/send-verification-email', verifyIdentityToken, sendVerificationEmailHandler);
-
-// Sends our own Toowix-branded E1 template instead of Firebase's default verification email
-router.post('/send-verification-email', verifyFirebaseToken, sendVerificationEmailHandler);
 
 // Tue-BE-2: Login Gate
 router.post('/login-gate', authRateLimiter, verifyIdentityToken, loginGateHandler);

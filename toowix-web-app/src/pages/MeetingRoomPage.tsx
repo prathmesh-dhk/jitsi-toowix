@@ -2,7 +2,7 @@ import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
   Video,
@@ -92,9 +92,21 @@ import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
 import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
 import { PollsModal, type IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
-import { useStableMeetingLayout } from '../lib/meetingLayout';
+import {
+  calculateCellPositions,
+  MOBILE_GALLERY_TILES_PER_PAGE,
+  useStableMeetingLayout,
+} from '../lib/meetingLayout';
+import { animateGalleryCell, readVisualFrame } from '../lib/galleryMotion';
+import type { GalleryFrame } from '../lib/galleryMotion';
 
 const RESIZE_DEBUG = false;
+
+// Keep this in lockstep with the mobile CSS below. A coarse-pointer landscape phone can be
+// wider than the portrait breakpoint, so it needs its own clause rather than falling back to
+// the desktop gallery calculator after rotation.
+const MOBILE_GALLERY_MEDIA_QUERY = '(max-width: 768px), (max-width: 1024px) and (pointer: coarse) and (orientation: landscape)';
+const GALLERY_SWIPE_MIN_DISTANCE_PX = 48;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -1076,8 +1088,44 @@ export function MeetingRoomPage() {
   // The visible meeting canvas is the source of truth for gallery sizing. It changes not only
   // with browser resizing, but also when a side panel, fullscreen, or mobile layout changes.
   const meetingCanvasRef = useRef<HTMLDivElement | null>(null);
-  const galleryGridRef = useRef<HTMLDivElement | null>(null);
   const [meetingCanvasSize, setMeetingCanvasSize] = useState({ width: 0, height: 0 });
+  // The gallery stage is the exact area the cards are placed in: a flex child with no padding, inside the
+  // padded .tw-grid. Measuring it (not the window or the canvas) keeps the calculator and the placed cards on
+  // one set of numbers. Cards are absolutely positioned, so they cannot enlarge the stage they measure.
+  const galleryStageRef = useRef<HTMLDivElement | null>(null);
+  const galleryStageObserverRef = useRef<ResizeObserver | null>(null);
+  const [galleryStageSize, setGalleryStageSize] = useState({ width: 0, height: 0 });
+  const setGalleryStageNode = useCallback((node: HTMLDivElement | null) => {
+    galleryStageObserverRef.current?.disconnect();
+    galleryStageObserverRef.current = null;
+    galleryStageRef.current = node;
+    if (!node) return;
+
+    const commitStageSize = (width: number, height: number) => {
+      setGalleryStageSize((previous) => (
+        Math.abs(previous.width - width) < 0.5 && Math.abs(previous.height - height) < 0.5
+          ? previous
+          : { width, height }
+      ));
+    };
+    const initial = node.getBoundingClientRect();
+
+    commitStageSize(initial.width, initial.height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      // One callback per frame, after layout and before paint. Using the latest entry means a burst of
+      // resize notifications collapses into one geometry update. Committing synchronously here keeps the
+      // cards and the measured stage in the same frame: a deferred commit would paint a frame with the old
+      // card geometry inside the new stage size.
+      const box = entries[entries.length - 1]?.contentRect;
+
+      if (box) flushSync(() => commitStageSize(box.width, box.height));
+    });
+
+    observer.observe(node);
+    galleryStageObserverRef.current = observer;
+  }, []);
+  useEffect(() => () => galleryStageObserverRef.current?.disconnect(), []);
   useEffect(() => {
     const element = meetingCanvasRef.current;
     if (!element) return;
@@ -4495,72 +4543,173 @@ export function MeetingRoomPage() {
   // ===========================================================================
   // Gallery sizing is computed unconditionally (not inside `if (hasJoined)`) because
   // useStableMeetingLayout is a real hook. Its previous-structure ref must persist across renders.
-  const totalGalleryParticipants = remoteParticipants.length + 1;
-  // Do not let a too-tall wrapping gallery feed its own expanded height back into
-  // ResizeObserver. The actual stage is bounded by the top bar and bottom toolbar.
-  const viewportWidth = typeof window === 'undefined' ? meetingCanvasSize.width : window.innerWidth;
-  const viewportStageHeight = typeof window === 'undefined' ? meetingCanvasSize.height : window.innerHeight - 160;
+  // Every gallery cell, in display order: screen shares first, then the local card, then remote participants.
+  // Cells are keyed by these stable ids, so a card keeps its DOM node (and its <video>) across any change of
+  // structure, size or position around it.
+  const galleryAllCellKeys = [
+    ...allShares.map((share) => `share:${share.key}`),
+    'local',
+    ...remoteParticipants.map((remote, idx) => `remote:${remote.id || idx}`),
+  ];
+
+  // Mobile tile view: 1-3 participants keep today's unconstrained layout untouched (see
+  // calculateMeetingLayout). 4+ always use a fixed 2-column grid, paginated to
+  // MOBILE_GALLERY_TILES_PER_PAGE (local tile included) per page, navigated by a horizontal swipe.
+  // "Mobile" is the exact same breakpoint this page's own CSS already uses elsewhere (the pre-join
+  // screen): a narrow portrait viewport, or a touch device in landscape up to 1024px wide (many
+  // phones exceed 768px wide in landscape). Resolved via matchMedia (not a one-time check) so
+  // rotating the device re-evaluates it.
+  const [isMobileGallery, setIsMobileGallery] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia(MOBILE_GALLERY_MEDIA_QUERY).matches
+  ));
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(MOBILE_GALLERY_MEDIA_QUERY);
+    const update = () => setIsMobileGallery(query.matches);
+
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  // Keyed off the TOTAL participant count, not any one page's count, so a short last page (e.g.
+  // one tile left over after paginating) still forces 2-column sizing instead of being treated as
+  // a lone "solo" tile that fills the whole stage.
+  const mobileGalleryPaged = isMobileGallery && galleryAllCellKeys.length >= 4;
+  const galleryTotalPages = mobileGalleryPaged
+    ? Math.max(1, Math.ceil(galleryAllCellKeys.length / MOBILE_GALLERY_TILES_PER_PAGE))
+    : 1;
+  const [galleryPageIndex, setGalleryPageIndex] = useState(0);
+  // Clamps the committed page when the page count shrinks (participants leaving, or dropping out
+  // of paginated mode entirely) so navigating back to a page that no longer exists can't leave the
+  // gallery "stuck" on an empty page.
+  const safeGalleryPageIndex = Math.min(Math.max(galleryPageIndex, 0), galleryTotalPages - 1);
+  useEffect(() => {
+    if (safeGalleryPageIndex !== galleryPageIndex) setGalleryPageIndex(safeGalleryPageIndex);
+  }, [safeGalleryPageIndex, galleryPageIndex]);
+  const galleryPageStart = safeGalleryPageIndex * MOBILE_GALLERY_TILES_PER_PAGE;
+  const galleryCellKeys = mobileGalleryPaged
+    ? galleryAllCellKeys.slice(galleryPageStart, galleryPageStart + MOBILE_GALLERY_TILES_PER_PAGE)
+    : galleryAllCellKeys;
+
+  // Swipe left -> next page, swipe right -> previous page. No wraparound: there's no existing
+  // wraparound convention anywhere else in this app (checked), so the first/last page simply
+  // clamps. A swipe is only recognised once it clearly exceeds both a minimum distance and the
+  // vertical movement, so an ordinary tap/double-tap on a tile is unaffected; there is no existing
+  // pinch or other swipe gesture anywhere in this app's mobile UI to conflict with (checked), so
+  // this is a small dependency-free touch handler rather than reusing an existing mechanism.
+  const gallerySwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const onGalleryTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    if (!mobileGalleryPaged || galleryTotalPages <= 1) return;
+    const touch = event.touches[0];
+
+    gallerySwipeStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  }, [mobileGalleryPaged, galleryTotalPages]);
+  const onGalleryTouchEnd = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const start = gallerySwipeStartRef.current;
+
+    gallerySwipeStartRef.current = null;
+    if (!start || !mobileGalleryPaged || galleryTotalPages <= 1) return;
+    const touch = event.changedTouches[0];
+
+    if (!touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+
+    if (Math.abs(dx) < GALLERY_SWIPE_MIN_DISTANCE_PX || Math.abs(dx) < Math.abs(dy)) return;
+    setGalleryPageIndex((page) => Math.min(Math.max(dx < 0 ? page + 1 : page - 1, 0), galleryTotalPages - 1));
+  }, [mobileGalleryPaged, galleryTotalPages]);
+
+  const GALLERY_GAP = 12;
   const galleryLayout = useStableMeetingLayout({
-    participantCount: totalGalleryParticipants,
-    width: Math.max(1, viewportWidth - (activePanel ? 432 : 56)),
-    // `tw-main` has 4px top + 88px bottom padding to keep the toolbar clear;
-    // the gallery adds 12px of its own safe inner padding.
-    // ResizeObserver measures its border box, so omit that reserved area before
-    // choosing card rows; otherwise a two-row gallery overflows the viewport.
-    height: Math.max(1, Math.min(meetingCanvasSize.height - 124, viewportStageHeight)),
+    participantCount: galleryCellKeys.length,
+    // Measured from the stage, the exact area the cells are placed in. Zero until the first measurement.
+    width: Math.max(1, galleryStageSize.width),
+    height: Math.max(1, galleryStageSize.height),
     mode: 'gallery',
     sidePanelOpen: Boolean(activePanel),
-    gap: 12,
+    gap: GALLERY_GAP,
+    forceColumns: mobileGalleryPaged ? 2 : undefined,
   });
-
-  // FLIP for structural gallery changes (column count / rows / ratio). Continuous size changes
-  // during a drag are left to the cards' own sizing; only a real structure change animates, so
-  // cards slide from their old positions instead of teleporting. Cards are found by the stable
-  // data-participant-id attribute, never by array index. Rects are read once per commit, and any
-  // running animations are cancelled first so stale transforms never leak into a measurement.
+  const galleryMeasured = galleryStageSize.width > 0 && galleryStageSize.height > 0;
+  const galleryPositions = calculateCellPositions(
+    galleryCellKeys.length, galleryLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
+  );
   const galleryStructureKey = `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`;
+
+  // Only an intentional structure change animates. Ordinary size updates and unrelated renders leave running
+  // animations alone. Only animations this effect started are cancelled, never all of a card's animations.
+  const galleryFramesRef = useRef<Map<string, GalleryFrame>>(new Map());
   const galleryStructureRef = useRef('');
-  const galleryRectsRef = useRef<Map<string, DOMRect>>(new Map());
+  const galleryAnimationsRef = useRef<Map<string, Animation>>(new Map());
   useLayoutEffect(() => {
-    const root = galleryGridRef.current;
-    if (!root) return;
-    const cards = Array.from(root.querySelectorAll<HTMLElement>('[data-participant-id]'));
-    cards.forEach((card) => card.getAnimations().forEach((animation) => animation.cancel()));
-    const nextRects = new Map<string, DOMRect>();
-    cards.forEach((card) => {
-      const id = card.dataset.participantId;
-      if (id) nextRects.set(id, card.getBoundingClientRect());
-    });
-    const previousStructure = galleryStructureRef.current;
-    const structureChanged = previousStructure !== '' && previousStructure !== galleryStructureKey;
-    const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (structureChanged && !reduceMotion) {
-      const previousRects = galleryRectsRef.current;
-      cards.forEach((card) => {
-        const id = card.dataset.participantId;
-        const before = id ? previousRects.get(id) : undefined;
-        const after = id ? nextRects.get(id) : undefined;
-        if (!before || !after) return;
-        const dx = before.left - after.left;
-        const dy = before.top - after.top;
-        const sx = after.width > 0 ? before.width / after.width : 1;
-        const sy = after.height > 0 ? before.height / after.height : 1;
-        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return;
-        card.animate(
-          [
-            { transformOrigin: 'top left', transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
-            { transformOrigin: 'top left', transform: 'translate(0px, 0px) scale(1, 1)' },
-          ],
-          { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
-        );
-      });
-      if (RESIZE_DEBUG) {
-        console.table({ from: previousStructure, to: galleryStructureKey, cards: cards.length });
-      }
+    const animations = galleryAnimationsRef.current;
+    const cancelAnimation = (key: string) => {
+      animations.get(key)?.cancel();
+      animations.delete(key);
+    };
+    const stage = galleryStageRef.current;
+
+    if (!stage) {
+      animations.forEach((_, key) => cancelAnimation(key));
+      galleryFramesRef.current = new Map();
+      galleryStructureRef.current = '';
+
+      return;
     }
+
+    const frames = new Map<string, GalleryFrame>();
+
+    galleryCellKeys.forEach((key, index) => {
+      frames.set(key, {
+        ...galleryPositions[index],
+        width: galleryLayout.cardWidth,
+        height: galleryLayout.cardHeight,
+      });
+    });
+
+    const previousFrames = galleryFramesRef.current;
+    const structureChanged = galleryStructureRef.current !== '' && galleryStructureRef.current !== galleryStructureKey;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+    if (structureChanged) {
+      stage.querySelectorAll<HTMLElement>('[data-gallery-cell]').forEach((node) => {
+        const key = node.dataset.galleryCell ?? '';
+        const from = previousFrames.get(key);
+        const to = frames.get(key);
+        // Read where the cell is visibly drawn before cancelling, so an interrupted slide continues from its
+        // current place rather than snapping to a stale one.
+        const visible = from ? readVisualFrame(node, from) : null;
+
+        cancelAnimation(key);
+        if (!visible || !to || reduceMotion) return;
+
+        const animation = animateGalleryCell(node, visible, to);
+
+        if (!animation) return;
+        animations.set(key, animation);
+        const forget = () => {
+          if (animations.get(key) === animation) animations.delete(key);
+        };
+
+        animation.addEventListener('finish', forget);
+        animation.addEventListener('cancel', forget);
+      });
+    }
+
+    // Cells that left the gallery stop animating.
+    animations.forEach((_, key) => {
+      if (!frames.has(key)) cancelAnimation(key);
+    });
+
+    galleryFramesRef.current = frames;
     galleryStructureRef.current = galleryStructureKey;
-    galleryRectsRef.current = nextRects;
   });
+  useEffect(() => () => {
+    galleryAnimationsRef.current.forEach((animation) => animation.cancel());
+    galleryAnimationsRef.current.clear();
+  }, []);
 
   if (hasJoined) {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
@@ -4608,8 +4757,8 @@ export function MeetingRoomPage() {
             [style*="calc(100% - 380px)"] { max-width: 100% !important; }
             [style*="calc(100vh - 170px)"] { max-height: calc(100dvh - 140px) !important; }
             .tw-solo { aspect-ratio: auto !important; max-width: 100% !important; width: 100% !important; border-radius: 16px !important; }
-            .tw-grid { gap: 8px !important; overflow: hidden !important; align-content: center !important; }
-            .tw-grid > div { border-radius: 14px !important; max-width: 100% !important; }
+            .tw-grid { overflow: hidden !important; }
+            .tw-grid [data-gallery-cell] > div { border-radius: 14px !important; max-width: 100% !important; }
             .tw-toolbar { left: 8px !important; right: 8px !important; transform: none !important; bottom: calc(8px + env(safe-area-inset-bottom)) !important; height: 60px !important; padding: 0 10px !important; gap: 4px !important; justify-content: space-between !important; border-radius: 30px !important; }
             .tw-toolbar button[title="Select microphone"],
             .tw-toolbar button[title="Select camera"],
@@ -4627,6 +4776,17 @@ export function MeetingRoomPage() {
             .tw-chat-toasts { top: 52px !important; right: 8px !important; left: 8px !important; align-items: flex-end; }
             .tw-panel { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100dvh !important; max-height: none !important; margin: 0 !important; border-radius: 0 !important; z-index: 300 !important; }
             [aria-label="Your meeting's ready"], [role="alertdialog"] { left: 8px !important; right: 8px !important; width: auto !important; bottom: calc(84px + env(safe-area-inset-bottom)) !important; }
+          }
+          /* A phone in landscape can exceed 768px wide (e.g. most phones land between 769-1024px
+             landscape width), so it falls outside the portrait block above and would otherwise get
+             no toolbar clearance at all for the gallery. .tw-toolbar keeps its desktop size here
+             (72px height + 16px bottom offset = 88px footprint; this isn't overridden for landscape
+             phones), so the padding below uses that footprint plus a little breathing room, not the
+             portrait block's 60px-toolbar-sized 84px value. */
+          @media (max-width: 1024px) and (pointer: coarse) and (orientation: landscape) {
+            .tw-main { padding: 2px 6px 96px !important; }
+            .tw-grid { overflow: hidden !important; }
+            .tw-grid [data-gallery-cell] > div { border-radius: 14px !important; max-width: 100% !important; }
           }
           @keyframes floatUp {
             0% { transform: translateY(0) scale(0.8); opacity: 1; }
@@ -5931,11 +6091,12 @@ export function MeetingRoomPage() {
               })()}
             </div>
           ) : (
-            /* Multi-Participant Responsive Grid: Every participant has card background matching their avatar icon color */
+            /* Multi-Participant Responsive Grid. The calculated structure is the only authority: each card is placed
+               at its calculated position, so CSS cannot wrap cards into a different structure. */
             <div
-              ref={galleryGridRef}
               className="tw-grid"
-              data-count={remoteParticipants.length + allShares.length + 1}
+              data-count={galleryCellKeys.length}
+              data-gallery-layout={`${galleryLayout.columns}x${galleryLayout.rows}`}
               style={{
                 width: '100%',
                 flex: 1,
@@ -5946,432 +6107,103 @@ export function MeetingRoomPage() {
                 padding: '8px 12px 16px',
                 boxSizing: 'border-box',
                 display: 'flex',
-                flexWrap: 'wrap',
-                justifyContent: 'center',
-                alignContent: 'center',
-                gap: '12px',
-                alignItems: 'center',
                 overflow: 'hidden',
+                // Keep vertical panning and pinch zoom native; a deliberate horizontal drag is
+                // handled by the pager without preventing the underlying touch events.
+                touchAction: mobileGalleryPaged && galleryTotalPages > 1 ? 'pan-y pinch-zoom' : undefined,
               }}
+              onTouchStart={onGalleryTouchStart}
+              onTouchEnd={onGalleryTouchEnd}
             >
-              {/* Screen shares appear as tiles, newest first */}
-              {allShares.map((share) => (
-                <ScreenShareTile key={share.key} stream={share.stream} label={share.name} />
-              ))}
-              {/* 1. Local Participant Card */}
-              <MeetingParticipantCard
-                participantId="local"
-                name={`${displayName || 'You'} (You)`}
-                avatarUrl={localAvatarUrl}
-                stream={inCallStream}
-                videoEnabled={inCallVideo}
-                muted={Boolean(inCallMuted)}
-                raisedHand={isHandRaised}
-                theme={localTheme}
-                speaking={isSpeaking}
-                mirrored
-                style={{
-                  width: `${galleryLayout.cardWidth}px`, height: `${galleryLayout.cardHeight}px`,
-                  maxWidth: '100%', aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
-                }}
-                onVideoElement={setInCallVideoNode}
-                isPinned={pinnedParticipantId === 'local'}
-                onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
-                onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
-              />
-              {false && (
               <div
-                key="local-participant"
-                // Double-click a tile to pin it and switch to speaker (stage) view, same as
-                // clicking the small pin button in its corner -- matches Google Meet's tile
-                // double-click behavior instead of requiring the tiny pin icon to be hit exactly.
-                onDoubleClick={() => {
-                  setPinnedManually('local');
-                  setTileViewEnabled(false);
-                }}
-                style={{
-                  // Sized from height, not width: the row's actual available height can be less
-                  // than (column width / 16 * 9), so deriving height from a full-width card and
-                  // then clamping with maxHeight broke the ratio instead of preserving it. Filling
-                  // height and deriving width from THAT (capped by maxWidth) is the same approach
-                  // as object-fit: contain, and the card centers in its cell via the grid
-                  // container's alignItems/justifyItems: 'center'.
-                  width: `${galleryLayout.cardWidth}px`,
-                  height: `${galleryLayout.cardHeight}px`,
-                  maxWidth: '100%',
-                  aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
-                  minHeight: 0,
-                  borderRadius: '24px',
-                  overflow: 'hidden',
-                  position: 'relative',
-                  backgroundColor: localTheme.tileBg,
-                  boxShadow: isSpeaking
-                    ? `0 0 0 3px ${localTheme.ringColor}, 0 8px 32px rgba(0, 0, 0, 0.6)`
-                    : '0 8px 32px rgba(0, 0, 0, 0.4)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                }}
+                ref={setGalleryStageNode}
+                data-gallery-stage
+                style={{ position: 'relative', flex: 1, minWidth: 0, minHeight: 0, height: '100%', overflow: 'hidden' }}
               >
-                {inCallVideo ? (
-                  <video
-                    ref={setInCallVideoNode}
-                    autoPlay
-                    playsInline
-                    muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      backgroundColor: localTheme.tileBg,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: remoteParticipants.length <= 1 ? '96px' : '72px',
-                        height: remoteParticipants.length <= 1 ? '96px' : '72px',
-                        borderRadius: '50%',
-                        backgroundColor: localTheme.avatarBg,
-                        color: '#FFFFFF',
-                        fontSize: remoteParticipants.length <= 1 ? '44px' : '32px',
-                        fontWeight: 500,
-                        fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {localAvatarUrl ? (
-                        <img src={localAvatarUrl || undefined} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                      ) : (
-                        participantInitial
-                      )}
-                    </div>
-                  </div>
-                )}
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: '16px',
-                    left: '16px',
-                    color: '#FFFFFF',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
-                    textShadow: '0 1px 3px rgba(0, 0, 0, 0.8)',
-                    backgroundColor: inCallVideo ? 'rgba(32, 33, 36, 0.75)' : 'transparent',
-                    backdropFilter: inCallVideo ? 'blur(6px)' : 'none',
-                    padding: inCallVideo ? '4px 10px' : '0',
-                    borderRadius: '8px',
-                  }}
-                >
-                  {displayName || 'You'} (You)
-                </div>
-                {inCallMuted && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '16px',
-                      right: '16px',
-                      width: '28px',
-                      height: '28px',
-                      borderRadius: '50%',
-                      backgroundColor: localTheme.badgeBg,
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <MicOff size={16} color="#F87171" />
-                  </div>
-                )}
-                <SpeakingOverlay id="local" />
-                <button
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setPinnedManually('local');
-                    setTileViewEnabled(false);
-                  }}
-                  title="Pin yourself"
-                  style={{
-                    position: 'absolute',
-                    top: '16px',
-                    left: '16px',
-                    zIndex: 12,
-                    width: '32px',
-                    height: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '50%',
-                    border: '1px solid rgba(255,255,255,0.16)',
-                    backgroundColor: 'rgba(32,33,36,0.76)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Pin size={16} fill="none" color="#8AB4F8" />
-                </button>
-                {isHandRaised && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '16px',
-                      left: '56px',
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      backgroundColor: '#8AB4F8',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                    }}
-                  >
-                    <Hand size={18} color="#202124" />
-                  </div>
-                )}
-              </div>)}
-
-              {/* 2. Remote Participants Cards: Card background matches their avatar icon color! */}
-              {remoteParticipants.map((remote, idx) => {
-                const remoteTheme = getParticipantColorTheme(remote.name, idx + 1);
-                const initial = (remote.name.trim() || 'P').charAt(0).toUpperCase();
-                return <MeetingParticipantCard
-                  key={remote.id || idx}
-                  participantId={remote.id}
-                  name={remote.name}
-                  avatarUrl={remote.avatarUrl}
-                  stream={remote.stream}
-                  videoEnabled={remote.video}
-                  muted={remote.muted}
-                  raisedHand={remote.raisedHand}
-                  theme={remoteTheme}
-                  speaking={isSpeakingNow(remote.id)}
-                  style={{
-                    width: `${galleryLayout.cardWidth}px`,
-                    height: `${galleryLayout.cardHeight}px`,
-                    maxWidth: '100%',
-                    aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
-                  }}
-                  isPinned={pinnedParticipantId === remote.id}
-                  onPin={() => {
-                    const isPinned = pinnedParticipantId === remote.id;
-                    setPinnedManually(isPinned ? null : remote.id);
-                    setTileViewEnabled(isPinned);
-                  }}
-                  onDoubleClick={() => {
-                    const isPinned = pinnedParticipantId === remote.id;
-                    setPinnedManually(isPinned ? null : remote.id);
-                    setTileViewEnabled(isPinned);
-                  }}
-                  onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
-                />;
-                if (false) return (
-                  <div
-                    key={remote.id || idx}
-                    // Double-click a tile to pin it and switch to speaker (stage) view, same as
-                    // clicking the small pin button in its corner.
-                    onDoubleClick={() => {
-                      const isPinned = pinnedParticipantId === remote.id;
-
-                      setPinnedManually(isPinned ? null : remote.id);
-                      setTileViewEnabled(isPinned);
-                    }}
-                    style={{
-                      // See the matching comment on the local-participant card above -- sized from
-                      // height (capped by maxWidth), not width capped by maxHeight.
-                      width: `${galleryLayout.cardWidth}px`,
-                      height: `${galleryLayout.cardHeight}px`,
-                      maxWidth: '100%',
-                      aspectRatio: galleryLayout.ratio === '16:9' ? '16 / 9' : '4 / 3',
-                      minHeight: 0,
-                      borderRadius: '24px',
-                      overflow: 'hidden',
-                      position: 'relative',
-                      backgroundColor: remoteTheme.tileBg,
-                      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <SpeakingOverlay id={remote.id} />
-                    {/* Pinning is personal: every participant may choose their own stage. */}
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        const isPinned = pinnedParticipantId === remote.id;
-                        setPinnedManually(isPinned ? null : remote.id);
-                        setTileViewEnabled(isPinned);
-                      }}
-                      title={pinnedParticipantId === remote.id ? `Unpin ${remote.name}` : `Pin ${remote.name}`}
-                      style={{
-                        position: 'absolute',
-                        top: '16px',
-                        left: '16px',
-                        zIndex: 12,
-                        width: '32px',
-                        height: '32px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '50%',
-                        border: '1px solid rgba(255,255,255,0.16)',
-                        backgroundColor: 'rgba(32,33,36,0.76)',
-                        color: '#FFFFFF',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Pin size={16} fill={pinnedParticipantId === remote.id ? '#8AB4F8' : 'none'} color="#8AB4F8" />
-                    </button>
-                    {/* Moderators can directly mute an active participant. Once muted, the
-                        microphone icon becomes a non-interactive status indicator. */}
-                    {isModerator && !remote.muted && (
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleRemoteAudioControl(remote.id);
-                        }}
-                        title={`Mute ${remote.name}`}
-                        style={{
-                          position: 'absolute',
-                          top: '16px',
-                          right: '16px',
-                          zIndex: 12,
-                          width: '32px',
-                          height: '32px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderRadius: '50%',
-                          border: '1px solid rgba(255,255,255,0.16)',
-                          backgroundColor: 'rgba(32,33,36,0.76)',
-                          color: '#FFFFFF',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <Mic size={16} color="#8AB4F8" />
-                      </button>
-                    )}
-                    {(remote as any).video && (remote as any).stream ? (
-                      <video
-                        autoPlay
-                        playsInline
-                        ref={(el) => {
-                          if (el && (remote as any).stream && el.srcObject !== (remote as any).stream) {
-                            el.srcObject = (remote as any).stream;
-                            el.play().catch(() => { });
-                          }
-                        }}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '24px' }}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          backgroundColor: remoteTheme.tileBg,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: remoteParticipants.length <= 1 ? '96px' : '72px',
-                            height: remoteParticipants.length <= 1 ? '96px' : '72px',
-                            borderRadius: '50%',
-                            backgroundColor: remoteTheme.avatarBg,
-                            color: '#FFFFFF',
-                            fontSize: remoteParticipants.length <= 1 ? '44px' : '32px',
-                            fontWeight: 500,
-                            fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
-                            overflow: 'hidden',
+                {galleryMeasured && (() => {
+                  // Same order as galleryCellKeys. Each cell is a stable keyed wrapper; the card fills it.
+                  const cells = [
+                    ...allShares.map((share) => ({
+                      key: `share:${share.key}`,
+                      node: <ScreenShareTile stream={share.stream} label={share.name} />,
+                    })),
+                    {
+                      key: 'local',
+                      node: (
+                        <MeetingParticipantCard
+                          participantId="local"
+                          name={`${displayName || 'You'} (You)`}
+                          avatarUrl={localAvatarUrl}
+                          stream={inCallStream}
+                          videoEnabled={inCallVideo}
+                          muted={Boolean(inCallMuted)}
+                          raisedHand={isHandRaised}
+                          theme={localTheme}
+                          speaking={isSpeaking}
+                          mirrored
+                          style={{ width: '100%', height: '100%', maxWidth: '100%' }}
+                          onVideoElement={setInCallVideoNode}
+                          isPinned={pinnedParticipantId === 'local'}
+                          onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
+                          onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
+                        />
+                      ),
+                    },
+                    ...remoteParticipants.map((remote, idx) => ({
+                      key: `remote:${remote.id || idx}`,
+                      node: (
+                        <MeetingParticipantCard
+                          participantId={remote.id}
+                          name={remote.name}
+                          avatarUrl={remote.avatarUrl}
+                          stream={remote.stream}
+                          videoEnabled={remote.video}
+                          muted={remote.muted}
+                          raisedHand={remote.raisedHand}
+                          theme={getParticipantColorTheme(remote.name, idx + 1)}
+                          speaking={isSpeakingNow(remote.id)}
+                          style={{ width: '100%', height: '100%', maxWidth: '100%' }}
+                          isPinned={pinnedParticipantId === remote.id}
+                          onPin={() => {
+                            const isPinned = pinnedParticipantId === remote.id;
+                            setPinnedManually(isPinned ? null : remote.id);
+                            setTileViewEnabled(isPinned);
                           }}
-                        >
-                          {(remote as any).avatarUrl ? (
-                            <img src={(remote as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                          ) : (
-                            initial
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    {/* Remote Participant Name in Bottom-Left */}
+                          onDoubleClick={() => {
+                            const isPinned = pinnedParticipantId === remote.id;
+                            setPinnedManually(isPinned ? null : remote.id);
+                            setTileViewEnabled(isPinned);
+                          }}
+                          onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
+                        />
+                      ),
+                    })),
+                  ];
+
+                  // Only mount this page's cells. Filtering before assigning positions is vital:
+                  // positions are page-relative and videos on another page must not consume a
+                  // slot or be mounted off-screen. The participant key itself stays stable, so
+                  // a re-render of the same page preserves its existing video element.
+                  const visibleCells = cells.filter((cell) => galleryCellKeys.includes(cell.key));
+
+                  return visibleCells.map((cell, index) => (
                     <div
+                      key={cell.key}
+                      data-gallery-cell={cell.key}
                       style={{
                         position: 'absolute',
-                        bottom: '16px',
-                        left: '16px',
-                        color: '#FFFFFF',
-                        fontSize: '14px',
-                        fontWeight: 500,
-                        fontFamily: "'Google Sans', Roboto, -apple-system, sans-serif",
-                        textShadow: '0 1px 3px rgba(0, 0, 0, 0.8)',
+                        left: `${galleryPositions[index].left}px`,
+                        top: `${galleryPositions[index].top}px`,
+                        width: `${galleryLayout.cardWidth}px`,
+                        height: `${galleryLayout.cardHeight}px`,
+                        transformOrigin: 'top left',
                       }}
                     >
-                      {remote.name}
+                      {cell.node}
                     </div>
-                    {/* Remote Mute Indicator in Top-Right */}
-                    {remote.muted && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: '16px',
-                          right: '16px',
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '50%',
-                          backgroundColor: remoteTheme.badgeBg,
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <MicOff size={16} color="#F87171" />
-                      </div>
-                    )}
-                    {/* Remote Raised-Hand Indicator, beside (not under) the pin button that also sits top-left */}
-                    {remote.raisedHand && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: '16px',
-                          left: '56px',
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '50%',
-                          backgroundColor: '#1A73E8',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                          zIndex: 10,
-                        }}
-                        title={`${remote.name} raised hand`}
-                      >
-                        <Hand size={18} color="#FFFFFF" />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  ));
+                })()}
+              </div>
             </div>
           ))}
 

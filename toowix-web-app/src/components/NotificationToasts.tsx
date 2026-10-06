@@ -1,13 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Calendar, Video, Users, Shield, AlertTriangle, MessageSquare, X } from 'lucide-react';
-import { auth } from '../lib/firebase';
 import type { INotification } from './NotificationBell';
+import { useNotificationsPoll } from '../lib/useNotificationsPoll';
 import { playChatMessageTone } from '../lib/notificationSounds';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const TOAST_DURATION_MS = 10000;
-const POLL_INTERVAL_MS = 20000;
 
 const categoryIcon = (category: INotification['category']) => {
   switch (category) {
@@ -19,53 +17,41 @@ const categoryIcon = (category: INotification['category']) => {
   }
 };
 
-/** Polls for new notifications and pops a top-right toast for each one that's new
- * since the last check, auto-dismissing after 10 seconds. Runs once, mounted at the
- * dashboard root, independent of whether the bell dropdown is open. */
+/** Pops a top-right toast for each notification that's new since the last check, auto-dismissing
+ * after 10 seconds. Runs independent of whether the bell dropdown is open, but no longer runs its
+ * own poll -- it reacts to the shared useNotificationsPoll() payload (polled once every 20s, shared
+ * with NotificationBell) and derives the unread subset from it client-side, same as the old
+ * `?unread=true` server-side filter used to produce. */
 export function NotificationToasts() {
   const navigate = useNavigate();
   const [toasts, setToasts] = useState<INotification[]>([]);
   const seenIds = useRef<Set<string>>(new Set());
   const firstLoad = useRef(true);
+  const { notifications, hasLoaded } = useNotificationsPoll();
 
   useEffect(() => {
-    const poll = async () => {
-      const idToken = await auth.currentUser?.getIdToken();
-      if (!idToken) return;
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/notifications?unread=true`, {
-          headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` },
-        });
-        const data = await response.json();
-        if (!response.ok) return;
-        const fresh: INotification[] = data.notifications || [];
+    if (!hasLoaded) return;
+    const unreadNow = notifications.filter((n) => !n.isRead);
 
-        if (firstLoad.current) {
-          // Don't toast the entire backlog on first mount -- only mark it seen.
-          fresh.forEach((n) => seenIds.current.add(n.id));
-          firstLoad.current = false;
-          return;
-        }
+    if (firstLoad.current) {
+      // Don't toast the entire backlog on first mount -- only mark it seen.
+      unreadNow.forEach((n) => seenIds.current.add(n.id));
+      firstLoad.current = false;
+      return;
+    }
 
-        const unseen = fresh.filter((n) => !seenIds.current.has(n.id));
-        unseen.forEach((n) => seenIds.current.add(n.id));
-        if (unseen.length > 0) {
-          // One calm tone per delivery batch keeps a busy conversation from becoming noisy.
-          playChatMessageTone();
-          setToasts((prev) => [...unseen, ...prev].slice(0, 4));
-          unseen.forEach((n) => {
-            setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== n.id)), TOAST_DURATION_MS);
-          });
-        }
-      } catch (e) {
-        console.error('[NotificationToasts] Poll failed:', e);
-      }
-    };
+    const unseen = unreadNow.filter((n) => !seenIds.current.has(n.id));
 
-    poll();
-    const interval = setInterval(poll, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, []);
+    unseen.forEach((n) => seenIds.current.add(n.id));
+    if (unseen.length > 0) {
+      // One calm tone per delivery batch keeps a busy conversation from becoming noisy.
+      playChatMessageTone();
+      setToasts((prev) => [...unseen, ...prev].slice(0, 4));
+      unseen.forEach((n) => {
+        setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== n.id)), TOAST_DURATION_MS);
+      });
+    }
+  }, [notifications, hasLoaded]);
 
   const dismiss = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
 

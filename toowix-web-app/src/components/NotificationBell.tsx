@@ -1,22 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Bell, Calendar, Check, MessageSquare, Shield, Users, Video } from 'lucide-react';
-import { auth } from '../lib/firebase';
+import { useNotificationsPoll } from '../lib/useNotificationsPoll';
+import type { INotification } from '../lib/useNotificationsPoll';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
-
-export interface INotification {
-  id: string;
-  category: 'MEETINGS' | 'RECORDINGS' | 'PEOPLE_TEAMS' | 'SECURITY' | 'SYSTEM';
-  type: string;
-  title: string;
-  description: string;
-  relatedName?: string | null;
-  actionLabel?: 'Join' | 'Review' | 'View' | 'Download' | null;
-  actionUrl?: string | null;
-  isRead: boolean;
-  createdAt: string;
-}
+// Re-exported so NotificationToasts.tsx (and anything else already importing the type from here)
+// keeps working unchanged -- the type's home is now useNotificationsPoll.ts.
+export type { INotification };
 
 const CATEGORY_TABS = [
   { key: 'ALL', label: 'All' }, { key: 'MEETINGS', label: 'Meetings' },
@@ -45,24 +35,12 @@ export function NotificationBell({ isDark }: { isDark: boolean }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('ALL');
-  const [notifications, setNotifications] = useState<INotification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const fetchNotifications = async (category?: string) => {
-    const idToken = await auth.currentUser?.getIdToken();
-    if (!idToken) return;
-    const query = category && category !== 'ALL' ? `?category=${category}` : '';
-    const response = await fetch(`${BACKEND_URL}/api/notifications${query}`, { headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } });
-    const data = await response.json().catch(() => ({}));
-    if (response.ok) { setNotifications(data.notifications || []); setUnreadCount(data.unreadCount || 0); }
-  };
-
-  useEffect(() => {
-    void fetchNotifications(tab);
-    const interval = window.setInterval(() => void fetchNotifications(tab), 20_000);
-    return () => window.clearInterval(interval);
-  }, [tab]);
+  // Shared with NotificationToasts: one poll, one GET /api/notifications every 20s, no matter how
+  // many components call this hook. Category filtering is now done client-side on that one payload
+  // instead of each tab switch issuing its own server-filtered request.
+  const { notifications: allNotifications, unreadCount, markRead: markReadShared, markAllRead: markAllReadShared } = useNotificationsPoll();
+  const notifications = tab === 'ALL' ? allNotifications : allNotifications.filter((item) => item.category === tab);
 
   useEffect(() => {
     const closeOnOutside = (event: MouseEvent) => { if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false); };
@@ -70,24 +48,11 @@ export function NotificationBell({ isDark }: { isDark: boolean }) {
     return () => document.removeEventListener('mousedown', closeOnOutside);
   }, []);
 
-  const markRead = async (id: string) => {
-    const idToken = await auth.currentUser?.getIdToken();
-    if (!idToken) return;
-    await fetch(`${BACKEND_URL}/api/notifications/${id}/read`, { method: 'POST', headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } });
-    setNotifications((previous) => previous.map((item) => item.id === id ? { ...item, isRead: true } : item));
-    setUnreadCount((count) => Math.max(0, count - 1));
-  };
-
-  const markAllRead = async () => {
-    const idToken = await auth.currentUser?.getIdToken();
-    if (!idToken) return;
-    await fetch(`${BACKEND_URL}/api/notifications/mark-all-read`, { method: 'POST', headers: { 'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '', Authorization: `Bearer ${idToken}` } });
-    setNotifications((previous) => previous.map((item) => ({ ...item, isRead: true })));
-    setUnreadCount(0);
-  };
+  const markRead = (id: string) => void markReadShared(id);
+  const markAllRead = () => void markAllReadShared();
 
   const openNotification = (notification: INotification) => {
-    if (!notification.isRead) void markRead(notification.id);
+    if (!notification.isRead) markRead(notification.id);
     if (notification.actionUrl) navigate(notification.actionUrl);
     setOpen(false);
   };

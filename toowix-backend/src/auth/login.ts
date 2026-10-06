@@ -29,6 +29,48 @@ const recordSession = async (userId: any, req: AuthenticatedRequest): Promise<st
   return sessionToken;
 };
 
+/**
+ * Every successful login path below ends with the same three steps: sync this user's Firebase
+ * custom claims (best-effort -- already swallowed failures before this change, nothing downstream
+ * reads its result), stamp `lastActiveAt`, and record the application Session row. None of the
+ * three needs another's *result*: claims sync only needs firebaseUid + the role/companyId values
+ * already known by the caller, user.save() only needs the already-mutated `user` document, and
+ * recordSession only needs user._id and the request. All three were previously awaited one after
+ * another (3 sequential round trips); grouping them with Promise.all turns that into 1.
+ *
+ * recordSession is NOT made fire-and-forget -- its result is the sessionToken the client uses to
+ * authenticate every subsequent request (see verifyFirebaseToken, which looks up this exact
+ * Session row), so the response must not go out before it is durably written. The claims sync, by
+ * contrast, already tolerated failure before this change and nothing downstream reads its result,
+ * so running it alongside the other two costs nothing and risks nothing.
+ */
+const finalizeLogin = async (
+  user: IUserDocument,
+  firebaseUid: string,
+  claims: Record<string, unknown> | null,
+  req: AuthenticatedRequest
+): Promise<string> => {
+  user.lastActiveAt = new Date();
+
+  const syncClaims = async (): Promise<void> => {
+    if (!claims) return;
+    try {
+      const auth = getFirebaseAuth();
+      await auth.setCustomUserClaims(firebaseUid, claims);
+    } catch (claimsError: any) {
+      console.warn('[Login Gate] Could not set custom claims:', claimsError.message);
+    }
+  };
+
+  const [ , , sessionToken ] = await Promise.all([
+    syncClaims(),
+    user.save(),
+    recordSession(user._id, req),
+  ]);
+
+  return sessionToken;
+};
+
 export type LoginGateReasonCode =
   | 'INVALID_CREDENTIALS'
   | 'NOT_REGISTERED'
@@ -117,21 +159,8 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     if (user.role === 'SUPER_ADMIN') {
       // Super Admin has global access
+      const sessionToken = await finalizeLogin(user, firebaseUid, { role: 'SUPER_ADMIN', companyId: null }, req);
 
-      // Synchronize Firebase Custom Claims
-      try {
-        const auth = getFirebaseAuth();
-        await auth.setCustomUserClaims(firebaseUid, {
-          role: 'SUPER_ADMIN',
-          companyId: null,
-        });
-      } catch (claimsError: any) {
-        console.warn('[Login Gate] Could not set custom claims:', claimsError.message);
-      }
-
-      user.lastActiveAt = new Date();
-      await user.save();
-      const sessionToken = await recordSession(user._id, req);
       res.json({
         status: 'ACTIVE',
         user,
@@ -165,10 +194,8 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
 
     if (!user.companyId) {
       // Standalone user without company workspace — issue direct active token
+      const sessionToken = await finalizeLogin(user, firebaseUid, null, req);
 
-      user.lastActiveAt = new Date();
-      await user.save();
-      const sessionToken = await recordSession(user._id, req);
       res.json({
         status: 'ACTIVE',
         user,
@@ -229,24 +256,12 @@ export const loginGateHandler = async (req: AuthenticatedRequest, res: Response)
     }
 
     // 7. All checks passed: issue an application session. Meeting tokens require admission.
-
-    // Sync Firebase Custom Claims
-    try {
-      const auth = getFirebaseAuth();
-      await auth.setCustomUserClaims(firebaseUid, {
-        role: user.role,
-        companyId: String(company._id),
-        companyStatus: company.status,
-      });
-    } catch (claimsError: any) {
-      console.warn('[Login Gate] Could not set custom claims:', claimsError.message);
-    }
-
     console.log(`[Login Gate PASS] ${user.email} logged in successfully for company ${company.name}`);
 
-    user.lastActiveAt = new Date();
-    await user.save();
-    const sessionToken = await recordSession(user._id, req);
+    const sessionToken = await finalizeLogin(
+      user, firebaseUid, { role: user.role, companyId: String(company._id), companyStatus: company.status }, req
+    );
+
     res.json({
       status: 'ACTIVE',
       user,

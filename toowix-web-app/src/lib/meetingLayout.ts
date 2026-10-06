@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
 export type MeetingLayoutMode = 'gallery' | 'pinned' | 'screen-share';
 export type MeetingCardRatio = '16:9' | '4:3';
@@ -11,6 +11,16 @@ export interface MeetingLayoutInput {
   sidePanelOpen: boolean;
   gap?: number;
   ratios?: MeetingCardRatio[];
+  // When set, always lay out exactly this many columns (rows = ceil(participantCount / forceColumns))
+  // instead of letting calculateMeetingLayout's own area-maximizing search choose the column count.
+  // Used by the mobile tile-view rule: 4+ participants on mobile always get a fixed 2-column grid,
+  // because the unconstrained search can legitimately decide one full-width column of large tiles has
+  // more total area than two narrower columns on a narrow viewport, and pick 1 column -- that's the
+  // single-column "stacking" bug this exists to prevent. The caller decides when to set this (e.g.
+  // from the TOTAL participant count, not a single page's count -- see MeetingRoomPage.tsx), so a
+  // short last page (e.g. 1 tile left over after paginating) still gets 2-column sizing instead of
+  // being treated as a lone "solo" tile.
+  forceColumns?: number;
 }
 
 export interface MeetingLayoutResult {
@@ -20,6 +30,11 @@ export interface MeetingLayoutResult {
   cardWidth: number;
   cardHeight: number;
 }
+
+// Mobile tile view paginates to at most this many tiles per page (local tile included). Exported
+// so the page-chunking logic in MeetingRoomPage.tsx and this file's own defensive clamp agree on
+// one number instead of two separately-maintained literal 8s.
+export const MOBILE_GALLERY_TILES_PER_PAGE = 8;
 
 const RATIO_VALUES: Record<MeetingCardRatio, number> = {
   '16:9': 16 / 9,
@@ -47,12 +62,10 @@ function roundHalfPixel(value: number): number {
 }
 
 /**
- * Pure per-candidate sizing: given a specific column count and ratio, what card size does that
- * produce at this width/height? Returns null if the cards would be smaller than the enforced
- * minimum (an unusable candidate, never offered as a switch target, and a signal that the
- * CURRENT structure -- if this is being used to re-evaluate it -- no longer fits).
+ * Card size for one candidate structure (column count + ratio) at this stage size, with no minimum
+ * check. Returns null only when the cells have no room at all.
  */
-function sizeForStructure(
+function rawSizeForStructure(
   count: number, columns: number, ratio: MeetingCardRatio, width: number, height: number, gap: number,
 ): MeetingLayoutResult | null {
   const ratioValue = RATIO_VALUES[ratio];
@@ -65,9 +78,47 @@ function sizeForStructure(
   const cardWidth = Math.min(cellWidth, cellHeight * ratioValue);
   const cardHeight = cardWidth / ratioValue;
 
-  if (cardWidth < MIN_TILE_WIDTH || cardHeight < MIN_TILE_HEIGHT) return null;
-
   return { columns, rows, ratio, cardWidth: roundHalfPixel(cardWidth), cardHeight: roundHalfPixel(cardHeight) };
+}
+
+/**
+ * Pure per-candidate sizing: a candidate is usable only when its cards stay at or above the enforced
+ * minimum. Returns null otherwise (never offered as a switch target, and a signal that the CURRENT
+ * structure -- if this is being used to re-evaluate it -- no longer fits).
+ */
+function sizeForStructure(
+  count: number, columns: number, ratio: MeetingCardRatio, width: number, height: number, gap: number,
+): MeetingLayoutResult | null {
+  const candidate = rawSizeForStructure(count, columns, ratio, width, height, gap);
+
+  if (!candidate || candidate.cardWidth < MIN_TILE_WIDTH || candidate.cardHeight < MIN_TILE_HEIGHT) return null;
+
+  return candidate;
+}
+
+/**
+ * Lays out exactly `count` tiles in a grid fixed at `columns` columns (rows = ceil(count / columns)),
+ * instead of letting the area-maximizing search in calculateMeetingLayout choose the column count.
+ * Forced mobile pages deliberately fill their grid cells rather than preserving a video aspect
+ * ratio. The video element itself uses `object-fit: cover`, so any crop happens inside the card
+ * instead of leaving unusable letterbox space above and below the grid.
+ */
+function calculateForcedColumnLayout(
+  count: number, columns: number, width: number, height: number, gap: number,
+): MeetingLayoutResult {
+  const rows = Math.ceil(count / columns);
+
+  return {
+    columns,
+    rows,
+    // The value remains for consumers that display the selected ratio; forced cards have an
+    // intentionally fluid geometry and must not apply it as an aspect-ratio CSS constraint.
+    ratio: '16:9',
+    // Keep the exact division here. Rounding down would leave a visible 1px strip at the
+    // bottom of grids such as 2 × 3; browsers render fractional CSS pixels correctly.
+    cardWidth: (width - (columns - 1) * gap) / columns,
+    cardHeight: (height - (rows - 1) * gap) / rows,
+  };
 }
 
 /**
@@ -86,6 +137,16 @@ export function calculateMeetingLayout(input: MeetingLayoutInput): MeetingLayout
   const ratios = input.ratios ?? ['16:9', '4:3'];
   const width = Math.max(1, input.width);
   const height = Math.max(1, input.height);
+
+  if (input.forceColumns) {
+    // Defensive clamp -- the caller (mobile pagination) is expected to already hand this function
+    // at most MOBILE_GALLERY_TILES_PER_PAGE tiles per call, but this keeps a bug in that chunking
+    // from ever asking for more rows than a single page is supposed to hold.
+    return calculateForcedColumnLayout(
+      Math.min(count, MOBILE_GALLERY_TILES_PER_PAGE), input.forceColumns, width, height, gap,
+    );
+  }
+
   let best: MeetingLayoutResult | null = null;
 
   for (const ratio of ratios) {
@@ -101,7 +162,23 @@ export function calculateMeetingLayout(input: MeetingLayoutInput): MeetingLayout
     }
   }
 
-  return best || {
+  if (best) return best;
+
+  // No structure reaches the minimum tile size (a very small stage). Still choose the largest structure
+  // that fits, so cards are never sized into an overflow that the gallery would clip.
+  let smallest: MeetingLayoutResult | null = null;
+
+  for (const ratio of ratios) {
+    for (let columns = 1; columns <= count; columns += 1) {
+      const candidate = rawSizeForStructure(count, columns, ratio, width, height, gap);
+
+      if (candidate && (!smallest || candidate.cardWidth * candidate.cardHeight > smallest.cardWidth * smallest.cardHeight)) {
+        smallest = candidate;
+      }
+    }
+  }
+
+  return smallest || {
     columns: 1,
     rows: count,
     ratio: '16:9',
@@ -126,6 +203,13 @@ export function chooseStableLayout(
   const height = Math.max(1, input.height);
   const best = calculateMeetingLayout(input);
 
+  // A forced column count is a hard constraint, not an aesthetic preference -- there is only one
+  // valid structure to choose (the hysteresis below exists to resist switching BETWEEN candidate
+  // structures when neither is clearly better, which doesn't apply here). Returning it directly
+  // also makes an orientation change or a mobile breakpoint crossing recalculate immediately
+  // instead of being held back by the area-improvement threshold.
+  if (input.forceColumns) return best;
+
   if (!current) return best;
 
   const held = sizeForStructure(count, current.columns, current.ratio, width, height, gap);
@@ -147,21 +231,58 @@ export function chooseStableLayout(
   return improvement < requiredGain ? held : best;
 }
 
+export interface MeetingCellPosition {
+  left: number;
+  top: number;
+}
+
 /**
- * React hook wrapping chooseStableLayout with the previous structure remembered across renders
- * (a ref, not component state -- it never needs to trigger its own re-render). The decision is
- * a pure function of (previous structure, current size): no clock reads during render, so two
- * renders with identical inputs always produce identical output -- a time-based hold here made
- * consecutive renders disagree and was a direct cause of the flicker.
+ * Places `count` equal cards on the rows/columns of `layout`, inside a stage of `width` x `height`.
+ * Cards are positioned explicitly (not by CSS wrapping), so the structure chosen here is exactly the
+ * structure rendered. Each row is centred on its own, so an incomplete final row stays centred.
+ */
+export function calculateCellPositions(
+  count: number, layout: MeetingLayoutResult, width: number, height: number, gap = 12,
+): MeetingCellPosition[] {
+  const totalHeight = layout.rows * layout.cardHeight + (layout.rows - 1) * gap;
+  const top = Math.max(0, roundHalfPixel((height - totalHeight) / 2));
+  const positions: MeetingCellPosition[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    const row = Math.floor(index / layout.columns);
+    const column = index - row * layout.columns;
+    const rowCount = Math.min(layout.columns, count - row * layout.columns);
+    const rowWidth = rowCount * layout.cardWidth + (rowCount - 1) * gap;
+    const left = Math.max(0, roundHalfPixel((width - rowWidth) / 2)) + column * (layout.cardWidth + gap);
+
+    positions.push({
+      left: roundHalfPixel(left),
+      top: roundHalfPixel(top + row * (layout.cardHeight + gap)),
+    });
+  }
+
+  return positions;
+}
+
+/**
+ * React hook wrapping chooseStableLayout with the previous structure remembered across renders.
+ * The remembered structure is committed in a layout effect, not written during render, so a render
+ * that React discards (Strict Mode double render, concurrent retry) cannot change the next decision.
+ * The hold is also discarded when the participant count changes, so joins and leaves re-fit at once.
  *
  * Card geometry is recalculated every call; only columns/rows/ratio are held stable. Call once
  * per render with the latest measured width/height.
  */
 export function useStableMeetingLayout(input: MeetingLayoutInput): MeetingLayoutResult {
-  const layoutRef = useRef<MeetingLayoutResult | null>(null);
-  const next = chooseStableLayout(input, layoutRef.current);
+  const committedRef = useRef<{ count: number; layout: MeetingLayoutResult } | null>(null);
+  const count = Math.max(1, Math.floor(input.participantCount));
+  const committed = committedRef.current;
+  const held = committed && committed.count === count ? committed.layout : null;
+  const next = chooseStableLayout(input, held);
 
-  layoutRef.current = next;
+  useLayoutEffect(() => {
+    committedRef.current = { count, layout: next };
+  });
 
   return next;
 }
