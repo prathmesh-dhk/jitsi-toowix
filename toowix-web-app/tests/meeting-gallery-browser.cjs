@@ -391,11 +391,65 @@ async function main() {
     results.animation = r;
   }
 
+  if (MODE === 'chat') {
+    await setRemotes(1);
+    await setViewport(1280, 800); await settle();
+    const chatButton = "[...document.querySelectorAll('button')].find(b => b.title === 'Chat with everyone')";
+
+    await evaluate(`${chatButton}?.click()`);
+    await until('!!document.querySelector(\'input[placeholder="Send a message..."]\')');
+    const inputSelector = "document.querySelector('input[placeholder=\"Send a message...\"]')";
+
+    await evaluate(`
+      (() => {
+        const el = ${inputSelector};
+        el.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(el, 'hello from the test');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      })()
+    `);
+    const inputValueBeforeSend = await evaluate(`${inputSelector}.value`);
+
+    await evaluate(`${inputSelector}.closest('form').requestSubmit()`);
+    await until('document.body.innerText.includes("hello from the test")');
+    const inputValueAfterSend = await evaluate(`${inputSelector}.value`);
+    const messageVisible = await evaluate('document.body.innerText.includes("hello from the test")');
+
+    // Close and reopen the panel -- chatMessages must survive (it lives on the page, not inside
+    // the conditionally-mounted ChatPanel), confirming the close-mid-state design decision holds.
+    await evaluate(`${chatButton}?.click()`);
+    await settle();
+    const hiddenWhileClosed = !(await evaluate('document.body.innerText.includes("hello from the test")'));
+
+    await evaluate(`${chatButton}?.click()`);
+    await until('document.body.innerText.includes("hello from the test")');
+    const messageSurvivedReopen = await evaluate('document.body.innerText.includes("hello from the test")');
+
+    const r = {
+      inputValueBeforeSend, inputValueAfterSend, messageVisible, hiddenWhileClosed, messageSurvivedReopen,
+      errors: await evaluate('window.__errors.slice(0,5)'),
+    };
+
+    console.log(JSON.stringify({ label: 'chat panel send + history-across-close', ...r }));
+    results.chat = r;
+  }
+
   if (MODE === 'toolbar') {
     await setRemotes(3);
     for (const [w, h] of [[700, 800], [1280, 800], [1280, 600]]) {
       await setViewport(w, h); await settle();
-      const info = await evaluate(`(() => { const st = document.querySelector('[data-gallery-stage]').getBoundingClientRect(); const tb = document.querySelector('.tw-toolbar').getBoundingClientRect(); const cells = [...document.querySelectorAll('[data-gallery-cell]')].map(c => c.getBoundingClientRect().bottom); return { stageBottom: Math.round(st.bottom), toolbarTop: Math.round(tb.top), toolbarBottom: Math.round(tb.bottom), toolbarHeight: Math.round(tb.height), lowestCardBottom: Math.round(Math.max(...cells)), viewportH: innerHeight }; })()`);
+      console.log('stageNodeCount:', await evaluate("document.querySelectorAll('[data-gallery-stage]').length"));
+    console.log('refCalls:', await evaluate('window.__stageRefCalls'), await evaluate('JSON.stringify(window.__stageRefCallsLog)'));
+    await evaluate(`
+      window.__externalRoFired = 0;
+      window.__externalRo = new ResizeObserver(() => { window.__externalRoFired++; });
+      window.__externalRo.observe(document.querySelector('[data-gallery-stage]'));
+    `);
+    console.log('roFired:', await evaluate('window.__roFired'));
+    console.log('externalRoFired:', await evaluate('window.__externalRoFired'));
+    console.log('commits after 960x700:', await evaluate('window.__stageCommits'), await evaluate('JSON.stringify(window.__lastStageCommit)'));
+    const info = await evaluate(`(() => { const st = document.querySelector('[data-gallery-stage]').getBoundingClientRect(); const tb = document.querySelector('.tw-toolbar').getBoundingClientRect(); const cells = [...document.querySelectorAll('[data-gallery-cell]')].map(c => c.getBoundingClientRect().bottom); return { stageBottom: Math.round(st.bottom), toolbarTop: Math.round(tb.top), toolbarBottom: Math.round(tb.bottom), toolbarHeight: Math.round(tb.height), lowestCardBottom: Math.round(Math.max(...cells)), viewportH: innerHeight }; })()`);
       console.log(JSON.stringify({ label: 'toolbar geometry', w, h, ...info }));
     }
   }
@@ -403,6 +457,16 @@ async function main() {
   if (MODE === 'edges') {
     await setRemotes(3);
     await setViewport(701, 800); await settle();
+    console.log('stageNodeCount:', await evaluate("document.querySelectorAll('[data-gallery-stage]').length"));
+    console.log('refCalls:', await evaluate('window.__stageRefCalls'), await evaluate('JSON.stringify(window.__stageRefCallsLog)'));
+    await evaluate(`
+      window.__externalRoFired = 0;
+      window.__externalRo = new ResizeObserver(() => { window.__externalRoFired++; });
+      window.__externalRo.observe(document.querySelector('[data-gallery-stage]'));
+    `);
+    console.log('roFired:', await evaluate('window.__roFired'));
+    console.log('externalRoFired:', await evaluate('window.__externalRoFired'));
+    console.log('commits after 960x700:', await evaluate('window.__stageCommits'), await evaluate('JSON.stringify(window.__lastStageCommit)'));
     const info = await evaluate(`(() => { const st = document.querySelector('[data-gallery-stage]'); const sr = st.getBoundingClientRect(); return { stage: [sr.left, sr.right, sr.top, sr.bottom, st.clientWidth, st.clientHeight], cells: [...st.querySelectorAll('[data-gallery-cell]')].map(c => [c.offsetLeft, c.offsetTop, c.offsetWidth, c.offsetHeight, c.style.left, c.style.top, c.style.width, c.getBoundingClientRect().right.toFixed(3)]) }; })()`);
     console.log(JSON.stringify({ label: 'edges at 701x800', ...info }));
   }

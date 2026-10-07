@@ -53,9 +53,11 @@ import {
   Keyboard,
   Code2,
   Volume2,
-  Paperclip,
 } from 'lucide-react';
-import { persistChatMessage, uploadChatImage, resolveChatImageUrl, fetchChatHistory, MAX_CHAT_IMAGE_BYTES } from '../lib/chatApi';
+import { fetchChatHistory, resolveChatImageUrl } from '../lib/chatApi';
+import { ChatPanel } from '../components/meeting/ChatPanel';
+import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } from '../components/meeting/RecordingControls';
+import { formatDuration } from '../lib/formatDuration';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
 import {
@@ -92,21 +94,11 @@ import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
 import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
 import { PollsModal, type IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
-import {
-  calculateCellPositions,
-  MOBILE_GALLERY_TILES_PER_PAGE,
-  useStableMeetingLayout,
-} from '../lib/meetingLayout';
-import { animateGalleryCell, readVisualFrame } from '../lib/galleryMotion';
-import type { GalleryFrame } from '../lib/galleryMotion';
+import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/participantColorTheme';
+import { DocumentPipContent } from '../components/meeting/PictureInPicture';
+import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
 const RESIZE_DEBUG = false;
-
-// Keep this in lockstep with the mobile CSS below. A coarse-pointer landscape phone can be
-// wider than the portrait breakpoint, so it needs its own clause rather than falling back to
-// the desktop gallery calculator after rotation.
-const MOBILE_GALLERY_MEDIA_QUERY = '(max-width: 768px), (max-width: 1024px) and (pointer: coarse) and (orientation: landscape)';
-const GALLERY_SWIPE_MIN_DISTANCE_PX = 48;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -145,66 +137,7 @@ interface IWaitingParticipant {
   status: 'WAITING' | 'ADMITTED' | 'DENIED';
 }
 
-export interface IParticipantColorTheme {
-  name: string;
-  avatarBg: string;
-  tileBg: string;
-  badgeBg: string;
-  ringColor: string;
-}
-
-export const PARTICIPANT_COLOR_THEMES: IParticipantColorTheme[] = [
-  { name: 'deep-blue', avatarBg: '#2962C5', tileBg: '#101D35', badgeBg: 'rgba(10,20,38,.9)', ringColor: '#74A7FF' },
-  { name: 'teal', avatarBg: '#087E72', tileBg: '#102D2B', badgeBg: 'rgba(8,35,33,.9)', ringColor: '#57C8BA' },
-  { name: 'forest', avatarBg: '#367B48', tileBg: '#142B1A', badgeBg: 'rgba(14,33,19,.9)', ringColor: '#86CC91' },
-  { name: 'olive', avatarBg: '#77861F', tileBg: '#2E3313', badgeBg: 'rgba(34,37,11,.9)', ringColor: '#B9C85A' },
-  { name: 'mustard', avatarBg: '#B17B16', tileBg: '#36270F', badgeBg: 'rgba(42,30,9,.9)', ringColor: '#E4B851' },
-  { name: 'terracotta', avatarBg: '#B75C3A', tileBg: '#382019', badgeBg: 'rgba(43,22,16,.9)', ringColor: '#E99A79' },
-  { name: 'burgundy', avatarBg: '#8E2948', tileBg: '#32141E', badgeBg: 'rgba(41,13,22,.9)', ringColor: '#D97898' },
-  { name: 'purple', avatarBg: '#703AAB', tileBg: '#271737', badgeBg: 'rgba(28,14,42,.9)', ringColor: '#B98BE8' },
-  { name: 'indigo', avatarBg: '#4255A5', tileBg: '#171B38', badgeBg: 'rgba(16,19,43,.9)', ringColor: '#91A2EC' },
-  { name: 'rose', avatarBg: '#B84572', tileBg: '#371827', badgeBg: 'rgba(43,13,27,.9)', ringColor: '#EC91B2' },
-  { name: 'charcoal', avatarBg: '#51606A', tileBg: '#1D2328', badgeBg: 'rgba(20,25,29,.9)', ringColor: '#A9BBC7' },
-  { name: 'ocean', avatarBg: '#176C95', tileBg: '#112938', badgeBg: 'rgba(10,29,40,.9)', ringColor: '#71B9DB' },
-  { name: 'plum', avatarBg: '#8B417D', tileBg: '#30192F', badgeBg: 'rgba(38,14,35,.9)', ringColor: '#D58AC6' },
-  { name: 'copper', avatarBg: '#9D6432', tileBg: '#332316', badgeBg: 'rgba(39,25,13,.9)', ringColor: '#D9A76F' },
-  { name: 'slate', avatarBg: '#4B6173', tileBg: '#19232C', badgeBg: 'rgba(18,27,34,.9)', ringColor: '#9AB5C8' },
-];
-
-export function getParticipantColorTheme(identifier: string, _forceIndex?: number): IParticipantColorTheme {
-  let hash = 0;
-  const str = (identifier || '').trim().toLowerCase();
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return PARTICIPANT_COLOR_THEMES[Math.abs(hash) % PARTICIPANT_COLOR_THEMES.length];
-}
-
-function formatDuration(totalSec: number) {
-  const hrs = Math.floor(totalSec / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
-  const secs = totalSec % 60;
-  const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
-
-  return hrs > 0 ? `${hrs}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`;
-}
-
-// Ticks on its own so a running clock never re-renders the whole meeting page.
-const ElapsedClock = memo(function ElapsedClock({ startedAt }: { startedAt: number | null }) {
-  const [, setTick] = useState(0);
-
-  useEffect(() => {
-    if (startedAt == null) return;
-    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
-
-    return () => window.clearInterval(timer);
-  }, [startedAt]);
-
-  return <>{formatDuration(startedAt == null ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))}</>;
-});
-
-// Ticks every second, same self-ticking pattern as ElapsedClock above, but counting DOWN to a
+// Ticks every second, same self-ticking pattern as ElapsedClock (now in RecordingControls.tsx), but counting DOWN to a
 // meeting's scheduled/free-tier end time -- renders nothing until inside the final 5 minutes (see
 // the 5-minutes-remaining effect in MeetingRoomPage, which fires the matching tone/toast at the
 // same threshold), then shows a live MM:SS countdown badge in the top bar for the rest of the call.
@@ -243,716 +176,6 @@ const MeetingEndCountdown = memo(function MeetingEndCountdown({ expiresAt }: { e
   );
 });
 
-// Live remote camera inside the Picture-in-Picture window.
-function PipRemoteVideo({ stream }: { stream: MediaStream }) {
-  const nodeRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    const node = nodeRef.current;
-
-    if (node) {
-      node.srcObject = stream;
-      node.play().catch(() => { });
-    }
-  }, [stream]);
-
-  return (
-    <video
-      ref={nodeRef}
-      autoPlay
-      playsInline
-      muted
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-    />
-  );
-}
-
-// Interactive Document Picture-in-Picture window content (Google Meet experience)
-const DocumentPipContent = memo(function DocumentPipContent({
-  isScreenSharing,
-  screenStream,
-  remoteScreenStream,
-  remotePresenterName,
-  inCallVideo,
-  inCallStream,
-  inCallMuted,
-  displayName,
-  isHandRaised,
-  remoteParticipants,
-  roomTitle,
-  avatarUrl,
-  onToggleMic,
-  onToggleVideo,
-  onToggleHand,
-  onReturnToMeeting,
-  onLeaveMeeting,
-}: {
-  isScreenSharing: boolean;
-  screenStream: MediaStream | null;
-  remoteScreenStream: MediaStream | null;
-  remotePresenterName: string | null;
-  inCallVideo: boolean;
-  inCallStream: MediaStream | null;
-  inCallMuted: boolean | null;
-  displayName: string;
-  isHandRaised: boolean;
-  remoteParticipants: Array<{ id: string; name: string; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null }>;
-  roomTitle: string;
-  avatarUrl?: string | null;
-  onToggleMic: () => void;
-  onToggleVideo: () => void;
-  onToggleHand: () => void;
-  onReturnToMeeting: () => void;
-  onLeaveMeeting: () => void;
-}) {
-  const activeScreenStream = isScreenSharing ? screenStream : remoteScreenStream;
-  const isPresenting = Boolean(activeScreenStream);
-
-  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  const setScreenVideoNode = useCallback((node: HTMLVideoElement | null) => {
-    screenVideoRef.current = node;
-    if (node) {
-      node.srcObject = activeScreenStream;
-      if (activeScreenStream) {
-        node.play().catch(() => { });
-      }
-    }
-  }, [activeScreenStream]);
-
-  const setLocalVideoNode = useCallback((node: HTMLVideoElement | null) => {
-    localVideoRef.current = node;
-    if (node) {
-      if (inCallVideo && inCallStream) {
-        node.srcObject = inCallStream;
-        node.play().catch(() => { });
-      } else {
-        node.srcObject = null;
-      }
-    }
-  }, [inCallVideo, inCallStream]);
-
-  // Reactive binding for screen presentation stream
-  useEffect(() => {
-    if (screenVideoRef.current) {
-      screenVideoRef.current.srcObject = activeScreenStream;
-      if (activeScreenStream) {
-        screenVideoRef.current.play().catch(() => { });
-      }
-    }
-  }, [activeScreenStream]);
-
-  // Reactive binding for live camera stream
-  useEffect(() => {
-    if (localVideoRef.current) {
-      if (inCallVideo && inCallStream) {
-        localVideoRef.current.srcObject = inCallStream;
-        localVideoRef.current.play().catch(() => { });
-      } else {
-        localVideoRef.current.srcObject = null;
-      }
-    }
-  }, [inCallVideo, inCallStream]);
-
-  const userInitial = (displayName || 'You').trim().charAt(0).toUpperCase() || 'U';
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        width: '100vw',
-        backgroundColor: '#1E1F21',
-        color: '#FFFFFF',
-        boxSizing: 'border-box',
-        overflow: 'hidden',
-        userSelect: 'none',
-        fontFamily: "'Google Sans', Roboto, sans-serif",
-      }}
-    >
-      {/* Top Header with Meeting Title and Return to Tab */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 12px',
-          backgroundColor: 'rgba(0, 0, 0, 0.45)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
-          zIndex: 20,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
-          <span style={{ fontSize: '12px' }}>🟢</span>
-          <span
-            style={{
-              fontSize: '12px',
-              fontWeight: 600,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: '220px',
-              color: '#E8EAED',
-            }}
-          >
-            {roomTitle}
-          </span>
-        </div>
-        <button
-          onClick={onReturnToMeeting}
-          title="Return to meeting tab"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            background: 'rgba(138, 180, 248, 0.15)',
-            border: '1px solid rgba(138, 180, 248, 0.3)',
-            borderRadius: '12px',
-            padding: '4px 10px',
-            color: '#8AB4F8',
-            fontSize: '11px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          Back to tab
-        </button>
-      </div>
-
-      {/* Main Video Stage */}
-      <div
-        style={{
-          flex: 1,
-          position: 'relative',
-          backgroundColor: '#000000',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          overflow: 'hidden',
-        }}
-      >
-        {isPresenting ? (
-          /* PRESENTATION MODE: Shared screen prominent + floating self-view thumbnail */
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              position: 'relative',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: '#000000',
-            }}
-          >
-            <video
-              ref={setScreenVideoNode}
-              autoPlay
-              playsInline
-              muted
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            />
-
-            {/* Floating Presenter Pill Badge */}
-            <div
-              style={{
-                position: 'absolute',
-                top: '8px',
-                left: '8px',
-                backgroundColor: 'rgba(0, 0, 0, 0.72)',
-                backdropFilter: 'blur(4px)',
-                padding: '4px 10px',
-                borderRadius: '8px',
-                fontSize: '11px',
-                fontWeight: 500,
-                color: '#8AB4F8',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                zIndex: 10,
-              }}
-            >
-              <span>🖥 {isScreenSharing ? 'You are presenting' : `${remotePresenterName || 'Participant'} is presenting`}</span>
-            </div>
-
-            {/* Corner floating self-view participant tile */}
-            <div
-              style={{
-                position: 'absolute',
-                bottom: '10px',
-                right: '10px',
-                width: '110px',
-                height: '70px',
-                borderRadius: '10px',
-                backgroundColor: '#202124',
-                overflow: 'hidden',
-                boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                zIndex: 15,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {inCallVideo && inCallStream ? (
-                <video
-                  ref={setLocalVideoNode}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    backgroundColor: '#1A73E8',
-                    color: '#FFFFFF',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                  ) : (
-                    userInitial
-                  )}
-                </div>
-              )}
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '3px',
-                  left: '4px',
-                  fontSize: '9px',
-                  color: '#FFFFFF',
-                  backgroundColor: 'rgba(0,0,0,0.6)',
-                  padding: '1px 4px',
-                  borderRadius: '3px',
-                  maxWidth: '90px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                You {inCallMuted ? '(Muted)' : ''}
-              </div>
-            </div>
-          </div>
-        ) : remoteParticipants.length === 0 ? (
-          /* SOLO PARTICIPANT STAGE */
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              position: 'relative',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: '#202124',
-            }}
-          >
-            {inCallVideo && inCallStream ? (
-              <video
-                ref={setLocalVideoNode}
-                autoPlay
-                playsInline
-                muted
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            ) : (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '12px',
-                }}
-              >
-                <div
-                  style={{
-                    width: '68px',
-                    height: '68px',
-                    borderRadius: '50%',
-                    backgroundColor: '#1A73E8',
-                    color: '#FFFFFF',
-                    fontSize: '26px',
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                  ) : (
-                    userInitial
-                  )}
-                </div>
-              </div>
-            )}
-            <div
-              style={{
-                position: 'absolute',
-                bottom: '8px',
-                left: '8px',
-                fontSize: '11px',
-                color: '#FFFFFF',
-                backgroundColor: 'rgba(0,0,0,0.6)',
-                padding: '3px 8px',
-                borderRadius: '6px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
-            >
-              <span>{displayName || 'You'} (You)</span>
-              {inCallMuted && <span style={{ color: '#F87171' }}>● Muted</span>}
-            </div>
-            {isHandRaised && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '8px',
-                  right: '8px',
-                  backgroundColor: '#1A73E8',
-                  borderRadius: '50%',
-                  padding: '4px 6px',
-                  fontSize: '13px',
-                }}
-              >
-                ✋
-              </div>
-            )}
-          </div>
-        ) : (
-          /* MULTI PARTICIPANT GRID */
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              display: 'grid',
-              gridTemplateColumns: remoteParticipants.length === 1 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
-              gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
-              gap: '6px',
-              padding: '6px',
-              boxSizing: 'border-box',
-            }}
-          >
-            {/* Local Participant Tile */}
-            <div
-              style={{
-                position: 'relative',
-                borderRadius: '10px',
-                backgroundColor: '#2D2E30',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-              }}
-            >
-              {inCallVideo && inCallStream ? (
-                <video
-                  ref={setLocalVideoNode}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: '42px',
-                    height: '42px',
-                    borderRadius: '50%',
-                    backgroundColor: '#1A73E8',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '17px',
-                    fontWeight: 600,
-                    overflow: 'hidden',
-                  }}
-                >
-                  {avatarUrl ? (
-                    <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                  ) : (
-                    userInitial
-                  )}
-                </div>
-              )}
-              <span
-                style={{
-                  position: 'absolute',
-                  bottom: '4px',
-                  left: '6px',
-                  fontSize: '10px',
-                  color: '#FFFFFF',
-                  backgroundColor: 'rgba(0,0,0,0.55)',
-                  padding: '2px 5px',
-                  borderRadius: '4px',
-                }}
-              >
-                You {inCallMuted ? '(Muted)' : ''}
-              </span>
-              {isHandRaised && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: '4px',
-                    right: '4px',
-                    backgroundColor: '#1A73E8',
-                    borderRadius: '50%',
-                    padding: '2px 4px',
-                    fontSize: '11px',
-                  }}
-                >
-                  ✋
-                </span>
-              )}
-            </div>
-
-            {/* Remote Participants (up to 3) */}
-            {remoteParticipants.slice(0, 3).map((p, idx) => {
-              const theme = getParticipantColorTheme(p.name, idx + 1);
-              const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
-              return (
-                <div
-                  key={p.id || idx}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    backgroundColor: theme.tileBg,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {p.video && p.stream ? (
-                    <PipRemoteVideo stream={p.stream} />
-                  ) : (
-                  <div
-                    style={{
-                      width: '38px',
-                      height: '38px',
-                      borderRadius: '50%',
-                      backgroundColor: theme.avatarBg,
-                      color: '#FFFFFF',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '16px',
-                      fontWeight: 600,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {(p as any).avatarUrl ? (
-                      <img src={(p as any).avatarUrl} alt="" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
-                    ) : (
-                      initial
-                    )}
-                  </div>
-                  )}
-                  <span
-                    style={{
-                      position: 'absolute',
-                      bottom: '4px',
-                      left: '6px',
-                      fontSize: '10px',
-                      color: '#FFFFFF',
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                      padding: '2px 5px',
-                      borderRadius: '4px',
-                      zIndex: 2,
-                      maxWidth: '120px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {p.name.length > 12 ? p.name.slice(0, 11) + '…' : p.name}
-                  </span>
-                  {p.raisedHand && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: '4px',
-                        right: '4px',
-                        backgroundColor: '#1A73E8',
-                        borderRadius: '50%',
-                        padding: '2px 4px',
-                        fontSize: '11px',
-                      }}
-                    >
-                      ✋
-                    </span>
-                  )}
-                  {p.muted && (
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: '4px',
-                        left: '4px',
-                        backgroundColor: 'rgba(0,0,0,0.6)',
-                        borderRadius: '50%',
-                        width: '18px',
-                        height: '18px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '10px',
-                        color: '#F87171',
-                      }}
-                    >
-                      ✕
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Interactive Bottom Controls Bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '10px',
-          padding: '10px 12px',
-          backgroundColor: '#1E1F21',
-          borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-          zIndex: 20,
-        }}
-      >
-        {/* Mic Toggle */}
-        <button
-          onClick={onToggleMic}
-          title={inCallMuted ? 'Turn on microphone' : 'Turn off microphone'}
-          style={{
-            width: '38px',
-            height: '38px',
-            borderRadius: '50%',
-            backgroundColor: inCallMuted ? '#EA4335' : '#3C4043',
-            color: '#FFFFFF',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          {inCallMuted ? <MicOff size={16} /> : <Mic size={16} />}
-        </button>
-
-        {/* Camera Toggle */}
-        <button
-          onClick={onToggleVideo}
-          title={inCallVideo ? 'Turn off camera' : 'Turn on camera'}
-          style={{
-            width: '38px',
-            height: '38px',
-            borderRadius: '50%',
-            backgroundColor: inCallVideo ? '#3C4043' : '#EA4335',
-            color: '#FFFFFF',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          {inCallVideo ? <Video size={16} /> : <VideoOff size={16} />}
-        </button>
-
-        {/* Raise Hand Toggle */}
-        <button
-          onClick={onToggleHand}
-          title={isHandRaised ? 'Lower hand' : 'Raise hand'}
-          style={{
-            width: '38px',
-            height: '38px',
-            borderRadius: '50%',
-            backgroundColor: isHandRaised ? '#1A73E8' : '#3C4043',
-            color: '#FFFFFF',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          <Hand size={16} />
-        </button>
-
-        {/* Return to Meeting Tab */}
-        <button
-          onClick={onReturnToMeeting}
-          title="Return to meeting tab"
-          style={{
-            width: '38px',
-            height: '38px',
-            borderRadius: '50%',
-            backgroundColor: '#3C4043',
-            color: '#8AB4F8',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.3)',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          <ArrowLeft size={16} />
-        </button>
-
-        {/* Leave Meeting Button */}
-        <button
-          onClick={onLeaveMeeting}
-          title="Leave meeting"
-          style={{
-            width: '44px',
-            height: '38px',
-            borderRadius: '19px',
-            backgroundColor: '#EA4335',
-            color: '#FFFFFF',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(234, 67, 53, 0.4)',
-            transition: 'background-color 0.15s ease',
-          }}
-        >
-          <Phone size={16} style={{ transform: 'rotate(135deg)' }} />
-        </button>
-      </div>
-    </div>
-  );
-});
 
 export function MeetingRoomPage() {
   const { isDark, toggleTheme } = useTheme();
@@ -1089,43 +312,6 @@ export function MeetingRoomPage() {
   // with browser resizing, but also when a side panel, fullscreen, or mobile layout changes.
   const meetingCanvasRef = useRef<HTMLDivElement | null>(null);
   const [meetingCanvasSize, setMeetingCanvasSize] = useState({ width: 0, height: 0 });
-  // The gallery stage is the exact area the cards are placed in: a flex child with no padding, inside the
-  // padded .tw-grid. Measuring it (not the window or the canvas) keeps the calculator and the placed cards on
-  // one set of numbers. Cards are absolutely positioned, so they cannot enlarge the stage they measure.
-  const galleryStageRef = useRef<HTMLDivElement | null>(null);
-  const galleryStageObserverRef = useRef<ResizeObserver | null>(null);
-  const [galleryStageSize, setGalleryStageSize] = useState({ width: 0, height: 0 });
-  const setGalleryStageNode = useCallback((node: HTMLDivElement | null) => {
-    galleryStageObserverRef.current?.disconnect();
-    galleryStageObserverRef.current = null;
-    galleryStageRef.current = node;
-    if (!node) return;
-
-    const commitStageSize = (width: number, height: number) => {
-      setGalleryStageSize((previous) => (
-        Math.abs(previous.width - width) < 0.5 && Math.abs(previous.height - height) < 0.5
-          ? previous
-          : { width, height }
-      ));
-    };
-    const initial = node.getBoundingClientRect();
-
-    commitStageSize(initial.width, initial.height);
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver((entries) => {
-      // One callback per frame, after layout and before paint. Using the latest entry means a burst of
-      // resize notifications collapses into one geometry update. Committing synchronously here keeps the
-      // cards and the measured stage in the same frame: a deferred commit would paint a frame with the old
-      // card geometry inside the new stage size.
-      const box = entries[entries.length - 1]?.contentRect;
-
-      if (box) flushSync(() => commitStageSize(box.width, box.height));
-    });
-
-    observer.observe(node);
-    galleryStageObserverRef.current = observer;
-  }, []);
-  useEffect(() => () => galleryStageObserverRef.current?.disconnect(), []);
   useEffect(() => {
     const element = meetingCanvasRef.current;
     if (!element) return;
@@ -1168,9 +354,12 @@ export function MeetingRoomPage() {
   }, []);
 
   // Keyboard shortcuts (Jitsi/Google Meet convention): 'w' tile view, 'm' mic, 'v' camera,
-  // 'f' full screen. mic/video/fullscreen go through refs (toggleInCallMicRef etc.) synced
-  // elsewhere, not called directly, since this effect mounts once (empty deps) before those
-  // handlers exist -- the refs avoid the stale-closure problem that would otherwise cause.
+  // 'f' full screen, 's' full-view screen share (collapses the participant sidebar next to an
+  // active screen share so the shared screen fills the full stage width/height -- a no-op when
+  // no share is active; see toggleScreenShareFullViewRef below). mic/video/fullscreen/screen-
+  // share-view go through refs (toggleInCallMicRef etc.) synced elsewhere, not called directly,
+  // since this effect mounts once (empty deps) before those handlers exist -- the refs avoid the
+  // stale-closure problem that would otherwise cause.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -1198,6 +387,9 @@ export function MeetingRoomPage() {
       } else if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         toggleFullscreenRef.current();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        toggleScreenShareFullViewRef.current();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1305,10 +497,6 @@ export function MeetingRoomPage() {
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; senderId?: string; time: string; text: string; imageUrl?: string; uploading?: boolean }>>([
     { id: '1', sender: 'Toowix System', time: 'Just now', text: 'Welcome to the meeting! Messages sent here are visible to all participants.' }
   ]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatImageUploading, setChatImageUploading] = useState(false);
-  const [chatImageError, setChatImageError] = useState<string | null>(null);
-  const chatImageInputRef = useRef<HTMLInputElement | null>(null);
   const chatHistoryLoadedRef = useRef(false);
 
   // Joining a call from Conversations should feel like walking back into the same conversation,
@@ -1401,6 +589,7 @@ export function MeetingRoomPage() {
   const toggleInCallMicRef = useRef<() => void>(() => { });
   const toggleInCallVideoRef = useRef<() => void>(() => { });
   const toggleFullscreenRef = useRef<() => void>(() => { });
+  const toggleScreenShareFullViewRef = useRef<() => void>(() => { });
   const toggleRaiseHandRef = useRef<() => void>(() => { });
   const leaveMeetingRef = useRef<() => void>(() => { });
   const pipInCallMutedRef = useRef<boolean | null>(null);
@@ -3739,8 +2928,11 @@ export function MeetingRoomPage() {
   const primaryShare = allShares[0];
   const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
   // A presentation is always an explicit layout mode. It must not depend on the gallery toggle:
-  // a screen share always keeps its stage and right-side participant rail on desktop.
+  // a screen share always keeps its stage and right-side participant rail on desktop -- unless
+  // screenShareFullView is on (the 's' shortcut), which collapses that sidebar so the shared
+  // screen fills the full stage width/height with nothing else on screen.
   const showShareStage = Boolean(jitsiMeeting.sharedVideo) || anyScreenShare;
+  const [screenShareFullView, setScreenShareFullView] = useState(false);
   const tileBeforeShareRef = useRef(true);
   const wasSharingRef = useRef(false);
   useEffect(() => {
@@ -3749,10 +2941,21 @@ export function MeetingRoomPage() {
       setTileViewEnabled(false);
     } else if (!anyScreenShare && wasSharingRef.current) {
       setTileViewEnabled(tileBeforeShareRef.current);
+      // Don't carry a full-view choice into the next, unrelated share.
+      setScreenShareFullView(false);
     }
     wasSharingRef.current = anyScreenShare;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anyScreenShare]);
+  const toggleScreenShareFullView = useCallback(() => {
+    // A no-op when nothing is on the share stage, so the 's' shortcut can't silently arm a mode
+    // that then kicks in confusingly the next time someone starts sharing.
+    if (!showShareStage) return;
+    setScreenShareFullView((value) => !value);
+  }, [showShareStage]);
+  useEffect(() => {
+    toggleScreenShareFullViewRef.current = toggleScreenShareFullView;
+  }, [toggleScreenShareFullView]);
 
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
@@ -4103,89 +3306,6 @@ export function MeetingRoomPage() {
     })().catch(() => setCallError('Could not apply video quality. Please try again.'));
   };
 
-  const handleSendChatMessage = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!chatInput.trim()) return;
-    const text = chatInput.trim();
-    const msg = {
-      id: String(Date.now()),
-      sender: displayName || 'You',
-      senderId: sessionIdRef.current,
-      time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      text,
-    };
-    setChatMessages((prev) => [...prev, msg]);
-    setChatInput('');
-    // Routed through postRoomSignal (HTTP to our backend + Jitsi datachannel as a latency
-    // accelerant) instead of only sendEndpointTextMessage directly -- that datachannel relies
-    // on Jitsi's BridgeChannel, which can be unready or unavailable, and had no fallback, so
-    // messages could silently never reach other participants. HTTP always works.
-    postRoomSignal('CHAT_MESSAGE', { text });
-    // Saving the conversation is a no-op on the backend for a meeting with no Meeting document
-    // (the homepage's free instant meeting) -- only a dashboard-created meeting actually gets
-    // anything written, so there's no persisted.check needed here.
-    void persistChatMessage(roomId, { senderName: displayName || 'You', senderId: sessionIdRef.current, text });
-  };
-
-  const handleAttachChatImage = async (file: File | undefined) => {
-    if (!file) return;
-    setChatImageError(null);
-    const caption = chatInput.trim();
-
-    if (!file.type.startsWith('image/')) {
-      setChatImageError('Only image files (JPG, PNG, GIF, WEBP) can be attached.');
-      setTimeout(() => setChatImageError(null), 4000);
-      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
-      return;
-    }
-    if (file.size > MAX_CHAT_IMAGE_BYTES) {
-      setChatImageError('Image is too large -- the limit is 3MB.');
-      setTimeout(() => setChatImageError(null), 4000);
-      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
-      return;
-    }
-
-    // Show the picked image immediately via a local blob URL, rather than waiting on the
-    // upload round-trip -- the bubble then swaps to the real hosted URL (or is removed on
-    // failure) once uploadChatImage resolves, same "instant preview" feel as WhatsApp/Messenger.
-    const localPreviewUrl = URL.createObjectURL(file);
-    const tempId = `local-${Date.now()}`;
-    setChatMessages((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        sender: displayName || 'You',
-        senderId: sessionIdRef.current,
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        text: caption,
-        imageUrl: localPreviewUrl,
-        uploading: true,
-      },
-    ]);
-    setChatInput('');
-    setChatImageUploading(true);
-    try {
-      const url = await uploadChatImage(roomId, file);
-      const resolvedUrl = resolveChatImageUrl(url);
-      setChatMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, imageUrl: resolvedUrl, uploading: false } : m)));
-      URL.revokeObjectURL(localPreviewUrl);
-      postRoomSignal('CHAT_MESSAGE', { text: caption, imageUrl: resolvedUrl });
-      void persistChatMessage(roomId, {
-        senderName: displayName || 'You',
-        senderId: sessionIdRef.current,
-        text: caption,
-        imageUrl: resolvedUrl,
-      });
-    } catch (err: any) {
-      setChatMessages((prev) => prev.filter((m) => m.id !== tempId));
-      URL.revokeObjectURL(localPreviewUrl);
-      setChatImageError(err?.message || 'Failed to send image');
-      setTimeout(() => setChatImageError(null), 4000);
-    } finally {
-      setChatImageUploading(false);
-      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
-    }
-  };
 
   const postRoomSignal = useCallback(
     async (type: string, payload: any, targetSessionId?: string) => {
@@ -4541,175 +3661,6 @@ export function MeetingRoomPage() {
   // ===========================================================================
   // STAGE 2: IN-MEETING VIEW (Google Meet Visual Truth Matching Image 1)
   // ===========================================================================
-  // Gallery sizing is computed unconditionally (not inside `if (hasJoined)`) because
-  // useStableMeetingLayout is a real hook. Its previous-structure ref must persist across renders.
-  // Every gallery cell, in display order: screen shares first, then the local card, then remote participants.
-  // Cells are keyed by these stable ids, so a card keeps its DOM node (and its <video>) across any change of
-  // structure, size or position around it.
-  const galleryAllCellKeys = [
-    ...allShares.map((share) => `share:${share.key}`),
-    'local',
-    ...remoteParticipants.map((remote, idx) => `remote:${remote.id || idx}`),
-  ];
-
-  // Mobile tile view: 1-3 participants keep today's unconstrained layout untouched (see
-  // calculateMeetingLayout). 4+ always use a fixed 2-column grid, paginated to
-  // MOBILE_GALLERY_TILES_PER_PAGE (local tile included) per page, navigated by a horizontal swipe.
-  // "Mobile" is the exact same breakpoint this page's own CSS already uses elsewhere (the pre-join
-  // screen): a narrow portrait viewport, or a touch device in landscape up to 1024px wide (many
-  // phones exceed 768px wide in landscape). Resolved via matchMedia (not a one-time check) so
-  // rotating the device re-evaluates it.
-  const [isMobileGallery, setIsMobileGallery] = useState(() => (
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      && window.matchMedia(MOBILE_GALLERY_MEDIA_QUERY).matches
-  ));
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const query = window.matchMedia(MOBILE_GALLERY_MEDIA_QUERY);
-    const update = () => setIsMobileGallery(query.matches);
-
-    update();
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-
-  // Keyed off the TOTAL participant count, not any one page's count, so a short last page (e.g.
-  // one tile left over after paginating) still forces 2-column sizing instead of being treated as
-  // a lone "solo" tile that fills the whole stage.
-  const mobileGalleryPaged = isMobileGallery && galleryAllCellKeys.length >= 4;
-  const galleryTotalPages = mobileGalleryPaged
-    ? Math.max(1, Math.ceil(galleryAllCellKeys.length / MOBILE_GALLERY_TILES_PER_PAGE))
-    : 1;
-  const [galleryPageIndex, setGalleryPageIndex] = useState(0);
-  // Clamps the committed page when the page count shrinks (participants leaving, or dropping out
-  // of paginated mode entirely) so navigating back to a page that no longer exists can't leave the
-  // gallery "stuck" on an empty page.
-  const safeGalleryPageIndex = Math.min(Math.max(galleryPageIndex, 0), galleryTotalPages - 1);
-  useEffect(() => {
-    if (safeGalleryPageIndex !== galleryPageIndex) setGalleryPageIndex(safeGalleryPageIndex);
-  }, [safeGalleryPageIndex, galleryPageIndex]);
-  const galleryPageStart = safeGalleryPageIndex * MOBILE_GALLERY_TILES_PER_PAGE;
-  const galleryCellKeys = mobileGalleryPaged
-    ? galleryAllCellKeys.slice(galleryPageStart, galleryPageStart + MOBILE_GALLERY_TILES_PER_PAGE)
-    : galleryAllCellKeys;
-
-  // Swipe left -> next page, swipe right -> previous page. No wraparound: there's no existing
-  // wraparound convention anywhere else in this app (checked), so the first/last page simply
-  // clamps. A swipe is only recognised once it clearly exceeds both a minimum distance and the
-  // vertical movement, so an ordinary tap/double-tap on a tile is unaffected; there is no existing
-  // pinch or other swipe gesture anywhere in this app's mobile UI to conflict with (checked), so
-  // this is a small dependency-free touch handler rather than reusing an existing mechanism.
-  const gallerySwipeStartRef = useRef<{ x: number; y: number } | null>(null);
-  const onGalleryTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    if (!mobileGalleryPaged || galleryTotalPages <= 1) return;
-    const touch = event.touches[0];
-
-    gallerySwipeStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
-  }, [mobileGalleryPaged, galleryTotalPages]);
-  const onGalleryTouchEnd = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const start = gallerySwipeStartRef.current;
-
-    gallerySwipeStartRef.current = null;
-    if (!start || !mobileGalleryPaged || galleryTotalPages <= 1) return;
-    const touch = event.changedTouches[0];
-
-    if (!touch) return;
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-
-    if (Math.abs(dx) < GALLERY_SWIPE_MIN_DISTANCE_PX || Math.abs(dx) < Math.abs(dy)) return;
-    setGalleryPageIndex((page) => Math.min(Math.max(dx < 0 ? page + 1 : page - 1, 0), galleryTotalPages - 1));
-  }, [mobileGalleryPaged, galleryTotalPages]);
-
-  const GALLERY_GAP = 12;
-  const galleryLayout = useStableMeetingLayout({
-    participantCount: galleryCellKeys.length,
-    // Measured from the stage, the exact area the cells are placed in. Zero until the first measurement.
-    width: Math.max(1, galleryStageSize.width),
-    height: Math.max(1, galleryStageSize.height),
-    mode: 'gallery',
-    sidePanelOpen: Boolean(activePanel),
-    gap: GALLERY_GAP,
-    forceColumns: mobileGalleryPaged ? 2 : undefined,
-  });
-  const galleryMeasured = galleryStageSize.width > 0 && galleryStageSize.height > 0;
-  const galleryPositions = calculateCellPositions(
-    galleryCellKeys.length, galleryLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
-  );
-  const galleryStructureKey = `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`;
-
-  // Only an intentional structure change animates. Ordinary size updates and unrelated renders leave running
-  // animations alone. Only animations this effect started are cancelled, never all of a card's animations.
-  const galleryFramesRef = useRef<Map<string, GalleryFrame>>(new Map());
-  const galleryStructureRef = useRef('');
-  const galleryAnimationsRef = useRef<Map<string, Animation>>(new Map());
-  useLayoutEffect(() => {
-    const animations = galleryAnimationsRef.current;
-    const cancelAnimation = (key: string) => {
-      animations.get(key)?.cancel();
-      animations.delete(key);
-    };
-    const stage = galleryStageRef.current;
-
-    if (!stage) {
-      animations.forEach((_, key) => cancelAnimation(key));
-      galleryFramesRef.current = new Map();
-      galleryStructureRef.current = '';
-
-      return;
-    }
-
-    const frames = new Map<string, GalleryFrame>();
-
-    galleryCellKeys.forEach((key, index) => {
-      frames.set(key, {
-        ...galleryPositions[index],
-        width: galleryLayout.cardWidth,
-        height: galleryLayout.cardHeight,
-      });
-    });
-
-    const previousFrames = galleryFramesRef.current;
-    const structureChanged = galleryStructureRef.current !== '' && galleryStructureRef.current !== galleryStructureKey;
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-
-    if (structureChanged) {
-      stage.querySelectorAll<HTMLElement>('[data-gallery-cell]').forEach((node) => {
-        const key = node.dataset.galleryCell ?? '';
-        const from = previousFrames.get(key);
-        const to = frames.get(key);
-        // Read where the cell is visibly drawn before cancelling, so an interrupted slide continues from its
-        // current place rather than snapping to a stale one.
-        const visible = from ? readVisualFrame(node, from) : null;
-
-        cancelAnimation(key);
-        if (!visible || !to || reduceMotion) return;
-
-        const animation = animateGalleryCell(node, visible, to);
-
-        if (!animation) return;
-        animations.set(key, animation);
-        const forget = () => {
-          if (animations.get(key) === animation) animations.delete(key);
-        };
-
-        animation.addEventListener('finish', forget);
-        animation.addEventListener('cancel', forget);
-      });
-    }
-
-    // Cells that left the gallery stop animating.
-    animations.forEach((_, key) => {
-      if (!frames.has(key)) cancelAnimation(key);
-    });
-
-    galleryFramesRef.current = frames;
-    galleryStructureRef.current = galleryStructureKey;
-  });
-  useEffect(() => () => {
-    galleryAnimationsRef.current.forEach((animation) => animation.cancel());
-    galleryAnimationsRef.current.clear();
-  }, []);
 
   if (hasJoined) {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
@@ -4782,7 +3733,8 @@ export function MeetingRoomPage() {
              no toolbar clearance at all for the gallery. .tw-toolbar keeps its desktop size here
              (72px height + 16px bottom offset = 88px footprint; this isn't overridden for landscape
              phones), so the padding below uses that footprint plus a little breathing room, not the
-             portrait block's 60px-toolbar-sized 84px value. */
+             portrait block's 60px-toolbar-sized 84px value. This selector must stay in lockstep with
+             MOBILE_GALLERY_MEDIA_QUERY in components/meeting/ParticipantGallery.tsx. */
           @media (max-width: 1024px) and (pointer: coarse) and (orientation: landscape) {
             .tw-main { padding: 2px 6px 96px !important; }
             .tw-grid { overflow: hidden !important; }
@@ -4897,45 +3849,7 @@ export function MeetingRoomPage() {
           ))}
         </div>
 
-        {recordingToast && (
-          <div
-            style={{
-              position: 'fixed',
-              top: '56px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              backgroundColor: '#202124',
-              border: recording ? '1px solid #EA4335' : '1px solid #34A853',
-              borderRadius: '24px',
-              padding: '8px 18px',
-              color: '#FFFFFF',
-              fontSize: '13px',
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
-              zIndex: 400,
-              pointerEvents: 'none',
-              animation: 'slideInRight 0.2s ease',
-            }}
-          >
-            {recording ? (
-              <div
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: '#EA4335',
-                  animation: 'pulse 1.2s infinite',
-                }}
-              />
-            ) : (
-              <Check size={16} color="#34A853" />
-            )}
-            <span>{recordingToast}</span>
-          </div>
-        )}
+        <RecordingToast recording={recording} recordingToast={recordingToast} />
 
         {/* 1. SLIM TOP INFORMATION AREA (Left: Logo + Time + Room Code + Info / Right: Participant Pill) */}
         <div
@@ -5017,33 +3931,7 @@ export function MeetingRoomPage() {
 
             <MeetingEndCountdown expiresAt={effectiveExpiresAt} />
 
-            {/* Active Recording Pill Badge (Strictly decoupled from clock time) */}
-            {recording && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  backgroundColor: 'rgba(234, 67, 53, 0.15)',
-                  border: '1px solid rgba(234, 67, 53, 0.4)',
-                  padding: '3px 8px',
-                  borderRadius: '12px',
-                }}
-              >
-                <div
-                  style={{
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    backgroundColor: '#EA4335',
-                    animation: 'pulse 1.5s infinite',
-                  }}
-                />
-                <span style={{ fontSize: '11px', fontWeight: 600, color: '#EA4335', letterSpacing: '0.4px' }}>
-                  REC <ElapsedClock startedAt={recordingStartedAt} /> • Recording: on
-                </span>
-              </div>
-            )}
+            <RecordingPillBadge recording={recording} recordingStartedAt={recordingStartedAt} />
           </div>
 
           {/* Top-Right: Participant Indicator Pill with Pin */}
@@ -5194,6 +4082,36 @@ export function MeetingRoomPage() {
                   justifyContent: 'center',
                 }}
               >
+                {/* Only shown in full-view mode (the 's' shortcut) -- the in-app state has no
+                    native Esc-key affordance the way real browser fullscreen does, so without
+                    this there would be no visible way back to the normal layout. */}
+                {screenShareFullView && (
+                  <button
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); setScreenShareFullView(false); }}
+                    title="Exit full-screen share view (S)"
+                    style={{
+                      position: 'absolute',
+                      top: '16px',
+                      right: '16px',
+                      zIndex: 5,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 14px',
+                      borderRadius: '20px',
+                      border: '1px solid rgba(255, 255, 255, 0.16)',
+                      backgroundColor: 'rgba(32, 33, 36, 0.76)',
+                      backdropFilter: 'blur(6px)',
+                      color: '#E8EAED',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <X size={14} /> Exit full view
+                  </button>
+                )}
                 {primaryShare?.kind === 'local' ? (
                   <video
                     ref={presentationVideoRef}
@@ -5301,12 +4219,17 @@ export function MeetingRoomPage() {
                 </div>
               </div>
 
-              {/* Side People Box: ALWAYS placed on the RIGHT (Google Meet Layout) */}
+              {/* Side People Box: ALWAYS placed on the RIGHT (Google Meet Layout), unless
+                  screenShareFullView (the 's' shortcut) is on -- then it's collapsed out of the
+                  layout entirely (display: none, not unmounted) so the primary share's flex: 1
+                  naturally expands to the full stage width/height with nothing else on screen.
+                  Conditional styling only, not a conditional render, to avoid any risk of
+                  disturbing this div's own closing-tag pairing in this large render block. */}
               <div
                 style={{
-                  width: '240px',
-                  minWidth: '240px',
-                  display: 'flex',
+                  width: screenShareFullView ? '0px' : '240px',
+                  minWidth: screenShareFullView ? '0px' : '240px',
+                  display: screenShareFullView ? 'none' : 'flex',
                   flexDirection: 'column',
                   gap: '12px',
                   overflowY: 'auto',
@@ -6091,120 +5014,25 @@ export function MeetingRoomPage() {
               })()}
             </div>
           ) : (
-            /* Multi-Participant Responsive Grid. The calculated structure is the only authority: each card is placed
-               at its calculated position, so CSS cannot wrap cards into a different structure. */
-            <div
-              className="tw-grid"
-              data-count={galleryCellKeys.length}
-              data-gallery-layout={`${galleryLayout.columns}x${galleryLayout.rows}`}
-              style={{
-                width: '100%',
-                flex: 1,
-                maxWidth: activePanel ? 'calc(100% - 380px)' : '100%',
-                height: '100%',
-                maxHeight: '100%',
-                minHeight: 0,
-                padding: '8px 12px 16px',
-                boxSizing: 'border-box',
-                display: 'flex',
-                overflow: 'hidden',
-                // Keep vertical panning and pinch zoom native; a deliberate horizontal drag is
-                // handled by the pager without preventing the underlying touch events.
-                touchAction: mobileGalleryPaged && galleryTotalPages > 1 ? 'pan-y pinch-zoom' : undefined,
-              }}
-              onTouchStart={onGalleryTouchStart}
-              onTouchEnd={onGalleryTouchEnd}
-            >
-              <div
-                ref={setGalleryStageNode}
-                data-gallery-stage
-                style={{ position: 'relative', flex: 1, minWidth: 0, minHeight: 0, height: '100%', overflow: 'hidden' }}
-              >
-                {galleryMeasured && (() => {
-                  // Same order as galleryCellKeys. Each cell is a stable keyed wrapper; the card fills it.
-                  const cells = [
-                    ...allShares.map((share) => ({
-                      key: `share:${share.key}`,
-                      node: <ScreenShareTile stream={share.stream} label={share.name} />,
-                    })),
-                    {
-                      key: 'local',
-                      node: (
-                        <MeetingParticipantCard
-                          participantId="local"
-                          name={`${displayName || 'You'} (You)`}
-                          avatarUrl={localAvatarUrl}
-                          stream={inCallStream}
-                          videoEnabled={inCallVideo}
-                          muted={Boolean(inCallMuted)}
-                          raisedHand={isHandRaised}
-                          theme={localTheme}
-                          speaking={isSpeaking}
-                          mirrored
-                          style={{ width: '100%', height: '100%', maxWidth: '100%' }}
-                          onVideoElement={setInCallVideoNode}
-                          isPinned={pinnedParticipantId === 'local'}
-                          onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
-                          onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
-                        />
-                      ),
-                    },
-                    ...remoteParticipants.map((remote, idx) => ({
-                      key: `remote:${remote.id || idx}`,
-                      node: (
-                        <MeetingParticipantCard
-                          participantId={remote.id}
-                          name={remote.name}
-                          avatarUrl={remote.avatarUrl}
-                          stream={remote.stream}
-                          videoEnabled={remote.video}
-                          muted={remote.muted}
-                          raisedHand={remote.raisedHand}
-                          theme={getParticipantColorTheme(remote.name, idx + 1)}
-                          speaking={isSpeakingNow(remote.id)}
-                          style={{ width: '100%', height: '100%', maxWidth: '100%' }}
-                          isPinned={pinnedParticipantId === remote.id}
-                          onPin={() => {
-                            const isPinned = pinnedParticipantId === remote.id;
-                            setPinnedManually(isPinned ? null : remote.id);
-                            setTileViewEnabled(isPinned);
-                          }}
-                          onDoubleClick={() => {
-                            const isPinned = pinnedParticipantId === remote.id;
-                            setPinnedManually(isPinned ? null : remote.id);
-                            setTileViewEnabled(isPinned);
-                          }}
-                          onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
-                        />
-                      ),
-                    })),
-                  ];
-
-                  // Only mount this page's cells. Filtering before assigning positions is vital:
-                  // positions are page-relative and videos on another page must not consume a
-                  // slot or be mounted off-screen. The participant key itself stays stable, so
-                  // a re-render of the same page preserves its existing video element.
-                  const visibleCells = cells.filter((cell) => galleryCellKeys.includes(cell.key));
-
-                  return visibleCells.map((cell, index) => (
-                    <div
-                      key={cell.key}
-                      data-gallery-cell={cell.key}
-                      style={{
-                        position: 'absolute',
-                        left: `${galleryPositions[index].left}px`,
-                        top: `${galleryPositions[index].top}px`,
-                        width: `${galleryLayout.cardWidth}px`,
-                        height: `${galleryLayout.cardHeight}px`,
-                        transformOrigin: 'top left',
-                      }}
-                    >
-                      {cell.node}
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
+            <ParticipantGallery
+              allShares={allShares}
+              remoteParticipants={remoteParticipants}
+              displayName={displayName}
+              localAvatarUrl={localAvatarUrl}
+              inCallStream={inCallStream}
+              inCallVideo={inCallVideo}
+              inCallMuted={inCallMuted}
+              isHandRaised={isHandRaised}
+              localTheme={localTheme}
+              isSpeaking={isSpeaking}
+              setInCallVideoNode={setInCallVideoNode}
+              pinnedParticipantId={pinnedParticipantId}
+              setPinnedManually={setPinnedManually}
+              setTileViewEnabled={setTileViewEnabled}
+              isModerator={isModerator}
+              handleRemoteAudioControl={handleRemoteAudioControl}
+              activePanel={activePanel}
+            />
           ))}
 
           {/* ── Global Live Captions Overlay (works in ALL layouts) ── */}
@@ -6397,150 +5225,15 @@ export function MeetingRoomPage() {
                      tab's chat (sender on the right, receiver on the left), so a call started
                      from a saved conversation looks identical in both places. */}
                 {activePanel === 'chat' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
-                    <div className="tw-chat-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>
-                      {chatMessages.map((msg) => {
-                        // senderId alone can't tell "is this me" reliably -- it's a fresh, random
-                        // Jitsi session id every time you (re)join, so a message loaded from
-                        // saved conversation history (sent in an earlier session) would never
-                        // match the CURRENT session's id even if it's the same person. Falling
-                        // back to a name match catches that case; a live message from this same
-                        // session still matches on id as before.
-                        const isMine = msg.senderId === sessionIdRef.current
-                          || (msg.sender || '').trim().toLowerCase() === (displayName || 'You').trim().toLowerCase();
-
-                        return (
-                        <div
-                          key={msg.id}
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: isMine ? 'flex-end' : 'flex-start',
-                            gap: '3px',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: isMine ? 'row-reverse' : 'row' }}>
-                            <span style={{ fontSize: '12px', fontWeight: 600, color: isMine ? '#A8DAB5' : '#8AB4F8' }}>{msg.sender}</span>
-                            <span style={{ fontSize: '11px', color: '#9AA0A6' }}>{msg.time}</span>
-                          </div>
-                          <div
-                            style={{
-                              maxWidth: '82%',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: isMine ? 'flex-end' : 'flex-start',
-                              gap: '6px',
-                              padding: msg.imageUrl || msg.text ? '8px' : '0',
-                              borderRadius: '12px',
-                              backgroundColor: isMine ? '#075E54' : '#263238',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                            }}
-                          >
-                            {msg.imageUrl && (
-                              <div style={{ position: 'relative', display: 'inline-block' }}>
-                                <a href={msg.uploading ? undefined : resolveChatImageUrl(msg.imageUrl)} target="_blank" rel="noreferrer">
-                                  <img
-                                    src={resolveChatImageUrl(msg.imageUrl)}
-                                    alt="Shared attachment"
-                                    style={{
-                                      maxWidth: '220px',
-                                      maxHeight: '220px',
-                                      borderRadius: '8px',
-                                      display: 'block',
-                                      opacity: msg.uploading ? 0.65 : 1,
-                                    }}
-                                  />
-                                </a>
-                                {msg.uploading && (
-                                  <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
-                                    Sending...
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                            {msg.text && (
-                              <div style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
-                                {msg.text}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        );
-                      })}
-                    </div>
-                    {chatImageError && (
-                      <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatImageError}</div>
-                    )}
-                    <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                      {meetingInfo?.persisted && (
-                        <>
-                          <input
-                            ref={chatImageInputRef}
-                            type="file"
-                            accept="image/png,image/jpeg,image/gif,image/webp"
-                            style={{ display: 'none' }}
-                            onChange={(e) => void handleAttachChatImage(e.target.files?.[0])}
-                          />
-                          <button
-                            type="button"
-                            title="Attach an image (max 3MB)"
-                            disabled={chatImageUploading}
-                            onClick={() => chatImageInputRef.current?.click()}
-                            style={{
-                              backgroundColor: 'transparent',
-                              color: '#9AA0A6',
-                              border: '1px solid rgba(255, 255, 255, 0.12)',
-                              borderRadius: '50%',
-                              width: '36px',
-                              height: '36px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              cursor: chatImageUploading ? 'wait' : 'pointer',
-                              flexShrink: 0,
-                            }}
-                          >
-                            <Paperclip size={16} />
-                          </button>
-                        </>
-                      )}
-                      <input
-                        type="text"
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        placeholder="Send a message..."
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          backgroundColor: '#2D2E30',
-                          border: '1px solid rgba(255, 255, 255, 0.12)',
-                          borderRadius: '20px',
-                          padding: '8px 14px',
-                          color: '#FFFFFF',
-                          fontSize: '13px',
-                          outline: 'none',
-                        }}
-                      />
-                      <button
-                        type="submit"
-                        style={{
-                          backgroundColor: '#1A73E8',
-                          color: '#fff',
-                          border: 'none',
-                          borderRadius: '50%',
-                          width: '36px',
-                          height: '36px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          flexShrink: 0,
-                        }}
-                      >
-                        <Send size={16} />
-                      </button>
-                    </form>
-                  </div>
+                  <ChatPanel
+                    chatMessages={chatMessages}
+                    setChatMessages={setChatMessages}
+                    displayName={displayName}
+                    sessionId={sessionIdRef.current}
+                    roomId={roomId}
+                    attachmentsEnabled={Boolean(meetingInfo?.persisted)}
+                    postRoomSignal={postRoomSignal}
+                  />
                 )}
 
                 {/* 3. People Panel */}
@@ -6900,34 +5593,12 @@ export function MeetingRoomPage() {
 
                 {activePanel === 'activities' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {/* Recording control is host/moderator-only. Non-moderators still see the
-                        red "recording in progress" pill badge and dot elsewhere in the UI --
-                        this is just the start/stop control itself. */}
-                    {isModerator && (
-                      <div
-                        onClick={handleToggleRecording}
-                        style={{
-                          padding: '14px',
-                          backgroundColor: 'rgba(255,255,255,0.04)',
-                          borderRadius: '14px',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '12px',
-                          border: recording ? '1px solid #EA4335' : '1px solid rgba(255,255,255,0.08)',
-                        }}
-                      >
-                        <Radio size={20} color={recording ? '#EA4335' : '#E8EAED'} />
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '14px', fontWeight: 600, color: '#E8EAED' }}>
-                            {recording ? 'Recording in progress' : 'Record meeting'}
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#9AA0A6' }}>
-                            {recording ? `Recording: $<ElapsedClock startedAt={recordingStartedAt} />` : 'Save session to your workspace cloud'}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    <RecordingActivitiesPanelEntry
+                      isModerator={isModerator}
+                      recording={recording}
+                      recordingStartedAt={recordingStartedAt}
+                      onToggle={handleToggleRecording}
+                    />
 
                     <div
                       onClick={() => setShowSettingsModal(true)}

@@ -9,6 +9,7 @@ import { generateJitsiToken } from '../auth/jitsi-token';
 import { jitsiConfig } from '../config/jitsi';
 import { notifyUser } from '../notifications/createNotification';
 import { mayManageResource } from '../middleware/ownership';
+import { SimpleCache } from '../lib/simpleCache';
 
 /**
  * Host-only lobby/meeting-control actions (admit, deny, announce, end-for-everyone, list
@@ -95,6 +96,7 @@ export async function knockLobbyHandler(req: AuthenticatedRequest, res: Response
       if (meeting) {
         meeting.hostJoined = true;
         await meeting.save({ validateBeforeSave: false });
+        invalidateLiveStatusCache(room);
       }
       const creds = generateCredentials(room, identity, true, meeting?.companyId ? String(meeting.companyId) : null);
       res.json({
@@ -393,6 +395,21 @@ export async function announceLobbyHandler(req: AuthenticatedRequest, res: Respo
 
 const endedMeetingSlugs = new Set<string>();
 
+// Pilot cache (see src/lib/simpleCache.ts): GET live-status is polled every 10s by every
+// participant in a room for the whole call. Keyed by roomSlug so all of a room's participants
+// polling within the same 5s window share one real DB read instead of one each. Invalidated at
+// every write site that already touches endedMeetingSlugs above (same reasoning -- this cache
+// additionally covers hostJoined/cancelledAt, which that Set does not), plus cancelMeetingHandler
+// in meetings.ts.
+const liveStatusCache = new SimpleCache<{ live: boolean; ended: boolean; cancelled: boolean; hostJoined: boolean }>(5000);
+const liveStatusCacheEnabled = () => process.env.CACHE_LIVE_STATUS !== 'false';
+
+/** Call at every write site that changes a meeting's endedAt/cancelledAt/hostJoined, so a cached
+ * live-status answer is never served stale past that write. */
+export function invalidateLiveStatusCache(roomSlug: string): void {
+  liveStatusCache.delete(roomSlug.toLowerCase());
+}
+
 /**
  * Clears the "ended" state (both the in-memory flag the live-status poll checks, and the
  * persisted endedAt on the Meeting document) for a meeting that has a saved conversation and is
@@ -403,6 +420,7 @@ const endedMeetingSlugs = new Set<string>();
  */
 export async function reactivateMeetingForConversation(roomSlug: string): Promise<void> {
   endedMeetingSlugs.delete(roomSlug);
+  invalidateLiveStatusCache(roomSlug);
   await Meeting.updateOne({ roomSlug }, { $set: { endedAt: null } });
 }
 
@@ -424,6 +442,7 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
       return;
     }
     endedMeetingSlugs.add(room);
+    invalidateLiveStatusCache(room);
 
     meeting.endedAt = new Date();
     meeting.waitingQueue = [];
@@ -470,26 +489,44 @@ export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, re
 export async function getLiveMeetingStatusHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
+    const cacheOn = liveStatusCacheEnabled();
+
+    if (cacheOn) {
+      const cached = liveStatusCache.get(room);
+
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+    }
+
     if (endedMeetingSlugs.has(room)) {
-      res.json({
+      const result = {
         live: false,
         ended: true,
         cancelled: false,
         hostJoined: false,
-      });
+      };
+
+      if (cacheOn) liveStatusCache.set(room, result);
+      res.json(result);
       return;
     }
 
     const meeting = await Meeting.findOne({ roomSlug: room });
+
     if (meeting?.endedAt) {
       endedMeetingSlugs.add(room);
     }
-    res.json({
+    const result = {
       live: !!meeting && !meeting.endedAt && !meeting.cancelledAt,
       ended: !!meeting?.endedAt,
       cancelled: !!meeting?.cancelledAt,
       hostJoined: !!meeting?.hostJoined,
-    });
+    };
+
+    if (cacheOn) liveStatusCache.set(room, result);
+    res.json(result);
   } catch (err: any) {
     console.error('[WaitingRoom] Live status error:', err.message);
     res.status(500).json({ error: 'Failed to fetch live meeting status' });

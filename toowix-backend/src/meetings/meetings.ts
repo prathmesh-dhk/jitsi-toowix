@@ -11,9 +11,33 @@ import { Company } from '../models/Company';
 import { notifyCompany } from '../notifications/createNotification';
 import { sendEmailAsync } from '../email/sender';
 import { emailConfig } from '../config/email';
+import { SimpleCache } from '../lib/simpleCache';
+import { invalidateLiveStatusCache } from './waitingRoom';
 
 const RECURRENCE_FREQUENCIES = ['DAILY', 'WEEKLY', 'MONTHLY'] as const;
 const MAX_RECURRING_OCCURRENCES = 52; // safety cap so a bad "until" date can't generate thousands of rows
+
+// Pilot cache (see src/lib/simpleCache.ts): GET /api/meetings is company-wide (every teammate
+// sees the same list), so caching it once per company instead of per request is a real win --
+// both on DB reads (Meeting.find + Recording.find) and on CPU (the enrichment loop below), not
+// just DB load. Keyed by companyId, or by the user's own id for a standalone user with no
+// company (matching listMeetingsHandler's own query scoping). Passcode visibility is NOT part of
+// the cached payload -- see the long comment at its one call site in listMeetingsHandler.
+interface CachedMeetingsPayload {
+  meetings: any[];
+  passcodeSource: Map<string, { passcode: string; cancelledAt: unknown; companyId: unknown; createdBy: unknown; type: unknown; invitees: unknown }>;
+}
+const meetingsListCache = new SimpleCache<CachedMeetingsPayload>(15000);
+const meetingsListCacheEnabled = () => process.env.CACHE_MEETINGS_LIST !== 'false';
+const meetingsListCacheKey = (user: { companyId?: unknown; _id: unknown }) =>
+  user.companyId ? `company:${user.companyId}` : `user:${user._id}`;
+
+/** Call at every write site that changes what a company's (or standalone user's) meeting list
+ * should show -- create, update, cancel, delete. */
+export function invalidateMeetingsListCache(scope: { companyId?: unknown; createdBy?: unknown }): void {
+  if (scope.companyId) meetingsListCache.delete(`company:${scope.companyId}`);
+  else if (scope.createdBy) meetingsListCache.delete(`user:${scope.createdBy}`);
+}
 
 function addRecurrenceStep(date: Date, frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY'): Date {
   const next = new Date(date);
@@ -250,6 +274,7 @@ export const createMeetingHandler = async (req: AuthenticatedRequest, res: Respo
         .catch((err) => console.error('[Meetings] Failed to email company members about new meeting:', err.message));
     }
 
+    invalidateMeetingsListCache({ companyId: meeting.companyId, createdBy: meeting.createdBy });
     res.status(201).json({ meeting: await meeting.populate('createdBy', 'fullName email avatarUrl') });
   } catch (error: any) {
     if (error.code === 11000) {
@@ -378,53 +403,90 @@ export const listMeetingsHandler = async (req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+    // Company lookup stays outside the cache: mayAttend (below) needs the company's CURRENT
+    // status for every request regardless of cache hit/miss, since it gates passcode visibility.
+    // This is one cheap indexed findById, not the expensive part of this handler -- the
+    // Meeting.find + Recording.find pair and the enrichment loop below are.
     const company = user.companyId ? await Company.findById(user.companyId) : null;
-    const meetingDocuments = await Meeting.find(filter)
-      .populate('createdBy', 'fullName email avatarUrl')
-      .sort({ createdAt: -1 })
-      .limit(200);
+    const cacheOn = meetingsListCacheEnabled();
+    const cacheKey = meetingsListCacheKey(user);
+    let payload = cacheOn ? meetingsListCache.get(cacheKey) : undefined;
 
-    const meetingIds = meetingDocuments.map((m) => m._id);
-    const roomSlugs = meetingDocuments.map((m) => m.roomSlug).filter(Boolean);
-    const names = meetingDocuments.map((m) => m.name).filter(Boolean);
+    if (!payload) {
+      const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+      const meetingDocuments = await Meeting.find(filter)
+        .populate('createdBy', 'fullName email avatarUrl')
+        .sort({ createdAt: -1 })
+        .limit(200);
 
-    const recordings = await Recording.find({
-      $or: [
-        { meetingId: { $in: meetingIds } },
-        { recordingSessionId: { $in: roomSlugs } },
-        { name: { $in: names } },
-      ],
-    }).sort({ recordedAt: -1 });
+      const meetingIds = meetingDocuments.map((m) => m._id);
+      const roomSlugs = meetingDocuments.map((m) => m.roomSlug).filter(Boolean);
+      const names = meetingDocuments.map((m) => m.name).filter(Boolean);
 
-    const recordingByMeeting = new Map<string, any>();
-    for (const rec of recordings) {
-      if (rec.meetingId && !recordingByMeeting.has(String(rec.meetingId))) {
-        recordingByMeeting.set(String(rec.meetingId), rec);
+      const recordings = await Recording.find({
+        $or: [
+          { meetingId: { $in: meetingIds } },
+          { recordingSessionId: { $in: roomSlugs } },
+          { name: { $in: names } },
+        ],
+      }).sort({ recordedAt: -1 });
+
+      const recordingByMeeting = new Map<string, any>();
+      for (const rec of recordings) {
+        if (rec.meetingId && !recordingByMeeting.has(String(rec.meetingId))) {
+          recordingByMeeting.set(String(rec.meetingId), rec);
+        }
+        if (rec.recordingSessionId && !recordingByMeeting.has(rec.recordingSessionId)) {
+          recordingByMeeting.set(rec.recordingSessionId, rec);
+        }
+        if (rec.name && !recordingByMeeting.has(rec.name)) {
+          recordingByMeeting.set(rec.name, rec);
+        }
       }
-      if (rec.recordingSessionId && !recordingByMeeting.has(rec.recordingSessionId)) {
-        recordingByMeeting.set(rec.recordingSessionId, rec);
-      }
-      if (rec.name && !recordingByMeeting.has(rec.name)) {
-        recordingByMeeting.set(rec.name, rec);
-      }
-    }
 
-    const meetings = meetingDocuments.map((meeting) => {
-      const recording =
-        recordingByMeeting.get(String(meeting._id)) ||
-        recordingByMeeting.get(meeting.roomSlug) ||
-        recordingByMeeting.get(meeting.name);
-      const enriched = enrichMeetingWithResources(meeting, recording);
       // The list is company-wide (every teammate sees every company meeting so they can find
       // it), but a plaintext passcode must only go to people who could actually attend this
       // specific meeting -- same rule the single-meeting GET/:id and room-admission endpoints
       // already enforce via mayAttend. Without this, any company member could read the
       // passcode of a Private meeting they were never invited to straight off the list.
-      if (enriched.passcode && !mayAttend(meeting, user, company)) {
-        delete enriched.passcode;
-      }
-      return enriched;
+      //
+      // Passcode visibility is per-REQUESTING-USER (mayAttend checks the Private invitee list),
+      // not per-company, so it can never be baked into a cache entry shared by every user of a
+      // company -- that would leak one user's visible passcode to a teammate who shouldn't see
+      // it. Every passcode is stripped unconditionally before caching; the small amount of raw
+      // data mayAttend needs to decide re-inclusion is cached alongside (passcodeSource, keyed
+      // by meeting id) and re-evaluated per request below, on both a cache hit and a miss -- no
+      // extra DB round trip, since everything mayAttend needs is already in memory.
+      const passcodeSource = new Map<string, { passcode: string; cancelledAt: unknown; companyId: unknown; createdBy: unknown; type: unknown; invitees: unknown }>();
+      const meetings = meetingDocuments.map((meeting) => {
+        const recording =
+          recordingByMeeting.get(String(meeting._id)) ||
+          recordingByMeeting.get(meeting.roomSlug) ||
+          recordingByMeeting.get(meeting.name);
+        const enriched = enrichMeetingWithResources(meeting, recording);
+
+        if (enriched.passcode) {
+          passcodeSource.set(String(meeting._id), {
+            passcode: enriched.passcode,
+            cancelledAt: meeting.cancelledAt,
+            companyId: meeting.companyId,
+            createdBy: meeting.createdBy,
+            type: meeting.type,
+            invitees: meeting.invitees,
+          });
+          delete enriched.passcode;
+        }
+        return enriched;
+      });
+
+      payload = { meetings, passcodeSource };
+      if (cacheOn) meetingsListCache.set(cacheKey, payload);
+    }
+
+    const meetings = payload.meetings.map((enriched) => {
+      const source = payload!.passcodeSource.get(String(enriched._id));
+
+      return source && mayAttend(source, user, company) ? { ...enriched, passcode: source.passcode } : enriched;
     });
 
     res.json({ meetings });
@@ -698,6 +760,7 @@ export const updateMeetingHandler = async (req: AuthenticatedRequest, res: Respo
       );
     }
 
+    invalidateMeetingsListCache({ companyId: meeting.companyId, createdBy: meeting.createdBy });
     res.json({ meeting: await meeting.populate('createdBy', 'fullName email avatarUrl') });
   } catch (error: any) {
     console.error('[Meetings] Error updating meeting:', error.message);
@@ -749,6 +812,8 @@ export const cancelMeetingHandler = async (req: AuthenticatedRequest, res: Respo
     // document, not just this in-memory reference.
     const responseMeeting = await meeting.populate('createdBy', 'fullName email avatarUrl');
 
+    invalidateMeetingsListCache({ companyId: meeting.companyId, createdBy: meeting.createdBy });
+    invalidateLiveStatusCache(meeting.roomSlug);
     await meeting.deleteOne();
 
     res.json({ meeting: responseMeeting });
@@ -782,6 +847,7 @@ export const deleteMeetingHandler = async (req: AuthenticatedRequest, res: Respo
       return;
     }
 
+    invalidateMeetingsListCache({ companyId: meeting.companyId, createdBy: meeting.createdBy });
     await meeting.deleteOne();
     res.json({ message: 'Meeting deleted' });
   } catch (error: any) {
