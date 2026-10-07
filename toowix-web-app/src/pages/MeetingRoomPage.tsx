@@ -33,7 +33,6 @@ import {
   ShieldCheck,
   Info,
   Pin,
-  ChevronUp,
   ScreenShare,
   Smile,
   Subtitles,
@@ -57,6 +56,8 @@ import {
 import { fetchChatHistory, resolveChatImageUrl } from '../lib/chatApi';
 import { ChatPanel } from '../components/meeting/ChatPanel';
 import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } from '../components/meeting/RecordingControls';
+import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
+import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
 import { getNetworkStatusLabel } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
@@ -84,7 +85,6 @@ import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
 import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
-import { MicLevelIcon } from '../components/MicLevelIcon';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
@@ -399,10 +399,6 @@ export function MeetingRoomPage() {
   const [showVideoMenu, setShowVideoMenu] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
   const [floatingEmojis, setFloatingEmojis] = useState<Array<{ id: number; emoji: string; left: number }>>([]);
-  const [captionsEnabled, setCaptionsEnabled] = useState(false);
-  const [captionText, setCaptionText] = useState('');
-  const [captionInterim, setCaptionInterim] = useState('');
-  const speechRecognitionRef = useRef<any>(null);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [handRaisedToast, setHandRaisedToast] = useState<string | null>(null);
   const [pipHintToast, setPipHintToast] = useState<string | null>(null);
@@ -600,107 +596,7 @@ export function MeetingRoomPage() {
   useEffect(() => { pipIsHandRaisedRef.current = isHandRaised; }, [isHandRaised]);
   useEffect(() => { pipInCallVideoRef.current = inCallVideo; }, [inCallVideo]);
 
-  // ── Web Speech API live captions ─────────────────────────────────────────
-  useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!captionsEnabled) {
-      // Stop any active recognition session
-      if (speechRecognitionRef.current) {
-        try { speechRecognitionRef.current.stop(); } catch { }
-        speechRecognitionRef.current = null;
-      }
-      setCaptionText('');
-      setCaptionInterim('');
-      return;
-    }
-
-    if (!SpeechRecognition) {
-      setCaptionText('⚠️ Live captions are not supported in this browser. Please use Chrome or Edge.');
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.maxAlternatives = 1;
-
-    recognition.onresult = (event: any) => {
-      let interim = '';
-      let final = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          final += transcript + ' ';
-        } else {
-          interim += transcript;
-        }
-      }
-      if (final) {
-        setCaptionText((prev) => {
-          const combined = (prev + ' ' + final).trim();
-          // Keep only last ~200 chars so box stays concise
-          return combined.length > 200 ? combined.slice(combined.length - 200) : combined;
-        });
-      }
-      setCaptionInterim(interim);
-    };
-
-    let restartTimer: ReturnType<typeof setTimeout> | null = null;
-    let consecutiveRestartFailures = 0;
-
-    recognition.onerror = (event: any) => {
-      if (event.error === 'no-speech' || event.error === 'aborted') return; // ignore silence/manual stop
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setCaptionText('⚠️ Microphone access denied. Allow mic permission to use captions.');
-      } else if (event.error === 'network') {
-        // Chrome's built-in recognizer sends audio to a remote speech service -- this fires
-        // when that service can't be reached (offline, or a network/firewall blocking it),
-        // not a bug in this page. Surfacing it beats silently showing nothing forever.
-        setCaptionText('⚠️ Live captions need internet access to a speech service -- check your network/firewall.');
-      } else {
-        setCaptionText(`⚠️ Live captions stopped (${event.error}). Try turning captions off and on again.`);
-      }
-    };
-
-    recognition.onend = () => {
-      // Auto-restart so captions stay active as long as enabled. Restarting the SAME
-      // recognition instance synchronously inside onend is a known race (throws
-      // InvalidStateError because the browser hasn't fully torn it down yet) -- a short delay
-      // avoids that. If it keeps failing, stop retrying instead of failing silently forever.
-      if (!captionsEnabled || speechRecognitionRef.current !== recognition) {
-        return;
-      }
-      restartTimer = setTimeout(() => {
-        try {
-          recognition.start();
-          consecutiveRestartFailures = 0;
-        } catch (err) {
-          consecutiveRestartFailures += 1;
-          if (consecutiveRestartFailures >= 3) {
-            setCaptionText('⚠️ Live captions stopped unexpectedly. Turn captions off and on to retry.');
-          } else {
-            // eslint-disable-next-line no-console
-            console.warn('[Captions] restart failed, will retry:', err);
-          }
-        }
-      }, 300);
-    };
-
-    try {
-      recognition.start();
-      speechRecognitionRef.current = recognition;
-    } catch { }
-
-    return () => {
-      if (restartTimer) clearTimeout(restartTimer);
-      try { recognition.stop(); } catch { }
-      speechRecognitionRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captionsEnabled]);
+  const { captionsEnabled, toggleCaptions, captionText, captionInterim } = useCaptions();
 
   // Dev-only PiP diagnostics -- trigger source, lifecycle phase/kind/origin/requestId,
   // document visibility, active window/video identity, video readiness/track state, and
@@ -5036,49 +4932,7 @@ export function MeetingRoomPage() {
           ))}
 
           {/* ── Global Live Captions Overlay (works in ALL layouts) ── */}
-          {captionsEnabled && (
-            <div
-              style={{
-                position: 'fixed',
-                bottom: '108px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                backgroundColor: 'rgba(10, 10, 12, 0.90)',
-                backdropFilter: 'blur(12px)',
-                padding: '10px 24px',
-                borderRadius: '14px',
-                color: '#FFFFFF',
-                fontSize: '15px',
-                lineHeight: 1.6,
-                maxWidth: '70vw',
-                minWidth: '260px',
-                textAlign: 'center',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
-                zIndex: 300,
-                pointerEvents: 'none',
-                minHeight: '42px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {(captionText || captionInterim) ? (
-                <span>
-                  <span style={{ color: '#FFFFFF', fontWeight: 400 }}>{captionText}</span>
-                  {captionInterim && (
-                    <span style={{ color: 'rgba(255,255,255,0.45)', fontStyle: 'italic' }}>
-                      {' '}{captionInterim}
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>
-                  🎤 Listening… start speaking to see live captions
-                </span>
-              )}
-            </div>
-          )}
+          <CaptionsOverlay captionsEnabled={captionsEnabled} captionText={captionText} captionInterim={captionInterim} />
 
           {/* Smooth Side Panels (Resizes main participant stage without covering controls) */}
           {activePanel && (
@@ -5649,197 +5503,32 @@ export function MeetingRoomPage() {
         >
           {/* Button 1: Microphone with live input animation, and its own Device Menu (same
               pattern as the camera button right after it). */}
-          <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <button
-              onClick={() => {
-                setShowAudioMenu(!showAudioMenu);
-                setShowVideoMenu(false);
-              }}
-              title="Select microphone"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#E8EAED',
-                cursor: 'pointer',
-                padding: '4px 2px',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <ChevronUp size={16} />
-            </button>
-            <button
-              onClick={handleToggleInCallMic}
-              title={inCallMuted ? 'Turn on microphone (M)' : 'Turn off microphone (M)'}
-              style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                backgroundColor: inCallMuted ? '#3C4043' : '#3C4043',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-                transition: 'background-color 0.15s ease',
-              }}
-            >
-              {inCallMuted ? <MicOff size={20} color="#EA4335" /> : <MicLevelIcon size={22} color="#E8EAED" />}
-            </button>
-
-            {/* Audio Device Dropdown Menu */}
-            {showAudioMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '56px',
-                  left: 0,
-                  backgroundColor: '#2D2E30',
-                  borderRadius: '16px',
-                  padding: '8px',
-                  minWidth: '220px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  zIndex: 150,
-                }}
-              >
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
-                  Microphone
-                </div>
-                {media.devices.filter((d) => d.kind === 'audioinput').map((d) => (
-                  <button
-                    key={d.deviceId}
-                    onClick={() => handleSelectAudioDevice(d.deviceId)}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '8px 10px',
-                      background: audioId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
-                      color: '#E8EAED',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {d.label || `Microphone (${d.deviceId.slice(0, 5)})`}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <MicDeviceButton
+            inCallMuted={inCallMuted}
+            onToggleMic={handleToggleInCallMic}
+            showAudioMenu={showAudioMenu}
+            onOpenAudioMenu={() => {
+              setShowAudioMenu(!showAudioMenu);
+              setShowVideoMenu(false);
+            }}
+            audioDevices={media.devices}
+            audioId={audioId}
+            onSelectAudioDevice={handleSelectAudioDevice}
+          />
 
           {/* Button 2: Camera with Device Menu */}
-          <div style={{ display: 'flex', alignItems: 'center', position: 'relative' }}>
-            <button
-              onClick={() => {
-                setShowVideoMenu(!showVideoMenu);
-                setShowAudioMenu(false);
-              }}
-              title="Select camera"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#E8EAED',
-                cursor: 'pointer',
-                padding: '4px 2px',
-                borderRadius: '8px',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-            >
-              <ChevronUp size={16} />
-            </button>
-            <button
-              onClick={handleToggleInCallVideo}
-              title={inCallVideo ? 'Turn off camera (V)' : 'Turn on camera (V)'}
-              style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                backgroundColor: '#3C4043',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative',
-                transition: 'background-color 0.15s ease',
-              }}
-            >
-              {inCallVideo ? <Video size={20} color="#E8EAED" /> : <VideoOff size={20} color="#EA4335" />}
-              {!inCallVideo && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '2px',
-                    right: '2px',
-                    width: '14px',
-                    height: '14px',
-                    borderRadius: '50%',
-                    backgroundColor: '#FBBC04',
-                    color: '#202124',
-                    fontSize: '10px',
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  !
-                </div>
-              )}
-            </button>
-
-            {/* Video Device Dropdown Menu */}
-            {showVideoMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '56px',
-                  left: 0,
-                  backgroundColor: '#2D2E30',
-                  borderRadius: '16px',
-                  padding: '8px',
-                  minWidth: '220px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  zIndex: 150,
-                }}
-              >
-                <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
-                  Camera
-                </div>
-                {media.devices.filter((d) => d.kind === 'videoinput').map((d) => (
-                  <button
-                    key={d.deviceId}
-                    onClick={() => handleSelectVideoDevice(d.deviceId)}
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '8px 10px',
-                      background: videoId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
-                      color: '#E8EAED',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {d.label || `Camera (${d.deviceId.slice(0, 5)})`}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <CameraDeviceButton
+            inCallVideo={inCallVideo}
+            onToggleVideo={handleToggleInCallVideo}
+            showVideoMenu={showVideoMenu}
+            onOpenVideoMenu={() => {
+              setShowVideoMenu(!showVideoMenu);
+              setShowAudioMenu(false);
+            }}
+            videoDevices={media.devices}
+            videoId={videoId}
+            onSelectVideoDevice={handleSelectVideoDevice}
+          />
 
           {/* Button 3: Present / Screen Share */}
           <button
@@ -5924,24 +5613,7 @@ export function MeetingRoomPage() {
           </div>
 
           {/* Button 5: Captions */}
-          <button
-            onClick={() => setCaptionsEnabled(!captionsEnabled)}
-            title={captionsEnabled ? 'Turn off captions' : 'Turn on captions'}
-            style={{
-              width: '48px',
-              height: '48px',
-              borderRadius: '50%',
-              backgroundColor: captionsEnabled ? '#8AB4F8' : '#3C4043',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'background-color 0.15s ease',
-            }}
-          >
-            <Subtitles size={20} color={captionsEnabled ? '#202124' : '#E8EAED'} />
-          </button>
+          <CaptionsToggleButton captionsEnabled={captionsEnabled} onToggle={toggleCaptions} />
 
           {/* Button 6: Raise Hand */}
           <button
@@ -6029,7 +5701,7 @@ export function MeetingRoomPage() {
                     {isScreenSharing ? 'Stop presenting' : 'Present screen'}
                   </button>
                 )}
-                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setCaptionsEnabled(!captionsEnabled); }} style={menuButtonStyle(captionsEnabled)}>
+                <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); toggleCaptions(); }} style={menuButtonStyle(captionsEnabled)}>
                   <Subtitles size={16} />
                   {captionsEnabled ? 'Turn off captions' : 'Turn on captions'}
                 </button>

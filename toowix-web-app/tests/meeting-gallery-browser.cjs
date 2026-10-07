@@ -435,6 +435,77 @@ async function main() {
     results.chat = r;
   }
 
+  if (MODE === 'devicemenu') {
+    await setRemotes(1);
+    await setViewport(1280, 800); await settle();
+
+    const micChevron = "document.querySelector('button[title=\"Select microphone\"]')";
+    const camChevron = "document.querySelector('button[title=\"Select camera\"]')";
+
+    await evaluate(`${micChevron}.click()`);
+    await settle();
+    const micMenuOpenAfterClick = await evaluate('document.body.innerText.includes("Test microphone")');
+    const micMenuHeaderVisible = await evaluate('document.body.innerText.includes("MICROPHONE")');
+
+    // Opening the camera menu should close the mic menu (mutual exclusivity) -- this is the
+    // setShowVideoMenu(false)/setShowAudioMenu(false) cross-close behavior preserved verbatim
+    // from the original inline JSX into onOpenAudioMenu/onOpenVideoMenu.
+    await evaluate(`${camChevron}.click()`);
+    await settle();
+    const camMenuOpenAfterClick = await evaluate('document.body.innerText.includes("Test camera")');
+    const micMenuClosedWhenCamOpens = !(await evaluate('document.body.innerText.includes("Test microphone")'));
+
+    await evaluate(`${camChevron}.click()`);
+    await settle();
+    const camMenuClosedOnSecondClick = !(await evaluate('document.body.innerText.includes("Test camera")'));
+
+    const micButton = "document.querySelector('button[title*=\"microphone (M)\"]')";
+    const titleBefore = await evaluate(`${micButton}?.title`);
+    await evaluate(`${micButton}.click()`);
+    await settle();
+    const titleAfter = await evaluate(`${micButton}?.title`);
+    const muteToggleStillWorks = titleAfter !== titleBefore;
+
+    const r = {
+      micMenuOpenAfterClick, micMenuHeaderVisible, camMenuOpenAfterClick, micMenuClosedWhenCamOpens,
+      camMenuClosedOnSecondClick, muteToggleStillWorks, titleBefore, titleAfter,
+      errors: await evaluate('window.__errors.slice(0,5)'),
+    };
+
+    console.log(JSON.stringify({ label: 'device menu open/close/mutual-exclusion + mute toggle', ...r }));
+    results.devicemenu = r;
+  }
+
+  if (MODE === 'captions') {
+    await setRemotes(1);
+    await setViewport(1280, 800); await settle();
+    const captionsButton = "document.querySelector('button[title*=\"captions\"]')";
+
+    const titleBefore = await evaluate(`${captionsButton}?.title`);
+    await evaluate(`${captionsButton}.click()`);
+    await settle();
+    const titleAfterOn = await evaluate(`${captionsButton}?.title`);
+    // Headless Chrome via CDP typically has no working SpeechRecognition backend (no mic, no
+    // speech service), so this checks the overlay mounts and shows ONE of its two defined states
+    // (the "Listening..." placeholder, or the "not supported in this browser" warning) rather than
+    // asserting real transcribed text -- actual speech-to-text isn't something this harness can
+    // drive without a real microphone and network speech service.
+    const overlayMounted = await evaluate('document.body.innerText.includes("Listening") || document.body.innerText.includes("Live captions are not supported")');
+
+    await evaluate(`${captionsButton}.click()`);
+    await settle();
+    const titleAfterOff = await evaluate(`${captionsButton}?.title`);
+    const overlayGoneAfterOff = !(await evaluate('document.body.innerText.includes("Listening") || document.body.innerText.includes("Live captions are not supported")'));
+
+    const r = {
+      titleBefore, titleAfterOn, titleAfterOff, overlayMounted, overlayGoneAfterOff,
+      errors: await evaluate('window.__errors.slice(0,5)'),
+    };
+
+    console.log(JSON.stringify({ label: 'captions toggle + overlay mount/unmount', ...r }));
+    results.captions = r;
+  }
+
   if (MODE === 'toolbar') {
     await setRemotes(3);
     for (const [w, h] of [[700, 800], [1280, 800], [1280, 600]]) {
