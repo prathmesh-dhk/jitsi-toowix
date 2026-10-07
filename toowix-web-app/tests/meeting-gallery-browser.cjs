@@ -284,15 +284,23 @@ async function main() {
   const chatButton = "[...document.querySelectorAll('button')].find(b => b.title === 'Chat with everyone')";
 
   if (MODE === 'counts') {
+    // Below 768px wide, ParticipantGallery.tsx intentionally paginates at
+    // MOBILE_GALLERY_TILES_PER_PAGE (8) tiles per swipeable page once there are 4+ participants --
+    // this mirrors that exact rule (MOBILE_GALLERY_MEDIA_QUERY / MOBILE_GALLERY_TILES_PER_PAGE in
+    // src/lib/meetingLayout.ts) so this check expects only the first page's worth of cards on a
+    // narrow viewport, instead of treating the capped page as a missing-card failure.
+    const MOBILE_GALLERY_TILES_PER_PAGE = 8;
+    const isNarrowGalleryViewport = (w) => w <= 768;
     const rows = [];
     for (const n of [4, 6, 9, 10, 12, 15, 16, 20, 24, 30, 35, 42]) {
       await setRemotes(n);
       for (const [w, h] of viewports) {
         await setViewport(w, h); await settle();
         const m = await evaluate(MEASURE);
-        const ok = m.clipped === 0 && m.underToolbar === 0 && m.cards === n
+        const expectedCards = isNarrowGalleryViewport(w) && n >= 4 ? Math.min(n, MOBILE_GALLERY_TILES_PER_PAGE) : n;
+        const ok = m.clipped === 0 && m.underToolbar === 0 && m.cards === expectedCards
           && m.domMaxCols === Number(String(m.calc).split('x')[0]) && m.maxCentreErr < 1.5 && m.localVideoSame !== false;
-        rows.push({ n, w, h, ok, cards: m.cards, structure: m.structure, calc: m.calc, clipped: m.clipped, underToolbar: m.underToolbar, centreErr: Math.round(m.maxCentreErr * 10) / 10, localVideoSame: m.localVideoSame, sizes: m.sizes });
+        rows.push({ n, w, h, ok, cards: m.cards, expectedCards, structure: m.structure, calc: m.calc, clipped: m.clipped, underToolbar: m.underToolbar, centreErr: Math.round(m.maxCentreErr * 10) / 10, localVideoSame: m.localVideoSame, sizes: m.sizes });
       }
     }
     const failing = rows.filter(r => !r.ok);
