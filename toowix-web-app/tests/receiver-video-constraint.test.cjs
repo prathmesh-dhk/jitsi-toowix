@@ -17,6 +17,14 @@ assert.match(quality, /totalParticipants <= 4\) height = 1080/, 'small calls up 
 
 assert.ok(hook.includes("networkState === 'POOR' ? Math.min(base, 180)"), 'weak network lowers the requested video height');
 assert.ok(hook.includes('getAudioMaxBitrateBps(networkState)'), 'voice bitrate follows the network state');
-assert.ok(hook.includes('remoteParticipantCount, isScreenSharing, networkState ]'), 'quality is re-evaluated whenever the network state changes');
+// Real reported bug: after a REMOTE participant stopped screen sharing, the call looked "limited"
+// -- this effect's screenShareActive also reads remote desktop tracks, but the effect only used to
+// re-run on the LOCAL isScreenSharing flag, so a remote-only share starting/stopping never
+// re-applied the receiver/sender constraints for the new state. remoteScreenShares.length (real
+// React state) must be a dependency too, not just isScreenSharing.
+assert.ok(
+  hook.includes('remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState ]'),
+  'quality is re-evaluated whenever the network state OR a remote screen share starts/stops changes, not just local sharing'
+);
 
 console.log('PASS video quality can scale from 720p up to 1080p/4K with the camera and call size');

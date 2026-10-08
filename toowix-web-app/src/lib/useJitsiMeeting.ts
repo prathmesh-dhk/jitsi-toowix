@@ -245,9 +245,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
 // no video constraints at all, so the browser/camera driver was free to pick whatever resolution
 // it wanted once the call actually started -- on at least one real Mac + Chrome + camera
 // combination, that came out portrait-shaped, which a landscape-shaped card then cropped into a
-// tight vertical zoom via object-fit: cover. Forcing the SAME explicit landscape ideal (and a
-// floor on aspectRatio) here, regardless of whatever the browser would otherwise have defaulted
-// to, makes the in-call capture match the lobby preview the person already approved.
+// tight vertical zoom via object-fit: cover.
+//
+// A bare `aspectRatio: { ideal: 16 / 9 }` turned out not to be enough to actually fix this for
+// every camera: `ideal` is only ONE input into the browser's overall constraint scoring (width,
+// height, frameRate and aspectRatio all get weighed together), so a driver that heavily favors
+// matching the requested width/height can still end up settling on a portrait-shaped mode despite
+// the aspectRatio preference losing that tug-of-war. `advanced` constraint sets are the part of
+// the getUserMedia spec built exactly for "try hard to satisfy this, but never fail the whole
+// request over it": the UA attempts each advanced set in order and silently skips any entry it
+// cannot satisfy, instead of throwing OverconstrainedError the way a bare non-ideal aspectRatio
+// would for a camera that genuinely cannot do 16:9. This makes the landscape preference a much
+// stronger ask without risking camera acquisition breaking entirely on an unusual device.
 function inCallVideoConstraints(): MediaTrackConstraints {
   const ideal = getCameraCaptureIdeal();
 
@@ -255,7 +264,8 @@ function inCallVideoConstraints(): MediaTrackConstraints {
     width: { ideal: ideal.width },
     height: { ideal: ideal.height },
     frameRate: { ideal: ideal.frameRate },
-    aspectRatio: { ideal: 16 / 9 }
+    aspectRatio: { ideal: 16 / 9 },
+    advanced: [ { aspectRatio: 16 / 9 } ]
   };
 }
 
@@ -1212,7 +1222,7 @@ export function useJitsiMeeting({
     if (!joined || !room || lowDataMode !== 'auto' || manualMaxHeightRef.current !== null) {
       return;
     }
-    const screenShareActive = isScreenSharing || Object.keys(remoteDesktopTracksRef.current).length > 0;
+    const screenShareActive = isScreenSharing || remoteScreenShares.length > 0;
     const policy = getMediaQualityPolicy('auto', 'GOOD', remoteParticipantCount + 1, screenShareActive);
 
     // Ask for as much as the call size justifies (up to 4K one-to-one, less as tiles shrink) and
@@ -1306,7 +1316,18 @@ export function useJitsiMeeting({
       parameters.encodings[0].maxBitrate = audioBitrate;
       void sender.setParameters(parameters).catch(() => undefined);
     });
-  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, networkState ]);
+  // Real reported bug: after a REMOTE participant stops screen sharing, the call looked "limited"
+  // and the shared content/camera could appear stuck. This effect is what tells the bridge how
+  // much video to send/receive (including the screenShareActive-driven height bump), but it only
+  // listed the LOCAL isScreenSharing flag in its deps -- screenShareActive itself also reads
+  // remote desktop tracks, so a remote-only share starting or stopping silently fell through
+  // without ever re-running this effect. The bridge then kept whatever receiver/sender constraint
+  // was set for the PREVIOUS screen-share state (e.g. still capped at the pre-share height, or
+  // still raised to the share height after the remote share already ended), which is what read as
+  // a stuck/limited connection until some unrelated re-render (network state change, participant
+  // count change) happened to also touch this effect. remoteScreenShares.length is real React
+  // state (unlike the remoteDesktopTracksRef map this reads), so it is a valid, reactive dep.
+  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState ]);
 
   // Backstop for the participant-card mic badge: normal mute/unmute changes arrive immediately
   // through TRACK_MUTE_CHANGED. This slower re-check only covers rare track-replacement or

@@ -2989,11 +2989,15 @@ export function MeetingRoomPage() {
   ].sort((a, b) => b.startedAt - a.startedAt);
   const primaryShare = allShares[0];
   const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
-  // A presentation is always an explicit layout mode. It must not depend on the gallery toggle:
-  // a screen share always keeps its stage and right-side participant rail on desktop -- unless
-  // screenShareFullView is on (the 's' shortcut), which collapses that sidebar so the shared
-  // screen fills the full stage width/height with nothing else on screen.
-  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || anyScreenShare;
+  // Required behavior: a screen share always STARTS in the big focused stage view, regardless of
+  // whatever tileViewEnabled was set to beforehand -- grid view is only reached afterward if the
+  // person explicitly clicks the tile-view toggle WHILE the share is still active. So this reads
+  // tileViewEnabled (restoring the grid-capable condition a refactor had dropped, which is what
+  // made the toggle do nothing during a share), but the effect below still forces tileViewEnabled
+  // to false the moment a share starts, so "focused stage first" remains the actual starting state
+  // every time -- the toggle click during an active share is what the restored condition here now
+  // actually honors, instead of always being overridden back to the stage layout.
+  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || (anyScreenShare && !tileViewEnabled);
   const [screenShareFullView, setScreenShareFullView] = useState(false);
   const tileBeforeShareRef = useRef(true);
   const wasSharingRef = useRef(false);
