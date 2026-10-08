@@ -24,6 +24,7 @@ import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './shar
 import {
   classifyNetwork,
   getAudioMaxBitrateBps,
+  getCameraCaptureIdeal,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
   getTargetVideoHeight,
@@ -206,6 +207,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
   });
 }
 
+// Real reported bug: on macOS Chrome, the prejoin lobby preview showed the camera correctly
+// landscape, but the moment the person actually joined the call, the SAME camera came in
+// portrait-cropped (an extreme vertical zoom into the face, not a normal headshot). Root cause --
+// the lobby preview (useMediaPreview.ts) explicitly requests landscape width/height/frameRate
+// ideals for getUserMedia, but the actual in-call track acquisition below passed lib-jitsi-meet
+// no video constraints at all, so the browser/camera driver was free to pick whatever resolution
+// it wanted once the call actually started -- on at least one real Mac + Chrome + camera
+// combination, that came out portrait-shaped, which a landscape-shaped card then cropped into a
+// tight vertical zoom via object-fit: cover. Forcing the SAME explicit landscape ideal (and a
+// floor on aspectRatio) here, regardless of whatever the browser would otherwise have defaulted
+// to, makes the in-call capture match the lobby preview the person already approved.
+function inCallVideoConstraints(): MediaTrackConstraints {
+  const ideal = getCameraCaptureIdeal();
+
+  return {
+    width: { ideal: ideal.width },
+    height: { ideal: ideal.height },
+    frameRate: { ideal: ideal.frameRate },
+    aspectRatio: { ideal: 16 / 9 }
+  };
+}
+
 // Real reported bug: reconnecting a Bluetooth mic "took time, not fast". A device that has just
 // (re)connected often isn't fully handed off by the OS yet -- getUserMedia throws
 // NotReadableError/TrackStartError (isTransientDeviceBusyError) for a brief window right after,
@@ -330,7 +353,8 @@ async function acquireLocalTracks(
 
       result.videoTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
-        cameraDeviceId: explicitVideoId
+        cameraDeviceId: explicitVideoId,
+        constraints: { video: inCallVideoConstraints() }
       });
     } catch (err) {
       result.videoError = err;
@@ -1408,7 +1432,8 @@ export function useJitsiMeeting({
       }
       const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
-        cameraDeviceId: deviceIdsRef.current.videoDeviceId || undefined
+        cameraDeviceId: deviceIdsRef.current.videoDeviceId || undefined,
+        constraints: { video: inCallVideoConstraints() }
       });
 
       if (!newTrack) {
@@ -1695,7 +1720,8 @@ export function useJitsiMeeting({
       const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ isAudio ? 'audio' : 'video' ],
         micDeviceId: isAudio ? deviceId : undefined,
-        cameraDeviceId: isAudio ? undefined : deviceId
+        cameraDeviceId: isAudio ? undefined : deviceId,
+        constraints: isAudio ? undefined : { video: inCallVideoConstraints() }
       });
 
       if (!newTrack) {
