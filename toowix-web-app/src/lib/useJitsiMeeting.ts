@@ -276,15 +276,31 @@ function inCallVideoConstraints(): MediaTrackConstraints {
 // dead time with no benefit beyond letting the OS catch up, so it's the one delay in the whole
 // reconnect path actually worth shortening -- 150ms/300ms instead of 400ms/800ms, tight enough to
 // feel fast, still enough slack for the OS to finish a normal handoff.
+// TEMPORARY instrumentation for the Bluetooth-switch latency audit -- see the devicechange-burst
+// log in MeetingRoomPage.tsx for the matching gate. Safe to delete once the audit's measurements
+// are in; does not change any retry/backoff behavior, only reports what already happens.
+const deviceSwitchDiagnosticsEnabled = import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true';
+
 async function createLocalTrackWithRetry(JitsiMeetJS: any, options: any, attempts = 3): Promise<any> {
   let lastErr: any;
+  const start = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
+  let backoffMs = 0;
 
   for (let i = 0; i < attempts; i++) {
     if (i > 0) {
-      await delay(150 * i);
+      const thisBackoff = 150 * i;
+
+      backoffMs += thisBackoff;
+      await delay(thisBackoff);
     }
     try {
       const [ track ] = await JitsiMeetJS.createLocalTracks(options);
+
+      if (deviceSwitchDiagnosticsEnabled) {
+        console.info('[Toowix device-switch] getUserMedia acquired', {
+          totalMs: Math.round(performance.now() - start), attemptsUsed: i + 1, backoffMsSpent: backoffMs,
+        });
+      }
 
       return track ?? null;
     } catch (err: any) {
@@ -293,6 +309,11 @@ async function createLocalTrackWithRetry(JitsiMeetJS: any, options: any, attempt
         throw err;
       }
     }
+  }
+  if (deviceSwitchDiagnosticsEnabled) {
+    console.info('[Toowix device-switch] getUserMedia FAILED after all retries', {
+      totalMs: Math.round(performance.now() - start), attempts, backoffMsSpent: backoffMs,
+    });
   }
 
   throw lastErr;
@@ -1764,6 +1785,13 @@ export function useJitsiMeeting({
 
     const isAudio = kind === 'audioInput';
     const oldTrack = isAudio ? localAudioTrackRef.current : localVideoTrackRef.current;
+    // TEMPORARY instrumentation for the Bluetooth-switch latency audit (see the matching logs in
+    // createLocalTrackWithRetry and MeetingRoomPage.tsx's devicechange handler). switchStart is
+    // this call's own total; enqueuedAt/execStart around the room operation below separate time
+    // spent WAITING behind another already-queued operation (queueWaitMs) from the actual
+    // replaceTrack/addTrack renegotiation itself (execMs) -- the two have very different causes
+    // and very different fixes, so they must not be reported as one number.
+    const switchStart = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
 
     try {
       const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
@@ -1777,10 +1805,28 @@ export function useJitsiMeeting({
         return;
       }
 
+      const enqueuedAt = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
+      const runTimed = (op: () => Promise<any>, label: string) => runSerializedRoomOperation(() => {
+        const execStart = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
+
+        return Promise.resolve(op()).then((value) => {
+          if (deviceSwitchDiagnosticsEnabled) {
+            console.info(`[Toowix device-switch] ${label}`, {
+              queueWaitMs: Math.round(execStart - enqueuedAt), execMs: Math.round(performance.now() - execStart),
+            });
+          }
+
+          return value;
+        });
+      });
+
       if (room && oldTrack) {
-        await runSerializedRoomOperation(() => room.replaceTrack(oldTrack, newTrack));
+        await runTimed(() => room.replaceTrack(oldTrack, newTrack), 'replaceTrack');
       } else if (room) {
-        await runSerializedRoomOperation(() => room.addTrack(newTrack));
+        await runTimed(() => room.addTrack(newTrack), 'addTrack');
+      }
+      if (deviceSwitchDiagnosticsEnabled) {
+        console.info('[Toowix device-switch] switchDevice total', { kind, totalMs: Math.round(performance.now() - switchStart) });
       }
 
       if (oldTrack) {

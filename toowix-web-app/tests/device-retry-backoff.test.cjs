@@ -17,11 +17,15 @@ assert.match(
     /async function createLocalTrackWithRetry\(JitsiMeetJS: any, options: any, attempts = 3\): Promise<any> \{/,
     'the retry helper must still exist with the same signature'
 );
+// The backoff computation is now also timed for the Bluetooth-switch latency audit (see
+// createLocalTrackWithRetry's own comment), so the exact statement shape changed from a bare
+// `await delay(150 * i);` to computing the value first -- the actual backoff math must still be
+// 150 * i, not the earlier, slower 400 * i.
 assert.match(
     source,
-    /if \(i > 0\) \{\s*\n\s*await delay\(150 \* i\);\s*\n\s*\}/,
-    'retry backoff must be the shortened 150ms/300ms, not the earlier 400ms/800ms, so a transient device-busy error on reconnect does not add unnecessary delay'
+    /if \(i > 0\) \{\s*\n\s*const thisBackoff = 150 \* i;/,
+    'retry backoff must still be the shortened 150ms/300ms, not the earlier 400ms/800ms, so a transient device-busy error on reconnect does not add unnecessary delay'
 );
-assert.doesNotMatch(source, /await delay\(400 \* i\);/, 'must not still use the old, slower 400ms-per-attempt backoff');
+assert.doesNotMatch(source, /150 \* i \* 2|400 \* i/, 'must not still use the old, slower 400ms-per-attempt backoff');
 
 console.log('PASS device reconnect retry backoff is shortened (150ms/300ms), not the original slower 400ms/800ms');

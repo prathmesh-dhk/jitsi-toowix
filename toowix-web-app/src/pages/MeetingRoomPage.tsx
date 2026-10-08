@@ -3696,10 +3696,26 @@ export function MeetingRoomPage() {
   // happens, each genuine connect/disconnect cycle (even several in a row) is compared against
   // the correct previous snapshot and handled on its own, not just the first one.
   const knownDeviceIdsRef = useRef<Set<string> | null>(null);
+  // TEMPORARY instrumentation for the Bluetooth-switch latency audit -- measures how long a
+  // devicechange burst actually runs before settling (burstStartedAtRef is set on the FIRST raw
+  // event of a burst and cleared once refresh() finally runs), so the 200ms trailing debounce
+  // below can be tuned from real numbers instead of a guess. Logged only under the same DEV/
+  // diagnostics gate every other perf log in this codebase already uses; safe to delete once the
+  // audit's measurements are in.
+  const burstStartedAtRef = useRef<number | null>(null);
+  const deviceSwitchDiagnosticsEnabled = import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true';
 
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
+      const burstStartedAt = burstStartedAtRef.current;
+
+      burstStartedAtRef.current = null;
+      if (deviceSwitchDiagnosticsEnabled && burstStartedAt !== null) {
+        console.info('[Toowix device-switch] devicechange burst settled', {
+          burstToSettleMs: Math.round(performance.now() - burstStartedAt),
+        });
+      }
       try {
         const result = await navigator.mediaDevices?.enumerateDevices();
 
@@ -3759,6 +3775,11 @@ export function MeetingRoomPage() {
     // is ever acted on.
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const debouncedRefresh = () => {
+      // Only stamps the FIRST raw event of a burst -- every later event in the same burst resets
+      // debounceTimer (below) but must not overwrite how long ago the burst actually started.
+      if (burstStartedAtRef.current === null) {
+        burstStartedAtRef.current = performance.now();
+      }
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
