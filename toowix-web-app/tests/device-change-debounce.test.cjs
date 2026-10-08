@@ -31,8 +31,8 @@ assert.match(
 );
 assert.match(
     source,
-    /if \(debounceTimer\) clearTimeout\(debounceTimer\);\s*\n\s*debounceTimer = setTimeout\(\(\) => \{\s*\n\s*debounceTimer = null;\s*\n\s*void refresh\(\);\s*\n\s*\}, 500\);/,
-    'each new devicechange event must cancel and reschedule the pending refresh (coalescing a burst into one call), with a delay long enough to outlast a Bluetooth handshake burst'
+    /if \(debounceTimer\) clearTimeout\(debounceTimer\);\s*\n\s*debounceTimer = setTimeout\(\(\) => \{\s*\n\s*debounceTimer = null;\s*\n\s*void refresh\(\);\s*\n\s*\}, 200\);/,
+    'each new devicechange event must cancel and reschedule the pending refresh (coalescing a burst into one call); 200ms is long enough to outlast a Bluetooth handshake burst while still reacting in near-real-time'
 );
 
 console.log('PASS devicechange-triggered device-list refresh is debounced, not run immediately on every event');

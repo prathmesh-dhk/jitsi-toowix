@@ -3482,16 +3482,26 @@ export function MeetingRoomPage() {
   };
 
   // Refresh the device list from the browser's own device APIs (works before and during a call),
-  // and fall back to the system default automatically if the currently selected device
-  // disappears (e.g. a USB headset is unplugged, a Bluetooth device drops) -- otherwise the
-  // person would be left silently talking to no one with no recovery. This does NOT auto-switch
-  // TO a newly-appeared device: real Jitsi does not aggressively jump onto a device the person
-  // never chose, and auto-connecting to a Bluetooth headset the instant its pairing handshake
-  // finishes was what caused the earlier "mic keeps disconnecting/reconnecting" bug -- the
-  // handshake fires several devicechange events while the device appears/disappears/reappears,
-  // and auto-switching to each sighting raced itself. Explicitly asked for by name: "no
-  // auto-switch at all -- only switch when I pick it." A newly-appeared device still shows up in
-  // the device picker right away; the person just has to choose it themselves, once.
+  // fall back to the system default automatically if the currently selected device disappears
+  // (e.g. a USB headset is unplugged), and -- the other direction -- automatically switch TO a
+  // device that newly appears (a Bluetooth headset finishing its pairing handshake, a camera
+  // being plugged in), so the person doesn't have to dig into the device menu themselves. Only
+  // auto-switches away from the plain system default, never away from something the person
+  // picked by hand, so it can't fight a deliberate choice.
+  //
+  // Explicitly asked for: auto-switch must stay, must react within "milliseconds", and must keep
+  // working correctly through repeated connect/disconnect/reconnect cycles of the same physical
+  // device. The debounce below (see debouncedRefresh) is what makes that possible WITHOUT
+  // reintroducing the earlier "mic keeps disconnecting/reconnecting" bug: a Bluetooth pairing
+  // handshake fires several raw devicechange events, with the device appearing/disappearing/
+  // reappearing several times, all within about 100-300ms. Reacting to each raw event
+  // individually (switch away, then switch back, then away again...) is what caused that bug.
+  // Debouncing to the FINAL state of a burst, a short delay later, avoids it while still feeling
+  // instant to a person -- and because knownDeviceIdsRef is only updated once settlement actually
+  // happens, each genuine connect/disconnect cycle (even several in a row) is compared against
+  // the correct previous snapshot and handled on its own, not just the first one.
+  const knownDeviceIdsRef = useRef<Set<string> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
@@ -3502,6 +3512,10 @@ export function MeetingRoomPage() {
         const audioInput = result.filter((d) => d.kind === 'audioinput' && d.deviceId);
         const videoInput = result.filter((d) => d.kind === 'videoinput' && d.deviceId);
         const audioOutput = result.filter((d) => d.kind === 'audiooutput' && d.deviceId);
+        const currentIds = new Set(result.map((d) => d.deviceId).filter(Boolean));
+        const previousIds = knownDeviceIdsRef.current;
+
+        knownDeviceIdsRef.current = currentIds;
 
         if (audioId && audioInput.length && !audioInput.some((d) => d.deviceId === audioId)) {
           setAudioId('');
@@ -3517,31 +3531,44 @@ export function MeetingRoomPage() {
           setOutputId('');
           void applyJitsiDevice('audioOutput', '');
         }
+
+        // previousIds is null only on the very first run (nothing to compare against yet, and
+        // every device would look "new") -- skip auto-connecting until the second pass onward.
+        if (previousIds) {
+          const isNew = (d: MediaDeviceInfo) => !previousIds.has(d.deviceId);
+          const newAudioIn = audioInput.find(isNew);
+          const newAudioOut = audioOutput.find(isNew);
+          const newVideoIn = videoInput.find(isNew);
+
+          if (newAudioIn && !audioId) {
+            setAudioId(newAudioIn.deviceId);
+            void applyJitsiDevice('audioInput', newAudioIn.deviceId);
+          }
+          if (newAudioOut && !outputId) {
+            setOutputId(newAudioOut.deviceId);
+            void applyJitsiDevice('audioOutput', newAudioOut.deviceId);
+          }
+          if (newVideoIn && !videoId) {
+            setVideoId(newVideoIn.deviceId);
+            void applyJitsiDevice('videoInput', newVideoIn.deviceId);
+          }
+        }
       } catch {
         // enumerateDevices isn't supported on every browser/platform; ignore silently.
       }
     };
-    // Real reported bug: connecting a Bluetooth headset made the mic look like it was
-    // "disconnecting and reconnecting again and again". Root cause -- a Bluetooth device's OS
-    // pairing/profile handshake (HFP <-> A2DP) fires several `devicechange` events within a
-    // couple hundred milliseconds, and the device can briefly vanish from enumerateDevices() and
-    // reappear mid-handshake. Each event ran `refresh()` immediately and independently, so the
-    // SELECTED device could be seen as "disappeared" (resetting to system default + an error
-    // toast) several times in a row during one handshake. The auto-connect-to-new-device branch
-    // that used to sit alongside this was removed outright (no longer just debounced) -- real
-    // Jitsi does not auto-switch onto a device the person never chose, and that was the other
-    // half of what made a single Bluetooth connection look like repeated connects. What remains
-    // here only ever reacts to the CURRENTLY SELECTED device disappearing, and debouncing still
-    // matters for that: it collapses a whole handshake burst into exactly one refresh() once the
-    // device list has actually settled, so a device that merely blips during pairing is never
-    // mistaken for a real disconnect.
+    // Debounced to the trailing edge of a devicechange burst, not fired on every raw event --
+    // 200ms is short enough to feel instant to a person switching devices, while still being long
+    // enough to outlast a Bluetooth pairing handshake's burst of appear/disappear/reappear events
+    // (confirmed to span up to a few hundred ms), so only the handshake's FINAL, settled result
+    // is ever acted on.
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const debouncedRefresh = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
         void refresh();
-      }, 500);
+      }, 200);
     };
 
     void refresh();
