@@ -1183,6 +1183,13 @@ export function MeetingRoomPage() {
   // PiP is a secondary view. Ten frames per second keeps names/active-video transitions smooth
   // while leaving more CPU/GPU headroom for the actual WebRTC encode/decode pipeline.
   const startPipDraw = () => {
+    // Document PiP has its own Window/document. Its visibility is independent from the main tab:
+    // do not restart the 10fps loop from a later media/layout update while that PiP window itself
+    // is hidden. Its visibilitychange handler resumes this function and draws immediately once it
+    // becomes visible again. Standard video PiP exposes no equivalent visibility signal, so it
+    // continues normally until its leavepictureinpicture event stops the loop.
+    const documentPip = documentPipWindowRef.current;
+    if (documentPip && !documentPip.closed && documentPip.document.visibilityState === 'hidden') return;
     if (pipTimerRef.current) return;
     drawPipFrame();
     pipTimerRef.current = setInterval(drawPipFrame, 100); // 10fps
@@ -1328,6 +1335,29 @@ export function MeetingRoomPage() {
     };
 
     pipWin.addEventListener('keydown', onPipKeyDown);
+
+    // Real reported waste: the PiP canvas redraws at 10fps continuously for as long as PiP stays
+    // open, even while nobody can see it -- CPU/GPU cycles the actual WebRTC encode/decode
+    // pipeline could use instead. documentPictureInPicture opens a real, separate browser Window;
+    // ITS OWN document's visibilityState reflects whether that window is actually visible
+    // (minimized, occluded), completely independent of the main call tab. Switching to a
+    // different tab on the MAIN window does not touch this -- the PiP window keeps reporting
+    // 'visible' the whole time, so the normal "watch the call while doing something else" use
+    // case (the entire point of PiP) is never interrupted; only the PiP window's own hidden state
+    // pauses drawing. startPipDraw() already draws one frame synchronously before starting the
+    // interval (see its own definition below), so resuming always redraws immediately with no
+    // stale-frame flash. Not removed explicitly in onPageHide above -- same reasoning as
+    // onPipKeyDown's: the whole window (and every listener on it) is discarded together when it
+    // closes, no separate cleanup path needed.
+    const onPipVisibilityChange = () => {
+      if (pipWin.document.visibilityState === 'hidden') {
+        stopPipDraw();
+      } else {
+        startPipDraw();
+      }
+    };
+
+    pipWin.document.addEventListener('visibilitychange', onPipVisibilityChange);
 
     documentPipWindowRef.current = pipWin;
     const lc = pipLifecycleRef.current;
@@ -1859,7 +1889,9 @@ export function MeetingRoomPage() {
     setShowPipEnableCTA(false);
   };
 
-  // Update real-time clock every second
+  // Updates the top-bar wall-clock (HH:MM, no seconds) every 15 seconds -- the displayed format
+  // has no second-level precision, so there is nothing a human would ever notice updating any
+  // faster than this.
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
@@ -2330,39 +2362,51 @@ export function MeetingRoomPage() {
   const handleAdmitParticipant = async (id?: string, admitAll: boolean = false) => {
     try {
       const headers = await accountHeaders();
-      await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/admit`, {
+      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/admit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ requestId: id, admitAll }),
       });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not admit participant.');
       setPendingQueue((prev) => (admitAll ? [] : prev.filter((p) => p.id !== id)));
-    } catch { }
+    } catch (error) {
+      setCallError(error instanceof Error ? error.message : 'Could not admit participant.');
+    }
   };
 
   const handleDenyParticipant = async (id: string) => {
     try {
       const headers = await accountHeaders();
-      await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/deny`, {
+      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/deny`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ requestId: id }),
       });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not deny participant.');
       setPendingQueue((prev) => prev.filter((p) => p.id !== id));
-    } catch { }
+    } catch (error) {
+      setCallError(error instanceof Error ? error.message : 'Could not deny participant.');
+    }
   };
 
   const handleBroadcastAnnouncement = async () => {
     if (!announcementText.trim()) return;
     try {
       const headers = await accountHeaders();
-      await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/announce`, {
+      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/lobby/announce`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ message: announcementText.trim() }),
       });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not broadcast the announcement.');
       setShowAnnounceDialog(false);
       setAnnouncementText('');
-    } catch { }
+    } catch (error) {
+      setCallError(error instanceof Error ? error.message : 'Could not broadcast the announcement.');
+    }
   };
 
   // Meeting duration timer
@@ -2435,20 +2479,24 @@ export function MeetingRoomPage() {
   const handleEndMeetingForEveryone = async () => {
     setShowEndMeetingModal(false);
     // HTTP-reliable broadcast (see postRoomSignal) instead of sendEndpointTextMessage
-    // directly -- same BridgeChannel-not-ready problem chat had. This is a courtesy for a
-    // specific "ended by host" message; the native endConference command below is what
-    // actually terminates the conference for everyone regardless of whether this arrives.
+    // directly -- same BridgeChannel-not-ready problem chat had. This is only an immediate
+    // courtesy message; the authenticated backend end request is the source of truth and the
+    // live-status fallback reaches participants if this signal cannot be delivered.
     try {
-      postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
+      void postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
     } catch { }
     try {
       const headers = await accountHeaders();
-      await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
+      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
       });
-    } catch { }
-    leaveMeeting('You ended the meeting for everyone.');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not end the meeting for everyone.');
+      leaveMeeting('You ended the meeting for everyone.');
+    } catch (error) {
+      setCallError(error instanceof Error ? error.message : 'Could not end the meeting for everyone.');
+    }
   };
 
   // Auto-end once the meeting's scheduled window (start + chosen duration) elapses. The
@@ -3343,11 +3391,15 @@ export function MeetingRoomPage() {
       // inside the library, not thrown back to this call), so it can't be silenced short of
       // not calling it. HTTP already delivers every signal type reliably (confirmed via
       // server logs), so the datachannel attempt was pure redundant risk for no real benefit.
+      const attendanceToken = attendanceTokenRef.current;
+      if (!attendanceToken) return;
       try {
         await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(signalData),
+          // The signal route requires the room-scoped token issued only after admission. Do not
+          // put it inside signalData: that object is persisted/broadcast to other attendees.
+          body: JSON.stringify({ ...signalData, attendanceToken }),
         });
       } catch { }
     },
@@ -3502,9 +3554,24 @@ export function MeetingRoomPage() {
     // data-channel delivery remains an extra fast path; duplicate messages are safely ignored
     // by msgId. EventSource reconnects itself after a network change and the `since` replay
     // prevents a gap while it reconnects.
+    const attendanceToken = attendanceTokenRef.current;
+    // A joined participant always has this token. If it is absent, do not open an unauthenticated
+    // stream or start a fallback poll that would repeatedly receive 401 responses.
+    if (!attendanceToken) return;
+    let streamOpened = false;
+    const signalStreamUrl = `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal/stream?since=${lastSignalTimestampRef.current}&attendanceToken=${encodeURIComponent(attendanceToken)}`;
     const stream = typeof EventSource !== 'undefined'
-      ? new EventSource(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal/stream?since=${lastSignalTimestampRef.current}`)
+      ? new EventSource(signalStreamUrl)
       : null;
+    stream?.addEventListener('open', () => {
+      streamOpened = true;
+    });
+    stream?.addEventListener('error', () => {
+      // EventSource hides the HTTP status. A stream that never opens after a token-protected
+      // request is not usable; close it instead of retrying invalid credentials forever. Once
+      // opened, preserve EventSource's normal transient-network reconnect behaviour.
+      if (!streamOpened) stream.close();
+    });
     stream?.addEventListener('message', (event) => {
       try {
         const signal = JSON.parse(event.data);
@@ -3518,11 +3585,17 @@ export function MeetingRoomPage() {
     });
     // EventSource is supported by the browsers we target, including Safari. Keep the previous
     // reliable polling path only for an unusual browser that has no EventSource at all.
-    const fallbackInterval = stream ? null : window.setInterval(async () => {
+    let fallbackInterval: number | null = null;
+    if (!stream) fallbackInterval = window.setInterval(async () => {
       try {
         const res = await fetch(
-          `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal?since=${lastSignalTimestampRef.current}`
+          `${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/signal?since=${lastSignalTimestampRef.current}&attendanceToken=${encodeURIComponent(attendanceToken)}`
         );
+        if (res.status === 401 || res.status === 403) {
+          if (fallbackInterval !== null) window.clearInterval(fallbackInterval);
+          fallbackInterval = null;
+          return;
+        }
         if (!res.ok) return;
         const data = await res.json();
         if (typeof data.timestamp === 'number') lastSignalTimestampRef.current = data.timestamp;

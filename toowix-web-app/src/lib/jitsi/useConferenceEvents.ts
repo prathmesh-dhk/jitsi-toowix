@@ -32,6 +32,7 @@ export interface IConferenceEventDeps {
   remoteDesktopTracksRef: { current: Record<string, any> };
   remoteNamesRef: { current: Record<string, string> };
   remoteAvatarsRef: { current: Record<string, string | null> };
+  remoteSessionIdsRef: { current: Record<string, string> };
   localConferenceIdRef: { current: string | null };
   localSessionIdRef: { current: string };
   recordingSessionIdRef: { current: string | null };
@@ -78,7 +79,7 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
   const {
     isStale, patchParticipant, trackToStream, setSpeakingLevel, clearSpeaking, isSharingStatus,
     isDesktopTrackUsable, recomputeRemoteScreenShare,
-    lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, localConferenceIdRef,
+    lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
     localSessionIdRef, recordingSessionIdRef, sharedVideoRef, offerAnswerRecoveryRef, offerAnswerRecoveryTimerRef,
     onKickedRef,
     setRemoteParticipants, setConnectionStats, setIsModerator, setLocalParticipantId, setJoined,
@@ -220,6 +221,9 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     }
 
     const name = participant.getDisplayName() || 'Participant';
+    const deviceSessionId = typeof participant.getProperty?.('deviceSessionId') === 'string'
+      ? participant.getProperty('deviceSessionId')
+      : null;
     // The JWT's context.user.avatar (see generateJitsiToken on the backend) is
     // propagated to every other participant as this "identity" -- it's the real
     // mechanism for remote avatars, not something lib-jitsi-meet exposes as a plain
@@ -230,49 +234,39 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     remoteNamesRef.current[id] = name;
     remoteAvatarsRef.current[id] = avatarUrl;
 
-    // A dropped network doesn't always close the old session's connection cleanly, so
-    // the server can take a long time (well past any reasonable wait) to notice it's
-    // dead and remove that stale participant. When the same person rejoins, they show
-    // up here as a brand-new id with the same display name while their old, frozen tile
-    // is still sitting in the roster. Treat a fresh join with a name that already exists
-    // as that same person reconnecting and drop the stale entry immediately, rather than
-    // waiting on the server-side timeout to eventually clean it up.
-    if (name && name !== 'Participant') {
-      let staleIdsFound: string[] = [];
+    // Jitsi assigns a new participant id after a full browser reload, while the old presence can
+    // remain until its connection times out. The per-tab device session id is intentionally kept
+    // in sessionStorage by useJitsiMeeting, so matching it is an exact reconnect match. Do not
+    // use a display-name match here: two real people can share a name and must never be merged.
+    const staleIds = deviceSessionId
+      ? Object.entries(remoteSessionIdsRef.current)
+        .filter(([participantId, sessionId]) => participantId !== id && sessionId === deviceSessionId)
+        .map(([participantId]) => participantId)
+      : [];
 
+    for (const staleId of staleIds) {
+      delete remoteNamesRef.current[staleId];
+      delete remoteAvatarsRef.current[staleId];
+      delete remoteSessionIdsRef.current[staleId];
+      delete remoteDesktopTracksRef.current[staleId];
+      clearSpeaking(staleId);
+    }
+    if (staleIds.length > 0) {
       setRemoteParticipants((prev) => {
-        const staleIds = Object.keys(prev).filter((pid) => pid !== id && prev[pid]?.name === name);
-
-        if (staleIds.length === 0) {
-          return prev;
-        }
-        staleIdsFound = staleIds;
         const next = { ...prev };
-
-        for (const staleId of staleIds) {
-          delete next[staleId];
-          delete remoteNamesRef.current[staleId];
-          delete remoteAvatarsRef.current[staleId];
-          delete remoteDesktopTracksRef.current[staleId];
-          clearSpeaking(staleId);
-        }
-
+        staleIds.forEach((staleId) => delete next[staleId]);
         return next;
       });
-      if (staleIdsFound.length > 0) {
-        setConnectionStats((prev) => {
-          const next = { ...prev };
-
-          for (const staleId of staleIdsFound) {
-            delete next[staleId];
-          }
-
-          return next;
-        });
-      }
+      setConnectionStats((prev) => {
+        const next = { ...prev };
+        staleIds.forEach((staleId) => delete next[staleId]);
+        return next;
+      });
     }
+    if (deviceSessionId) remoteSessionIdsRef.current[id] = deviceSessionId;
 
     patchParticipant(id, {
+      deviceSessionId,
       name,
       avatarUrl,
       isModerator: participant.getRole?.() === 'moderator'
@@ -300,6 +294,7 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     clearSpeaking(id);
     delete remoteNamesRef.current[id];
     delete remoteAvatarsRef.current[id];
+    delete remoteSessionIdsRef.current[id];
     delete remoteDesktopTracksRef.current[id];
     recomputeRemoteScreenShare();
     // connectionStats is keyed by participant id and only ever grown by the

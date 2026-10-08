@@ -65,6 +65,10 @@ declare global {
 
 export interface IRemoteParticipant {
   id: string;
+  // Browser-tab identity, published through Jitsi presence. Unlike a Jitsi participant id it
+  // survives a page reload in the same tab, so viewers can replace a stale reconnect presence
+  // instead of rendering it as a second person.
+  deviceSessionId: string | null;
   name: string;
   avatarUrl: string | null;
   isModerator: boolean;
@@ -118,6 +122,32 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const LOW_DATA_MODE_STORAGE_KEY = 'toowix_low_data_mode';
+
+function createDeviceSessionId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// A full browser reload destroys React refs but retains sessionStorage for this tab. Persisting
+// the id per room lets remote clients recognise the new Jitsi presence as the same browser/tab
+// while the old presence is still awaiting the server-side disconnect timeout. A new tab gets its
+// own sessionStorage and therefore remains a legitimately separate participant.
+function getRoomDeviceSessionId(roomName: string): string {
+  const key = `toowix_jitsi_device_session:${roomName.toLowerCase()}`;
+  const fallback = createDeviceSessionId();
+
+  try {
+    const existing = window.sessionStorage.getItem(key);
+    if (existing) return existing;
+    window.sessionStorage.setItem(key, fallback);
+  } catch {
+    // Private-storage restrictions must never block joining; the in-memory value still works
+    // for reconnects that do not reload the page.
+  }
+
+  return fallback;
+}
 
 // Every browser sends its camera as three simulcast layers, advertised to the room as the SSRC
 // groups FID(main) -> SIM -> FID -> FID. When a THIRD participant joins, Jicofo hands them all
@@ -423,14 +453,10 @@ export function useJitsiMeeting({
   const [ dominantSpeakerId, setDominantSpeakerId ] = useState<string | null>(null);
   const [ localParticipantId, setLocalParticipantId ] = useState<string | null>(null);
   const localConferenceIdRef = useRef<string | null>(null);
-  // A stable id for THIS TAB/DEVICE only -- generated once when the hook first mounts, so it
-  // survives a reconnect (same tab, same value) but is different for every other tab, browser or
-  // device, even ones logged in as the exact same account (which share a JWT user id -- two
-  // genuinely different sessions of the same person legitimately do, and must still show up as
-  // two separate participant cards instead of one being treated as the other's stale duplicate).
-  const localSessionIdRef = useRef<string>(
-    typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  );
+  // Stable for this room in this browser tab, including a full page reload. It intentionally
+  // differs in another tab/device, even for the same account, because those are real separate
+  // attendees and must retain separate cards.
+  const localSessionIdRef = useRef<string>(getRoomDeviceSessionId(roomName));
   // Real, JVB/Jibri-confirmed recording state -- driven by RECORDER_STATE_CHANGED, which fires
   // for EVERY participant (it rides XMPP presence broadcast to the whole room, not just the
   // person who clicked start), unlike a locally-optimistic flag that only the initiator would
@@ -534,6 +560,7 @@ export function useJitsiMeeting({
   const remoteDesktopTracksRef = useRef<Record<string, any>>({});
   const remoteNamesRef = useRef<Record<string, string>>({});
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
+  const remoteSessionIdsRef = useRef<Record<string, string>>({});
   const onKickedRef = useRef(onKicked);
   const onForceMutedRef = useRef(onForceMuted);
   const selfInitiatedMuteRef = useRef(0);
@@ -630,6 +657,7 @@ export function useJitsiMeeting({
       ...prev,
       [id]: {
         id,
+        deviceSessionId: prev[id]?.deviceSessionId ?? null,
         name: prev[id]?.name ?? remoteNamesRef.current[id] ?? 'Participant',
         avatarUrl: prev[id]?.avatarUrl ?? remoteAvatarsRef.current[id] ?? null,
         isModerator: prev[id]?.isModerator ?? false,
@@ -945,7 +973,7 @@ export function useJitsiMeeting({
             registerConferenceEventListeners(room, JitsiMeetJS, {
               isStale, patchParticipant, trackToStream, setSpeakingLevel, clearSpeaking, isSharingStatus,
               isDesktopTrackUsable, recomputeRemoteScreenShare,
-              lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, localConferenceIdRef,
+              lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
               localSessionIdRef, recordingSessionIdRef, sharedVideoRef, offerAnswerRecoveryRef, offerAnswerRecoveryTimerRef,
               onKickedRef,
               setRemoteParticipants, setConnectionStats, setIsModerator, setLocalParticipantId, setJoined,
@@ -1128,6 +1156,7 @@ export function useJitsiMeeting({
       }
       remoteNamesRef.current = {};
       remoteAvatarsRef.current = {};
+      remoteSessionIdsRef.current = {};
       setConnected(false);
       setJoined(false);
       setRemoteParticipants({});
@@ -1279,9 +1308,10 @@ export function useJitsiMeeting({
     });
   }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, networkState ]);
 
-  // Source of truth for the participant-card mic badge: the remote audio track's own mute state,
-  // re-read on a short interval. Event-only updates could be missed (track replaced, presence
-  // arriving out of order) and left a talking participant flagged as muted.
+  // Backstop for the participant-card mic badge: normal mute/unmute changes arrive immediately
+  // through TRACK_MUTE_CHANGED. This slower re-check only covers rare track-replacement or
+  // out-of-order-presence gaps that can miss those events. Two seconds is short enough to repair
+  // a stale badge without making every meeting scan every remote track twice per second.
   useEffect(() => {
     if (!joined) {
       return undefined;
@@ -1289,36 +1319,34 @@ export function useJitsiMeeting({
     const timer = setInterval(() => {
       const room = roomRef.current;
 
-      if (!room?.getParticipants) {
+      if (!room?.getParticipantById) {
         return;
       }
-      const truth: Record<string, boolean> = {};
-
-      for (const p of room.getParticipants()) {
-        if (p.isHidden?.() || p.getBotType?.()) {
-          continue;
-        }
-        const audio = (p.getTracks?.() || []).find((t: any) => t.getType() === 'audio');
-
-        truth[p.getId()] = audio ? Boolean(audio.isMuted()) : true;
-      }
       setRemoteParticipants(prev => {
-        let changed = false;
-        const next = { ...prev };
+        let next: typeof prev | null = null;
 
         for (const id of Object.keys(prev)) {
+          // Check only participants that currently have a UI card. getParticipantById avoids
+          // rebuilding a full room-wide truth map on every backstop tick.
+          const participant = room.getParticipantById(id);
+
+          if (!participant || participant.isHidden?.() || participant.getBotType?.()) {
+            continue;
+          }
+          const audio = (participant.getTracks?.() || []).find((track: any) => track.getType() === 'audio');
+          const muted = audio ? Boolean(audio.isMuted()) : true;
           // Audio actually arriving in the last 1.5s beats a stale muted flag.
           const spokeRecently = Date.now() - (lastRemoteSpokeRef.current[id] || 0) < 1500;
 
-          if (id in truth && prev[id].muted !== truth[id] && !(truth[id] && spokeRecently)) {
-            next[id] = { ...prev[id], muted: truth[id] };
-            changed = true;
+          if (prev[id].muted !== muted && !(muted && spokeRecently)) {
+            next ??= { ...prev };
+            next[id] = { ...prev[id], muted };
           }
         }
 
-        return changed ? next : prev;
+        return next ?? prev;
       });
-    }, 500);
+    }, 2000);
 
     return () => clearInterval(timer);
   }, [ joined ]);

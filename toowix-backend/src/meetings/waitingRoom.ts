@@ -794,10 +794,51 @@ function publishRoomSignal(room: string, signal: IRoomSignal): void {
 }
 
 /**
+ * Every conference participant receives this room-scoped token only after admission. Signal
+ * transport is not media transport, but it carries actions that the meeting UI acts on (for
+ * example, the host ending a meeting), so it must not be an unauthenticated side channel.
+ *
+ * EventSource cannot attach an Authorization header, therefore the browser supplies the same
+ * token in its query string for SSE and the polling fallback. POST sends it in the JSON body.
+ */
+function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response): boolean {
+  const rawToken = typeof req.body?.attendanceToken === 'string'
+    ? req.body.attendanceToken
+    : typeof req.query?.attendanceToken === 'string'
+      ? req.query.attendanceToken
+      : '';
+  const room = String(req.params.roomSlug).toLowerCase();
+
+  if (!rawToken) {
+    res.status(401).json({ error: 'Meeting admission is required to use room signals.' });
+    return false;
+  }
+
+  try {
+    const claim = jwt.verify(rawToken, jitsiConfig.appSecret, {
+      algorithms: ['HS256'],
+      audience: 'toowix-attendance',
+      issuer: 'toowix-backend',
+    }) as jwt.JwtPayload;
+
+    if (claim.purpose !== 'attendance' || claim.room !== room) {
+      res.status(403).json({ error: 'This meeting token does not grant access to this room.' });
+      return false;
+    }
+  } catch {
+    res.status(401).json({ error: 'A valid meeting admission token is required to use room signals.' });
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * POST /api/meetings/room/:roomSlug/signal
  * Broadcast a real-time WebRTC signal (offer, answer, candidate, screen-share state).
  */
 export async function postSignalHandler(req: any, res: Response): Promise<void> {
+  if (!requireSignalAttendanceToken(req, res)) return;
   const room = String(req.params.roomSlug).toLowerCase();
   const { sender, type, payload, msgId, senderSessionId, targetSessionId } = req.body;
   if (!roomSignalsMap.has(room)) {
@@ -830,6 +871,7 @@ export async function postSignalHandler(req: any, res: Response): Promise<void> 
  * `since` replay closes the short gap between a page joining and its stream becoming ready.
  */
 export function streamSignalsHandler(req: any, res: Response): void {
+  if (!requireSignalAttendanceToken(req, res)) return;
   const room = String(req.params.roomSlug).toLowerCase();
   const since = Number(req.query.since) || 0;
   res.status(200);
@@ -867,6 +909,7 @@ export function streamSignalsHandler(req: any, res: Response): void {
  * Poll signals for this room since given timestamp.
  */
 export async function getSignalsHandler(req: any, res: Response): Promise<void> {
+  if (!requireSignalAttendanceToken(req, res)) return;
   const room = String(req.params.roomSlug).toLowerCase();
   const since = Number(req.query.since) || 0;
   const signals = roomSignalsMap.get(room) || [];
