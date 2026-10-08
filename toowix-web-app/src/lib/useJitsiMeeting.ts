@@ -1734,6 +1734,21 @@ export function useJitsiMeeting({
   // mute command is involved, so the old event-only logic could leave the person visibly
   // unmuted but silent forever. Poll only for an actually ended native track and replace it;
   // never touch an intentionally muted Jitsi track, including a moderator mute.
+  //
+  // Real reported bug: with a Bluetooth headset, the mic kept "reloading" repeatedly, including
+  // mid-sentence while actively speaking -- not just on connect/disconnect. Many Bluetooth stacks
+  // only switch to the mic-capable HFP profile WHEN audio input is actually needed (i.e. exactly
+  // when someone starts talking), which ends and restarts the native capture track right in the
+  // middle of speech. This poll and the devicechange-triggered refresh in MeetingRoomPage.tsx can
+  // both be reacting to that SAME underlying event -- without coordination, that is two
+  // independent replaceTrack() calls instead of one. lastAutoRecoveryAtRef rate-limits this poll's
+  // OWN recoveries (never fight a flapping device back-to-back faster than it can settle), and the
+  // short delay before acting gives the devicechange path -- which reacts faster, at 500ms -- a
+  // chance to have already fixed it, so this poll's next 5s tick just sees a healthy track and
+  // does nothing instead of recovering a second time.
+  const lastAutoRecoveryAtRef = useRef(0);
+  const MIN_AUTO_RECOVERY_INTERVAL_MS = 4000;
+
   useEffect(() => {
     const recoverEndedMicrophone = () => {
       const track = localAudioTrackRef.current;
@@ -1746,6 +1761,12 @@ export function useJitsiMeeting({
       if (nativeTrack?.readyState !== 'ended') {
         return;
       }
+      if (Date.now() - lastAutoRecoveryAtRef.current < MIN_AUTO_RECOVERY_INTERVAL_MS) {
+        // Recovered very recently -- give the device time to settle instead of immediately
+        // replacing the track again; the next poll tick will catch it if it is still dead.
+        return;
+      }
+      lastAutoRecoveryAtRef.current = Date.now();
       void switchDevice('audioInput', deviceIdsRef.current.audioDeviceId || '').catch(() => {
         // The normal mic button remains available if the OS is still holding the device.
       });
