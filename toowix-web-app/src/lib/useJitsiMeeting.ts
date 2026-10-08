@@ -206,12 +206,19 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
   });
 }
 
+// Real reported bug: reconnecting a Bluetooth mic "took time, not fast". A device that has just
+// (re)connected often isn't fully handed off by the OS yet -- getUserMedia throws
+// NotReadableError/TrackStartError (isTransientDeviceBusyError) for a brief window right after,
+// which is exactly the case this retry loop exists for. The backoff between attempts was pure
+// dead time with no benefit beyond letting the OS catch up, so it's the one delay in the whole
+// reconnect path actually worth shortening -- 150ms/300ms instead of 400ms/800ms, tight enough to
+// feel fast, still enough slack for the OS to finish a normal handoff.
 async function createLocalTrackWithRetry(JitsiMeetJS: any, options: any, attempts = 3): Promise<any> {
   let lastErr: any;
 
   for (let i = 0; i < attempts; i++) {
     if (i > 0) {
-      await delay(400 * i);
+      await delay(150 * i);
     }
     try {
       const [ track ] = await JitsiMeetJS.createLocalTracks(options);
