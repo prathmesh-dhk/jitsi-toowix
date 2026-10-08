@@ -1,6 +1,6 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
-import { useJitsiMeeting } from '../lib/useJitsiMeeting';
+import { ensureLibJitsiMeetLoaded, useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
@@ -2032,6 +2032,12 @@ export function MeetingRoomPage() {
     }
   }, []);
 
+  // Hoisted above the meeting-metadata effect below so the preload effect that follows it can use
+  // the same constant useJitsiMeeting is given further down -- it's a pure env read with no
+  // dependencies, so moving it earlier in the component body changes nothing about when it's
+  // computed.
+  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
+
   // Fetch meeting metadata
   useEffect(() => {
     if (window.location.search && !isFromConversation) window.history.replaceState(window.history.state, '', window.location.pathname);
@@ -2078,6 +2084,32 @@ export function MeetingRoomPage() {
       probeController.abort();
     };
   }, [roomId, getInfoLookupHeaders, navigate, isFromConversation]);
+
+  // Real reported delay: Jitsi's own JS libraries only started downloading after the Join
+  // click, even though the person may have already been sitting on the lobby screen (reading
+  // the meeting name, typing their display name) for seconds doing nothing network-intensive.
+  // Preloading here, as soon as the lobby screen has something real to show, means the scripts
+  // are typically already cached by the time handleJoinMeeting's own ensureLibJitsiMeetLoaded
+  // call runs -- that later call is UNCHANGED and still the real source of truth (so a person who
+  // clicks Join before this preload finishes still joins correctly, just without the head start).
+  // Fire-and-forget: a slow or failed preload must never block the lobby screen from rendering,
+  // so no loading state is tied to this at all, and the catch below is only to keep an unhandled
+  // rejection out of the console (the real join flow's own error handling still applies if the
+  // script genuinely can't load). Guarded by a ref, not included in meetingInfo's own dependency
+  // array, so a later patch to the SAME meeting (e.g. passwordRequired flipping true) can't
+  // trigger a second, redundant call -- though scriptLoadPromise's own memoization would no-op it
+  // anyway.
+  const jitsiScriptsPreloadStartedRef = useRef(false);
+  useEffect(() => {
+    if (jitsiScriptsPreloadStartedRef.current) return;
+    if (!meetingInfo || meetingInfo.cancelled || (!isFromConversation && meetingInfo.expired)) return;
+    jitsiScriptsPreloadStartedRef.current = true;
+    void ensureLibJitsiMeetLoaded(jitsiDomain).catch(() => {
+      // Swallowed deliberately -- this is a head start, not a requirement. The real join flow's
+      // own ensureLibJitsiMeetLoaded call (inside useJitsiMeeting's connect effect) will retry
+      // and surface a real error through its normal error handling if the script truly can't load.
+    });
+  }, [meetingInfo, isFromConversation, jitsiDomain]);
 
   // Mid-meeting lock: for dashboard meetings the backend enforces password + waiting room (like a
   // Private meeting); rooms with no saved meeting fall back to Jitsi's own room password.
@@ -2578,8 +2610,6 @@ export function MeetingRoomPage() {
 
     return () => clearTimeout(timer);
   }, [hasJoined, effectiveExpiresAt]);
-
-  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
   // Direct lib-jitsi-meet integration -- no IFrame, no external_api.js. We own the real
   // local/remote MediaStreamTracks directly now, which is what lets the self-view tile, PiP
@@ -3897,6 +3927,60 @@ export function MeetingRoomPage() {
           }
         `}</style>
 
+        {/* Honest, real-state join-progress banner -- hasJoined flips true as soon as the
+            admission request succeeds (see handleJoinMeeting), dropping the person straight into
+            this full call UI (their own camera already shows via the adopted prejoin stream) even
+            though the actual Jitsi connection/conference-join/track-attach below can still take a
+            moment, especially on a slow network. Before this, that wait had zero visible
+            indication (the lobby screen's "Connecting..." button only ever covered the admission
+            request itself, not what happens after). Every stage here is a real, already-tracked
+            transition from useJitsiMeeting (connected/joined/hasVideoTrack) -- nothing fabricated,
+            and it hides itself the instant jitsiMeeting.joined is true (or immediately, on a fast
+            connection, if these happen to have already settled before the first paint). */}
+        {(() => {
+          const stage = !jitsiMeeting.connected ? 'Connecting to meeting…'
+            : !jitsiMeeting.joined ? 'Joining…'
+            : (videoEnabled && !cameraPermissionError && !jitsiMeeting.hasVideoTrack) ? 'Starting camera…'
+            : null;
+
+          return stage && (
+            <div
+              style={{
+                position: 'fixed',
+                top: '16px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                zIndex: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: 'rgba(32, 33, 36, 0.92)',
+                backdropFilter: 'blur(8px)',
+                color: '#E8EAED',
+                fontSize: '13px',
+                fontWeight: 500,
+                padding: '8px 16px',
+                borderRadius: '20px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}
+            >
+              <span
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  border: '2px solid rgba(255,255,255,0.25)',
+                  borderTopColor: '#8AB4F8',
+                  borderRadius: '50%',
+                  animation: 'tw-join-spin 0.8s linear infinite',
+                }}
+              />
+              {stage}
+            </div>
+          );
+        })()}
+        <style>{'@keyframes tw-join-spin { to { transform: rotate(360deg); } }'}</style>
+
         {/* Call/device/connection error banner (mic/camera permission, ICE/JVB failures, device
             switch failures, screen-share errors, etc.) -- surfaced via setCallError so failures
             are never silent. Dismissible; does not end the call by itself. */}
@@ -4391,7 +4475,6 @@ export function MeetingRoomPage() {
                   raisedHand={isHandRaised}
                   theme={localTheme}
                   compact
-                  mirrored
                   style={{ width: '100%', aspectRatio: '16 / 9' }}
                   onVideoElement={setInCallVideoNode}
                   isPinned={pinnedParticipantId === 'local'}
@@ -4874,7 +4957,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
                         ) : (
                           <div
@@ -5019,7 +5102,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
                         ) : (
                           <div
@@ -7311,7 +7394,6 @@ export function MeetingRoomPage() {
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
-                  transform: 'scaleX(-1)',
                 }}
               />
             ) : (
@@ -7667,7 +7749,6 @@ export function MeetingRoomPage() {
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
-                  transform: 'scaleX(-1)',
                 }}
               />
             ) : (
@@ -8030,7 +8111,11 @@ export function MeetingRoomPage() {
                 if (!joining) e.currentTarget.style.backgroundColor = '#4F46E5';
               }}
             >
-              {joining ? 'Connecting...' : 'Join Meeting'}
+              {/* "joining" covers exactly one real stage: the admission/lobby-knock request in
+                  handleJoinMeeting. Everything after that (the Jitsi connection itself, the
+                  conference join, track attach) happens once hasJoined flips true and this
+                  button is already gone -- see the join-progress banner further down for those. */}
+              {joining ? 'Requesting access...' : 'Join Meeting'}
             </button>
           </div>
 

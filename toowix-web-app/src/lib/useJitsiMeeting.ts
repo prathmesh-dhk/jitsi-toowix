@@ -102,7 +102,15 @@ interface IUseJitsiMeetingOptions {
 
 let scriptLoadPromise: Promise<void> | null = null;
 
-async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
+// Exported so the lobby/pre-join screen can start this download the moment it renders, instead
+// of waiting for the person to click Join -- real reported delay: Jitsi's own JS (config.js then
+// lib-jitsi-meet.min.js, loaded serially) only started downloading AFTER the join click, even
+// though the person may have sat on the lobby screen for seconds doing nothing network-intensive.
+// scriptLoadPromise is still the single source of truth either way: a caller that preloads this
+// and a caller that invokes it again later from the real connect effect share the exact same
+// in-flight (or already-settled) promise -- no duplicate download, no race, and the second
+// caller's own `await` just resolves immediately if the first already finished.
+export async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
   if (window.JitsiMeetJS && window.config) {
     return;
   }

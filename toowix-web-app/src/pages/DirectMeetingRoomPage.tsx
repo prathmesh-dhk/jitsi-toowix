@@ -251,7 +251,7 @@ export function DirectMeetingRoomPage() {
                 localVideoRef.current = el;
                 setLocalVideoElement(el);
               }}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
             <div style={{

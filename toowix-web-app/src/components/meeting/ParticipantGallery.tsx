@@ -342,7 +342,6 @@ export function ParticipantGallery({
                   raisedHand={isHandRaised}
                   theme={localTheme}
                   speaking={isSpeaking}
-                  mirrored
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
                   isPinned={pinnedParticipantId === 'local'}

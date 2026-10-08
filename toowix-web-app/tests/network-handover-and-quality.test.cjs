@@ -5,11 +5,15 @@ const path = require('node:path');
 const root = path.join(__dirname, '..', 'src', 'lib');
 const hook = fs.readFileSync(path.join(root, 'useJitsiMeeting.ts'), 'utf8');
 const policy = fs.readFileSync(path.join(root, 'networkQuality.ts'), 'utf8');
+// The conference event listeners (including offer/answer-failure recovery) were extracted out of
+// useJitsiMeeting.ts into their own module during the Track 3 split -- this one assertion follows
+// that move; everything else below is still genuinely in useJitsiMeeting.ts itself.
+const conferenceEvents = fs.readFileSync(path.join(root, 'jitsi', 'useConferenceEvents.ts'), 'utf8');
 
 assert.match(hook, /p2p: \{ \.\.\.\(config\.p2p \|\| \{\}\), enabled: false \}/, 'calls must stay JVB-routed to avoid P2P-to-JVB renegotiation failures');
 assert.match(hook, /https:\/\/\$\{jitsiDomain\}\/libs\/lib-jitsi-meet\.min\.js/, 'meeting client must load lib-jitsi-meet from the active Jitsi server release');
 assert.match(hook, /runSerializedRoomOperation\(async \(\) => \{[\s\S]*?await myRoom\.addTrack\(track\)/, 'initial audio and camera tracks must use the serialized SDP negotiation queue');
-assert.match(hook, /normalizedError\.includes\('offeranswerfailed'\)/, 'offer/answer failures must receive one controlled recovery attempt');
+assert.match(conferenceEvents, /normalizedError\.includes\('offeranswerfailed'\)/, 'offer/answer failures must receive one controlled recovery attempt (now in useConferenceEvents.ts)');
 assert.match(hook, /if \(requestedMode === 'auto'\)/, 'normal calls must leave automatic quality adaptation to Jitsi/WebRTC');
 assert.match(hook, /if \(!lowDataPolicyActiveRef\.current\)/, 'Auto mode must not repeatedly reapply media constraints');
 assert.match(policy, /highBandwidth = false/, 'policy must support a bandwidth-aware quality tier');
