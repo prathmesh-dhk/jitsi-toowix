@@ -3545,11 +3545,33 @@ export function MeetingRoomPage() {
         // enumerateDevices isn't supported on every browser/platform; ignore silently.
       }
     };
+    // Real reported bug: connecting a Bluetooth headset made the mic look like it was
+    // "disconnecting and reconnecting again and again". Root cause -- a Bluetooth device's OS
+    // pairing/profile handshake (HFP <-> A2DP) fires several `devicechange` events within a
+    // couple hundred milliseconds, and the device can briefly vanish from enumerateDevices() and
+    // reappear mid-handshake. Each event ran `refresh()` immediately and independently, so a
+    // single BT connection could be seen as "disappeared" (triggering the disconnect branch
+    // above: reset to system default + an error toast) and then "new" (triggering the auto-switch
+    // branch below) several times in a row -- a real replaceTrack() per flicker, which is the
+    // audible glitch and the mic icon flashing. A real Jitsi client debounces this same event for
+    // the same reason. Debouncing collapses a whole handshake burst into exactly one refresh()
+    // once the device list has actually settled, so only the FINAL state is ever acted on -- a
+    // genuine new device still auto-connects, just once, not mid-flap.
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const debouncedRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void refresh();
+      }, 500);
+    };
+
     void refresh();
-    navigator.mediaDevices?.addEventListener('devicechange', refresh);
+    navigator.mediaDevices?.addEventListener('devicechange', debouncedRefresh);
     return () => {
       cancelled = true;
-      navigator.mediaDevices?.removeEventListener('devicechange', refresh);
+      if (debounceTimer) clearTimeout(debounceTimer);
+      navigator.mediaDevices?.removeEventListener('devicechange', debouncedRefresh);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined, audioId, videoId, outputId]);
