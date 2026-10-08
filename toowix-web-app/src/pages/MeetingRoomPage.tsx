@@ -99,6 +99,12 @@ import { DocumentPipContent } from '../components/meeting/PictureInPicture';
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
 const RESIZE_DEBUG = false;
+const SPEAKER_RAIL_VISIBLE_COUNT = 6;
+// The local tile is always first in the rail, so the fifth visual position is remote index 3.
+// Keeping the first four positions stable prevents a dominant-speaker event from constantly
+// shuffling the entire list.
+const SPEAKER_RAIL_PROMOTION_REMOTE_INDEX = SPEAKER_RAIL_VISIBLE_COUNT - 2;
+const SPEAKER_RAIL_PROMOTION_DELAY_MS = 1600;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -304,10 +310,32 @@ export function MeetingRoomPage() {
   const [remoteParticipants, setRemoteParticipants] = useState<
     Array<{ id: string; name: string; avatarUrl?: string | null; moderator?: boolean; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
   >([]);
+  // Join order is the default for the speaker-view rail. It is deliberately independent from
+  // transient audio levels so participant cards do not continuously move up and down.
+  const [speakerRailRemoteOrder, setSpeakerRailRemoteOrder] = useState<string[]>([]);
+  const speakerRailPromotionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [currentTime, setCurrentTime] = useState(() =>
     new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   );
   const [activePanel, setActivePanel] = useState<'chat' | 'people' | 'info' | 'host' | 'activities' | null>(null);
+
+  useEffect(() => {
+    const remoteIds = remoteParticipants.map((participant) => participant.id);
+    setSpeakerRailRemoteOrder((previous) => {
+      const retained = previous.filter((id) => remoteIds.includes(id));
+      const appended = remoteIds.filter((id) => !retained.includes(id));
+      const next = [...retained, ...appended];
+
+      return next.length === previous.length && next.every((id, index) => id === previous[index])
+        ? previous
+        : next;
+    });
+  }, [remoteParticipants]);
+  useEffect(() => () => {
+    if (speakerRailPromotionTimerRef.current !== null) {
+      clearTimeout(speakerRailPromotionTimerRef.current);
+    }
+  }, []);
   // The visible meeting canvas is the source of truth for gallery sizing. It changes not only
   // with browser resizing, but also when a side panel, fullscreen, or mobile layout changes.
   const meetingCanvasRef = useRef<HTMLDivElement | null>(null);
@@ -348,6 +376,22 @@ export function MeetingRoomPage() {
     manuallyPinnedRef.current = id !== null;
     setPinnedParticipantId(id);
   }, []);
+  // Browsers intentionally prohibit custom dialogs during refresh/close. Returning a value from
+  // beforeunload is the supported mechanism: the browser shows its native Leave/Cancel prompt.
+  // This listener is captured before lib-jitsi-meet's unload listener and blocks later handlers.
+  // Otherwise Jitsi treats the *attempt* to reload as a leave, even when the browser user chooses
+  // Cancel and stays on this page.
+  useEffect(() => {
+    if (!hasJoined) return;
+    const confirmReload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+      event.stopImmediatePropagation();
+    };
+
+    window.addEventListener('beforeunload', confirmReload, { capture: true });
+    return () => window.removeEventListener('beforeunload', confirmReload, { capture: true });
+  }, [hasJoined]);
   const toggleTileView = useCallback(() => {
     // Do not wait for an animation or a stale selected tile before changing layout.
     setTileViewEnabled((enabled) => !enabled);
@@ -2623,6 +2667,80 @@ export function MeetingRoomPage() {
     setPinnedParticipantId(isLocal ? 'local' : jitsiMeeting.dominantSpeakerId);
   }, [jitsiMeeting.dominantSpeakerId, jitsiMeeting.localParticipantId]);
 
+  // In speaker view, preserve the rail order until somebody outside the visible group has been
+  // the dominant speaker continuously for a moment. Then swap them into the fifth visual slot
+  // (the local tile is fixed in slot one). This gives an active speaker a visible place without
+  // making the whole right rail jump whenever people briefly interrupt one another.
+  useEffect(() => {
+    if (speakerRailPromotionTimerRef.current !== null) {
+      clearTimeout(speakerRailPromotionTimerRef.current);
+      speakerRailPromotionTimerRef.current = null;
+    }
+    if (tileViewEnabled && !activePanel) return;
+
+    const rawDominantId = jitsiMeeting.dominantSpeakerId;
+    if (!rawDominantId || rawDominantId === jitsiMeeting.localParticipantId) return;
+
+    const activeRemoteIds = remoteParticipants.map((participant) => participant.id);
+    if (!activeRemoteIds.includes(rawDominantId)) return;
+
+    // A remote participant on the large stage is already visible; only promote somebody who is
+    // currently in, or below, the right-side rail.
+    const stageRemoteId = pinnedParticipantId && pinnedParticipantId !== 'local'
+      ? pinnedParticipantId
+      : (pinnedParticipantId === 'local' ? null : remoteParticipants[0]?.id ?? null);
+    if (rawDominantId === stageRemoteId) return;
+
+    const orderedRailIds = speakerRailRemoteOrder.filter((id) => (
+      id !== stageRemoteId && activeRemoteIds.includes(id)
+    ));
+    const speakerIndex = orderedRailIds.indexOf(rawDominantId);
+    const promotionIndex = Math.min(SPEAKER_RAIL_PROMOTION_REMOTE_INDEX, orderedRailIds.length - 1);
+    if (speakerIndex === -1 || speakerIndex <= promotionIndex) return;
+
+    speakerRailPromotionTimerRef.current = setTimeout(() => {
+      setSpeakerRailRemoteOrder((previous) => {
+        const currentIds = remoteParticipants.map((participant) => participant.id);
+        const normalized = [
+          ...previous.filter((id) => currentIds.includes(id)),
+          ...currentIds.filter((id) => !previous.includes(id)),
+        ];
+        const currentRailIds = normalized.filter((id) => id !== stageRemoteId);
+        const currentSpeakerIndex = currentRailIds.indexOf(rawDominantId);
+        const currentPromotionIndex = Math.min(SPEAKER_RAIL_PROMOTION_REMOTE_INDEX, currentRailIds.length - 1);
+        const displacedId = currentRailIds[currentPromotionIndex];
+
+        if (currentSpeakerIndex === -1 || currentSpeakerIndex <= currentPromotionIndex || !displacedId) {
+          return previous;
+        }
+
+        const next = [...normalized];
+        const speakerPosition = next.indexOf(rawDominantId);
+        const displacedPosition = next.indexOf(displacedId);
+        next[speakerPosition] = displacedId;
+        next[displacedPosition] = rawDominantId;
+
+        return next;
+      });
+      speakerRailPromotionTimerRef.current = null;
+    }, SPEAKER_RAIL_PROMOTION_DELAY_MS);
+
+    return () => {
+      if (speakerRailPromotionTimerRef.current !== null) {
+        clearTimeout(speakerRailPromotionTimerRef.current);
+        speakerRailPromotionTimerRef.current = null;
+      }
+    };
+  }, [
+    activePanel,
+    jitsiMeeting.dominantSpeakerId,
+    jitsiMeeting.localParticipantId,
+    pinnedParticipantId,
+    remoteParticipants,
+    speakerRailRemoteOrder,
+    tileViewEnabled,
+  ]);
+
   // Real recording state (RECORDER_STATE_CHANGED) -- this fires identically for every
   // participant in the room, not just whoever clicked start, so both the blinking "REC"
   // indicator below AND this "Recording has started/stopped" toast are accurate for everyone,
@@ -4586,6 +4704,13 @@ export function MeetingRoomPage() {
                 const others = isLocalPinned
                   ? remoteParticipants
                   : remoteParticipants.filter((p) => p.id !== pinned?.id);
+                const orderedOthers = [...others].sort((left, right) => {
+                  const leftIndex = speakerRailRemoteOrder.indexOf(left.id);
+                  const rightIndex = speakerRailRemoteOrder.indexOf(right.id);
+
+                  return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex)
+                    - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+                });
                 const pinnedTheme = pinned ? getParticipantColorTheme(pinned.name, 1) : localTheme;
                 const pinnedInitial = pinned ? (pinned.name.trim() || 'P').charAt(0).toUpperCase() : participantInitial;
 
@@ -4612,6 +4737,38 @@ export function MeetingRoomPage() {
                       }}
                     >
                       <SpeakingOverlay id={isLocalPinned ? 'local' : pinned?.id} />
+                      {manuallyPinnedRef.current && pinnedParticipantId && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPinnedManually(null);
+                          }}
+                          title="Unpin participant"
+                          style={{
+                            position: 'absolute',
+                            top: '16px',
+                            left: '16px',
+                            zIndex: 12,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            height: '34px',
+                            padding: '0 12px',
+                            borderRadius: '17px',
+                            border: '1px solid rgba(255,255,255,.18)',
+                            background: 'rgba(20,22,26,.8)',
+                            color: '#FFFFFF',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            backdropFilter: 'blur(8px)',
+                          }}
+                        >
+                          <Pin size={15} color="#8AB4F8" />
+                          Unpin
+                        </button>
+                      )}
                       {isLocalPinned ? (
                         inCallVideo ? (
                           <video
@@ -4726,11 +4883,14 @@ export function MeetingRoomPage() {
                     <div
                       className="tw-speaker-filmstrip"
                       style={{
-                        width: activePanel || meetingCanvasSize.width < 980 ? '240px' : '464px',
-                        minWidth: activePanel || meetingCanvasSize.width < 980 ? '240px' : '464px',
-                        display: 'grid',
-                        gridTemplateColumns: activePanel || meetingCanvasSize.width < 980 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
-                        alignContent: 'start',
+                        // A single 16:9 column restores the large stage width. At ~200px wide,
+                        // six cards fit in a standard desktop meeting canvas; any further cards
+                        // continue in this same column and scroll vertically.
+                        width: '200px',
+                        minWidth: '200px',
+                        flex: '0 0 200px',
+                        display: 'flex',
+                        flexDirection: 'column',
                         gap: '12px',
                         overflowY: 'auto',
                         maxHeight: '100%',
@@ -4821,7 +4981,7 @@ export function MeetingRoomPage() {
                         )}
                       </div>
 
-                      {others.map((p, idx) => {
+                      {orderedOthers.map((p, idx) => {
                         const t = getParticipantColorTheme(p.name, idx + 2);
                         const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
 
