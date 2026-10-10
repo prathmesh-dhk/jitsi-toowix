@@ -6,7 +6,7 @@ import {
 } from './SettingsShared';
 
 const DEFAULTS = {
-  cameraOffOnJoin: false, useHdVideo: true, mirrorMyVideo: true, displayParticipantNames: true,
+  cameraOffOnJoin: false, useHdVideo: true, mirrorMyVideo: false, displayParticipantNames: true,
   muteMicOnJoin: false, autoAdjustMicVolume: true, playJoinLeaveSounds: true, noiseSuppression: true,
   requireLobby: false, allowJoinBeforeHost: true, requireAuthenticatedUsers: false, allowExternalGuests: true,
   autoAdmitInternalUsers: true, notifyHostOnLobbyEntry: true, defaultDurationMinutes: 30, defaultMeetingType: 'Internal' as 'Internal' | 'Guest',

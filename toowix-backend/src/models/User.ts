@@ -250,7 +250,7 @@ const UserSchema = new Schema<IUserDocument>(
     meetingDefaults: {
       cameraOffOnJoin: { type: Boolean, default: false },
       useHdVideo: { type: Boolean, default: true },
-      mirrorMyVideo: { type: Boolean, default: true },
+      mirrorMyVideo: { type: Boolean, default: false },
       displayParticipantNames: { type: Boolean, default: true },
       muteMicOnJoin: { type: Boolean, default: false },
       autoAdjustMicVolume: { type: Boolean, default: true },
