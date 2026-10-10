@@ -203,3 +203,123 @@ gsd-template/
 .gemini/
 
 scripts/test-results/
+
+# Dependencies
+**/node_modules/
+
+# Generated builds
+**/dist/
+**/build/
+**/coverage/
+
+# Caches
+**/.cache/
+**/.vite/
+
+# Logs
+**/logs/
+*.log
+
+# Local benchmark output
+reports/benchmarks/
+
+# Environment secrets
+.env
+.env.local
+.env.production
+**/.env.local
+**/.env.production
+
+# Root Jitsi web-client source (already tracked in git history -- this only
+# stops NEW changes to these folders from being staged automatically; it does
+# NOT remove what's already committed, and `git add -A` will skip them from
+# here on, so don't forget they exist when editing the meet server source).
+/react/
+/modules/
+/css/
+/lang/
+/fonts/
+/images/
+/sounds/
+/static/
+/android/
+/patches/
+
+# Mobile-only / unused tooling at repo root (React Native + Fastlane/Lua/Watchman
+# config, not used by the web meet server, toowix-web-app, or toowix-backend)
+/index.android.js
+/index.ios.js
+/metro.config.js
+/globals.native.d.ts
+/Gemfile
+/Gemfile.lock
+/.luacheckrc
+/.watchmanconfig
+/_unlock
+/deploy-recording-fixes.sh
+
+# Root meet-server build/entry files, untracked at explicit request -- these are
+# the live meet server's app entry, routing/branding config, and build/lint
+# tooling. Edits here will no longer be versioned by git going forward.
+/app.js
+/conference.js
+/config.js
+/interface_config.js
+/webpack.config.js
+/babel.config.js
+/index.html
+/head.html
+/body.html
+/base.html
+/title.html
+/fonts.html
+/plugin.head.html
+/manifest.json
+/custom.js
+/custom.d.ts
+/globals.d.ts
+/giphy-analytics-stub.js
+/.eslintrc.js
+/.eslintignore
+/.npmrc
+/.nvmrc
+
+# Root repo manifest/build config, dev scripts, docs, and stray media -- untracked
+# at explicit request. NOTE: package.json/package-lock.json are the root app's
+# entire dependency list; untracking them means a fresh clone of this repo can
+# no longer `npm install` the meet server without them being restored.
+/package.json
+/package-lock.json
+/tsconfig.web.json
+/tsconfig.native.json
+/react-native.config.js
+/prepare-dev.sh
+/run-local.ps1
+/pwa-worker.js
+/model_capabilities.yaml
+/skills-lock.json
+/README.md
+/SECURITY.md
+/STACK.md
+/PRODUCT_CONTEXT.md
+/PROJECT_RULES.md
+/PERFORMANCE_BASELINE.md
+/PERFORMANCE_TEST_REPORT.md
+/talk-proxy.conf.local
+/readme-img1.png
+/*.mp4
+
+# Folders already deleted from disk this session (mobile apps, stray tooling,
+# generated reports) -- added here so git stops tracking the deletion as
+# pending and so nothing re-adds them by accident later.
+/ios/
+/metadata/
+/debian/
+/.devcontainer/
+/.eloqnt/
+/.postman/
+/postman/
+/adapters/
+/react-native-sdk/
+/reports/
+/twa/
