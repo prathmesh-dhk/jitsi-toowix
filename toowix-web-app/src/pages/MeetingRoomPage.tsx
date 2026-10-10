@@ -2538,7 +2538,7 @@ export function MeetingRoomPage() {
   // own fallback leave in case the moderator's client isn't present for some reason.
   useEffect(() => {
     if (isFreeInstantMeeting && hasJoined && !freeInstantExpiresAtRef.current) {
-      freeInstantExpiresAtRef.current = Date.now() + 30 * 60 * 1000;
+      freeInstantExpiresAtRef.current = Date.now() + 2 * 60 * 60 * 1000;
     }
   }, [isFreeInstantMeeting, hasJoined]);
 

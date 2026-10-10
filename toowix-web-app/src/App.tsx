@@ -13,7 +13,7 @@ function HomePage() {
   const handleStartInstant = () => {
     const newRoomId = `instant-${generateUniqueMeetingId()}`;
     // Free/unauthenticated instant meetings created from the public landing page are capped at
-    // 30 minutes (like a free-tier call limit) -- flagged via navigation state rather than a
+    // 2 hours (like a free-tier call limit) -- flagged via navigation state rather than a
     // query param so it can't be stripped/edited by just visiting a bare /meet/:roomId URL.
     navigate(`/meet/${newRoomId}`, { state: { freeInstantMeeting: true } });
   };
