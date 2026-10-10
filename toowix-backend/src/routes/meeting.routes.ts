@@ -1,4 +1,3 @@
-import { roomAdmission, attendance } from '../meetings/admission';
 import { Router } from 'express';
 import { optionalAccount, verifyFirebaseToken } from '../middleware/auth';
 import { meetingAccessRateLimiter } from '../middleware/rateLimit';
@@ -13,7 +12,7 @@ import {
   inviteToMeetingHandler,
   listConversationsHandler,
   leaveConversationHandler,
-} from '../meetings/meetings';
+} from '../meetings/crud/meeting.controller';
 import {
   postChatMessageHandler,
   getChatHistoryHandler,
@@ -22,8 +21,10 @@ import {
   markChatReadHandler,
   inviteConversationMemberHandler,
   getConversationMembersHandler,
-} from '../meetings/chatHistory';
+} from '../meetings/chat/chat.controller';
 import {
+  roomAdmission,
+  attendance,
   knockLobbyHandler,
   getLobbyStatusHandler,
   cancelLobbyHandler,
@@ -34,13 +35,15 @@ import {
   endMeetingForEveryoneHandler,
   getLiveMeetingStatusHandler,
   createLobbyStreamTicketHandler,
+  lockMeetingHandler,
+  unlockMeetingHandler,
+} from '../meetings/lobby/lobby.controller';
+import {
   postSignalHandler,
   getSignalsHandler,
   streamLobbyHandler,
   streamSignalsHandler,
-  lockMeetingHandler,
-  unlockMeetingHandler,
-} from '../meetings/waitingRoom';
+} from '../meetings/lobby/lobby.realtime';
 
 const router = Router();
 

@@ -14,7 +14,7 @@ import {
   listSessionsHandler,
   revokeSessionHandler,
   revokeOtherSessionsHandler,
-} from '../settings/settings';
+} from '../settings/settings.controller';
 
 const router = Router();
 

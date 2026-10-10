@@ -9,7 +9,7 @@ import {
   listRecordingsHandler,
   renameRecordingHandler,
   streamRecordingHandler,
-} from '../recordings/recordings';
+} from '../recordings/recording.controller';
 
 const router = Router();
 

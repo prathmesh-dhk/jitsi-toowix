@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { verifyFirebaseToken } from '../middleware/auth';
 import { notificationsRateLimiter } from '../middleware/rateLimit';
-import { listNotificationsHandler, markReadHandler, markAllReadHandler } from '../notifications/notifications';
+import { listNotificationsHandler, markReadHandler, markAllReadHandler } from '../notifications/notification.controller';
 
 const router = Router();
 

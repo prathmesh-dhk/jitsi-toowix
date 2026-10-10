@@ -7,7 +7,7 @@ import {
   listTeamUsersHandler,
   resendTeamInviteHandler,
   updateTeamUserHandler,
-} from '../team/team';
+} from '../team/team.controller';
 
 const router = Router();
 

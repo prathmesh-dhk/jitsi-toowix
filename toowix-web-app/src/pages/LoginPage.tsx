@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { signInWithEmailAndPassword, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
+import { signInWithToowix } from '../lib/keycloakAuth';
 import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
@@ -111,6 +112,19 @@ export function LoginPage() {
       setErrorMessage(err.message || 'Google SSO sign in failed.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Kept separate from the existing Firebase sign-in methods for Keycloak testing.
+  const handleToowixSignIn = async () => {
+    setErrorMessage(null);
+    setStatusReason(null);
+    setIsLoading(true);
+    try {
+      await signInWithToowix();
+    } catch {
+      setIsLoading(false);
+      setErrorMessage('Unable to start Toowix sign-in. Please try again.');
     }
   };
 
@@ -505,6 +519,19 @@ export function LoginPage() {
                   />
                 </svg>
                 Sign in with Google
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleToowixSignIn()}
+                disabled={isLoading}
+                style={{
+                  width: '100%', height: '44px', backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                  border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`, borderRadius: '8px',
+                  fontSize: '14px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Sign in with Toowix
               </button>
             </div>
 

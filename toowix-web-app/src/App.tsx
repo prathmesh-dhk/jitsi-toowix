@@ -269,22 +269,35 @@ function HomePage() {
   );
 }
 
-import { DashboardPage } from './pages/DashboardPage';
-import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
-import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
-import { EmailVerificationPage } from './pages/EmailVerificationPage';
 import { ThemeProvider } from './lib/theme';
-import { SettingsPage } from './pages/SettingsPage';
-import { ProfileSection } from './components/settings/ProfileSection';
-import { GeneralSection } from './components/settings/GeneralSection';
-import { MeetingsSection } from './components/settings/MeetingsSection';
-import { RecordingSection } from './components/settings/RecordingSection';
-import { NotificationsSection } from './components/settings/NotificationsSection';
-import { SecuritySection } from './components/settings/SecuritySection';
-import { StorageSection } from './components/settings/StorageSection';
-import { RsvpPage } from './pages/RsvpPage';
-import { RecordingWatchPage } from './pages/RecordingWatchPage';
+
+// Phase 5 frontend performance: every one of these used to be a static top-level import, so a
+// first-time visitor landing on the public marketing HomePage downloaded the full Dashboard,
+// Settings (+ all 7 section components), Signup, Rsvp, RecordingWatch, ForgotPassword,
+// EmailVerification and AuthCallback code in the SAME main bundle as the homepage itself --
+// none of that is needed until the visitor actually navigates to one of those routes. This
+// mirrors the EXACT existing pattern already used for MeetingRoomPage/DirectMeetingRoomPage
+// below (same lazy()/Suspense mechanism, not a new system) -- measured with `npm run build`
+// before and after, see docs/phase5-frontend-performance-audit.md for the real before/after
+// numbers. LoginPage is the one exception kept eager: it's the most common next destination
+// from the public homepage (Sign In / the auth redirect flow), so deferring it would trade a
+// guaranteed-needed download for a visible loading flash on the single most common navigation.
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then(module => ({ default: module.DashboardPage })));
+import { LoginPage } from './pages/LoginPage';
+const SignupPage = lazy(() => import('./pages/SignupPage').then(module => ({ default: module.SignupPage })));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage').then(module => ({ default: module.ForgotPasswordPage })));
+const EmailVerificationPage = lazy(() => import('./pages/EmailVerificationPage').then(module => ({ default: module.EmailVerificationPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(module => ({ default: module.SettingsPage })));
+const ProfileSection = lazy(() => import('./components/settings/ProfileSection').then(module => ({ default: module.ProfileSection })));
+const GeneralSection = lazy(() => import('./components/settings/GeneralSection').then(module => ({ default: module.GeneralSection })));
+const MeetingsSection = lazy(() => import('./components/settings/MeetingsSection').then(module => ({ default: module.MeetingsSection })));
+const RecordingSection = lazy(() => import('./components/settings/RecordingSection').then(module => ({ default: module.RecordingSection })));
+const NotificationsSection = lazy(() => import('./components/settings/NotificationsSection').then(module => ({ default: module.NotificationsSection })));
+const SecuritySection = lazy(() => import('./components/settings/SecuritySection').then(module => ({ default: module.SecuritySection })));
+const StorageSection = lazy(() => import('./components/settings/StorageSection').then(module => ({ default: module.StorageSection })));
+const RsvpPage = lazy(() => import('./pages/RsvpPage').then(module => ({ default: module.RsvpPage })));
+const RecordingWatchPage = lazy(() => import('./pages/RecordingWatchPage').then(module => ({ default: module.RecordingWatchPage })));
+const AuthCallbackPage = lazy(() => import('./pages/AuthCallbackPage').then(module => ({ default: module.AuthCallbackPage })));
 
 // The meeting implementation includes media previews, call controls, and optional meeting
 // features. Loading it only on a /meet route keeps the marketing, auth, dashboard and RSVP
@@ -294,6 +307,12 @@ const DirectMeetingRoomPage = lazy(() => import('./pages/DirectMeetingRoomPage')
 
 function MeetingRouteLoader() {
   return <main aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--color-text-secondary)' }}>Preparing meeting…</main>;
+}
+
+// Shared fallback for every lazy route below (not the heavier meeting-specific one above --
+// these routes don't need a meeting-flavored loading message).
+function RouteLoader() {
+  return <main aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: 'var(--color-text-secondary)' }}>Loading…</main>;
 }
 
 // Root route (bare domain / typed-in URL with the path stripped): a logged-in visitor must land
@@ -313,10 +332,10 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<RootRoute />} />
-          <Route path="/rsvp" element={<RsvpPage />} />
-          <Route path="/recordings/:id" element={<RecordingWatchPage />} />
-          <Route path="/recording/:id" element={<RecordingWatchPage />} />
-          <Route element={<AccountGuard />}><Route path="/dashboard" element={<DashboardPage />} /></Route>
+          <Route path="/rsvp" element={<Suspense fallback={<RouteLoader />}><RsvpPage /></Suspense>} />
+          <Route path="/recordings/:id" element={<Suspense fallback={<RouteLoader />}><RecordingWatchPage /></Suspense>} />
+          <Route path="/recording/:id" element={<Suspense fallback={<RouteLoader />}><RecordingWatchPage /></Suspense>} />
+          <Route element={<AccountGuard />}><Route path="/dashboard" element={<Suspense fallback={<RouteLoader />}><DashboardPage /></Suspense>} /></Route>
           <Route path="/meeting-ended" element={<MeetingEndedPage />} />
           <Route path="/meeting-link-expired" element={<MeetingLinkExpiredPage />} />
           <Route path="/home" element={<HomePage />} />
@@ -325,13 +344,17 @@ export default function App() {
               elements. Separate route, zero risk to the working /meet/:roomId iframe flow. */}
           <Route path="/meet-direct/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><DirectMeetingRoomPage /></Suspense>} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<Suspense fallback={<RouteLoader />}><AuthCallbackPage /></Suspense>} />
           <Route path="/signin" element={<LoginPage />} />
-          <Route path="/signup" element={<SignupPage />} />
-          <Route path="/register" element={<SignupPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/verify-email" element={<EmailVerificationPage />} />
+          <Route path="/signup" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
+          <Route path="/register" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
+          <Route path="/forgot-password" element={<Suspense fallback={<RouteLoader />}><ForgotPasswordPage /></Suspense>} />
+          <Route path="/verify-email" element={<Suspense fallback={<RouteLoader />}><EmailVerificationPage /></Suspense>} />
           <Route element={<AccountGuard />}>
-          <Route path="/settings" element={<SettingsPage />}>
+          {/* One Suspense boundary at the parent covers SettingsPage itself AND every lazy
+              section rendered through its <Outlet/> below -- Suspense catches a lazy boundary
+              suspending anywhere in its subtree, so each child route doesn't need its own. */}
+          <Route path="/settings" element={<Suspense fallback={<RouteLoader />}><SettingsPage /></Suspense>}>
             <Route index element={<Navigate to="/settings/profile" replace />} />
             <Route path="profile" element={<ProfileSection />} />
             <Route path="general" element={<GeneralSection />} />

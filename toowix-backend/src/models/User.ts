@@ -82,6 +82,14 @@ export interface INotificationPreferences {
 
 export interface IUser {
   firebaseUid: string;
+  // The Keycloak access token's `sub` claim for this user, once linked. Null until an admin (or
+  // the dev link-keycloak-sub script locally) explicitly links a Keycloak identity to this
+  // existing Toowix user -- requireMeetEntitlement.ts never infers this from a token's email
+  // claim at request time (that would be exactly the "unsafe email matching" real identity
+  // systems avoid: an email claim is self-reported by the IdP's user profile, not a stable,
+  // collision-proof primary key the way `sub` is). firebaseUid remains this user's primary
+  // identity; keycloakSub is an additional, optional linked identity for the Keycloak-auth path.
+  keycloakSub?: string | null;
   companyId?: Types.ObjectId | null;
   email: string;
   fullName: string;
@@ -139,6 +147,15 @@ const UserSchema = new Schema<IUserDocument>(
       required: [true, 'Firebase UID is required'],
       unique: true,
       trim: true,
+      index: true,
+    },
+    keycloakSub: {
+      type: String,
+      default: null,
+      trim: true,
+      // sparse: null/absent for every not-yet-linked user doesn't collide with the unique index.
+      unique: true,
+      sparse: true,
       index: true,
     },
     companyId: {

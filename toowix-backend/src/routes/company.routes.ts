@@ -1,14 +1,15 @@
 import { Router } from 'express';
 import { verifyFirebaseToken, verifyIdentityToken } from '../middleware/auth';
-import { registerCompanyHandler } from '../companies/register';
-import { getMeetingPolicyHandler, updateMeetingPolicyHandler } from '../companies/policy';
 import {
+  registerCompanyHandler,
+  getMeetingPolicyHandler,
+  updateMeetingPolicyHandler,
   listCompaniesForAdminHandler,
   approveCompanyHandler,
   rejectCompanyHandler,
   suspendCompanyHandler,
   reactivateCompanyHandler,
-} from '../companies/admin';
+} from '../companies/company.controller';
 
 const router = Router();
 

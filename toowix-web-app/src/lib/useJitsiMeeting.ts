@@ -115,13 +115,18 @@ export async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<voi
     return;
   }
   if (!scriptLoadPromise) {
-    scriptLoadPromise = (async () => {
-      await loadScript(`https://${jitsiDomain}/config.js`);
-      // The browser library and the Jitsi deployment must be the same release. A copied local
-      // lib-jitsi-meet build had drifted from Jicofo/JVB and rejected valid simulcast SDP from
-      // a third participant as duplicate SSRC lines. Always use the active server's own build.
-      await loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`);
-    })();
+    // Neither script depends on the other's content to start downloading -- lib-jitsi-meet.min.js
+    // only reads window.config later, when ensureLibJitsiMeetLoaded's caller actually uses it, not
+    // at parse/load time. Fetching them in parallel instead of one-after-another removes a full
+    // network round trip from every cold load.
+    //
+    // The browser library and the Jitsi deployment must still be the same release. A copied local
+    // lib-jitsi-meet build had drifted from Jicofo/JVB and rejected valid simulcast SDP from
+    // a third participant as duplicate SSRC lines. Always use the active server's own build.
+    scriptLoadPromise = Promise.all([
+      loadScript(`https://${jitsiDomain}/config.js`),
+      loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
+    ]).then(() => undefined);
   }
 
   return scriptLoadPromise;
@@ -166,7 +171,13 @@ function getRoomDeviceSessionId(roomName: string): string {
 // Reproduced with three plain Chrome clients against production: fails with simulcast, works
 // with a single layer (only an FID group is advertised). One layer is also a third of the
 // encoder CPU/uplink, which is what small Toowix calls and phones want anyway.
-const SEND_SINGLE_VIDEO_LAYER = true;
+//
+// Phase 4 staging test hook: VITE_FORCE_SIMULCAST is unset in every real build (production,
+// dev, this repo's own .env.example), so this evaluates to `true` everywhere it already did --
+// zero behavior change. It exists only so an isolated staging build (see staging/README.md)
+// can flip this one constant without editing source, to run the AV1/VP9/VP8 x simulcast
+// on/off test matrix. Never set this env var in a production build.
+const SEND_SINGLE_VIDEO_LAYER = import.meta.env.VITE_FORCE_SIMULCAST === 'true' ? false : true;
 // Ceiling for a single room.addTrack/removeTrack/replaceTrack call inside the shared
 // trackOperationQueueRef queue (see runSerializedRoomOperation) -- see its comment for why this
 // has to live at the queue level and not just at each caller's own await.
@@ -548,6 +559,18 @@ export function useJitsiMeeting({
   // this itself is applied immediately in either direction; the rate limiting already happened
   // above, before the effect's render height was ever raised.
   const effectSenderHeightRef = useRef<number | null>(null);
+  // Phase 1 stabilization: the periodic network-quality effect below used to call
+  // room.setReceiverConstraints/setSenderVideoConstraint (non-effect branch) unconditionally on
+  // every run, even when the effective {lastN, height} or sendHeight hadn't actually changed from
+  // what was last applied -- e.g. a participant-count change that doesn't cross a call-size
+  // bucket, or a network-state bounce between two states whose formulas produce the same height.
+  // These three refs cache the last values actually sent to the bridge so the effect can skip a
+  // call that would just resend the same constraint. Reset on room teardown (see the main
+  // connect/disconnect effect's cleanup) so a fresh room always gets its first real policy applied
+  // rather than comparing against a previous room's stale values.
+  const lastAppliedReceiverPolicyRef = useRef<{ height: number; lastN: number } | null>(null);
+  const lastAppliedNonEffectSendHeightRef = useRef<number | null>(null);
+  const lastAppliedAudioBitrateRef = useRef<number | null>(null);
   const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
   const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
   const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
@@ -1206,6 +1229,11 @@ export function useJitsiMeeting({
       poorSampleCountRef.current = 0;
       degradedSampleCountRef.current = 0;
       goodSinceRef.current = null;
+      // A new room must get its first real receiver/sender policy applied, not compared against
+      // (and possibly skipped for matching) the previous room's last-applied values.
+      lastAppliedReceiverPolicyRef.current = null;
+      lastAppliedNonEffectSendHeightRef.current = null;
+      lastAppliedAudioBitrateRef.current = null;
       lowDataPolicyActiveRef.current = false;
       audioOnlyMutedVideoRef.current = false;
       setLocalCameraStream(null);
@@ -1264,14 +1292,24 @@ export function useJitsiMeeting({
     const lastN = networkState === 'POOR' ? Math.min(policy.lastN, 2) : policy.lastN;
 
     try {
-      // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the
-      // ReceiverVideoConstraints message it produces carries only lastN, no maxHeight (seen on
-      // the bridge channel), so JVB kept its 180p default. defaultConstraints is what carries it.
-      if (typeof room.setReceiverConstraints === 'function') {
-        room.setReceiverConstraints({ lastN, defaultConstraints: { maxHeight: height } });
-      } else {
-        room.setLastN?.(lastN);
-        room.setReceiverVideoConstraint?.(height);
+      // Phase 1 stabilization: this effect reruns on every participant-count/screen-share/
+      // network-state change, but the computed {lastN, height} often doesn't actually change
+      // (e.g. 3->4 participants within the same call-size bucket, or POOR->DEGRADED->POOR producing
+      // the same clamped height) -- skip resending a constraint the bridge was already just told.
+      const lastApplied = lastAppliedReceiverPolicyRef.current;
+      const receiverPolicyChanged = !lastApplied || lastApplied.lastN !== lastN || lastApplied.height !== height;
+
+      if (receiverPolicyChanged) {
+        // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the
+        // ReceiverVideoConstraints message it produces carries only lastN, no maxHeight (seen on
+        // the bridge channel), so JVB kept its 180p default. defaultConstraints is what carries it.
+        if (typeof room.setReceiverConstraints === 'function') {
+          room.setReceiverConstraints({ lastN, defaultConstraints: { maxHeight: height } });
+        } else {
+          room.setLastN?.(lastN);
+          room.setReceiverVideoConstraint?.(height);
+        }
+        lastAppliedReceiverPolicyRef.current = { height, lastN };
       }
       // Our own uplink follows the same state: cap what we send when the network is weak and lift
       // the cap again (to the call-size ceiling) once it has recovered. While a background effect
@@ -1316,6 +1354,10 @@ export function useJitsiMeeting({
           void Promise.resolve(room.setSenderVideoConstraint?.(producedHeight)).catch(() => undefined);
           effectSenderHeightRef.current = producedHeight;
         }
+        // The effect branch owns the sender now -- clear the non-effect cache so that if the
+        // effect is later removed, the non-effect branch below doesn't wrongly skip its first
+        // real resend just because the coincidentally-matching old value is still cached.
+        lastAppliedNonEffectSendHeightRef.current = null;
       } else {
         // No effect active (including "just removed" -- setVirtualBackground's removal path
         // already re-applies this same formula immediately rather than waiting for this tick).
@@ -1323,28 +1365,40 @@ export function useJitsiMeeting({
         effectSenderHeightRef.current = null;
         const sendHeight = computeNonEffectSendHeight(networkState, base);
 
-        void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+        // Phase 1 stabilization: this used to fire unconditionally on every effect run, even when
+        // networkState/base produced the same sendHeight as last time (e.g. a participant-count
+        // change within the same call-size bucket). Skip the resend when nothing actually changed.
+        if (sendHeight !== lastAppliedNonEffectSendHeightRef.current) {
+          void Promise.resolve(room.setSenderVideoConstraint?.(sendHeight)).catch(() => undefined);
+          lastAppliedNonEffectSendHeightRef.current = sendHeight;
+        }
       }
     } catch {
       // A bridge that rejects a hint just keeps Jitsi's defaults.
     }
 
-    // Voice bitrate follows the network too.
+    // Voice bitrate follows the network too. This effect reruns for reasons unrelated to
+    // networkState (participant count, screen share, lowDataMode), so skip re-touching the
+    // RTCRtpSender when the bitrate it would set hasn't actually changed since last applied.
     const audioBitrate = getAudioMaxBitrateBps(networkState);
-    const peerConnection = room.getActivePeerConnection?.()?.peerconnection;
 
-    peerConnection?.getSenders?.().forEach((sender: RTCRtpSender) => {
-      if (sender.track?.kind !== 'audio') {
-        return;
-      }
-      const parameters = sender.getParameters();
+    if (audioBitrate !== lastAppliedAudioBitrateRef.current) {
+      lastAppliedAudioBitrateRef.current = audioBitrate;
+      const peerConnection = room.getActivePeerConnection?.()?.peerconnection;
 
-      if (!parameters.encodings?.length) {
-        return;
-      }
-      parameters.encodings[0].maxBitrate = audioBitrate;
-      void sender.setParameters(parameters).catch(() => undefined);
-    });
+      peerConnection?.getSenders?.().forEach((sender: RTCRtpSender) => {
+        if (sender.track?.kind !== 'audio') {
+          return;
+        }
+        const parameters = sender.getParameters();
+
+        if (!parameters.encodings?.length) {
+          return;
+        }
+        parameters.encodings[0].maxBitrate = audioBitrate;
+        void sender.setParameters(parameters).catch(() => undefined);
+      });
+    }
   // Real reported bug: after a REMOTE participant stops screen sharing, the call looked "limited"
   // and the shared content/camera could appear stuck. This effect is what tells the bridge how
   // much video to send/receive (including the screenShareActive-driven height bump), but it only

@@ -62,15 +62,19 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
     return;
   }
   if (!scriptLoadPromise) {
-    scriptLoadPromise = (async () => {
-      // config.js is Jitsi's own runtime config (XMPP/BOSH/WebSocket hosts, etc.) -- fetched
-      // from the real deployment rather than hardcoded here, so it can never drift from what
-      // the server actually has configured.
-      await loadScript(`https://${jitsiDomain}/config.js`);
-      // Keep this legacy/direct-meeting hook aligned with the Jitsi deployment as well. A local
-      // copied library can drift from Jicofo/JVB and fail source negotiation in larger rooms.
-      await loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`);
-    })();
+    // config.js is Jitsi's own runtime config (XMPP/BOSH/WebSocket hosts, etc.) -- fetched
+    // from the real deployment rather than hardcoded here, so it can never drift from what
+    // the server actually has configured. Keep this legacy/direct-meeting hook aligned with
+    // the Jitsi deployment as well. A local copied library can drift from Jicofo/JVB and fail
+    // source negotiation in larger rooms.
+    //
+    // Fetched in parallel, not serially -- lib-jitsi-meet.min.js doesn't read window.config
+    // until this hook's caller actually uses it, not at load/parse time, so there's no reason
+    // to make one script wait on the other.
+    scriptLoadPromise = Promise.all([
+      loadScript(`https://${jitsiDomain}/config.js`),
+      loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
+    ]).then(() => undefined);
   }
 
   return scriptLoadPromise;

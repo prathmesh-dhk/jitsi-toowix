@@ -3,6 +3,22 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
 
+// Opens the TLS connection to the Jitsi deployment before any meeting page even runs --
+// config.js/lib-jitsi-meet.min.js aren't requested until the lobby screen preloads them (see
+// ensureLibJitsiMeetLoaded), but the DNS lookup + TLS handshake can start the instant the app
+// boots, since the domain itself never depends on which page the person is on.
+try {
+  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
+  const preconnect = document.createElement('link');
+
+  preconnect.rel = 'preconnect';
+  preconnect.href = `https://${jitsiDomain}`;
+  preconnect.crossOrigin = 'anonymous';
+  document.head.appendChild(preconnect);
+} catch {
+  // A blocked/unavailable DOM API here must never prevent the app from loading.
+}
+
 // This site previously served the stock Jitsi web client under /meet. That client
 // registered pwa-worker.js at the meeting-path scope. The React client is not a PWA;
 // leaving that old worker active can make iPhone Safari serve its stale/offline response

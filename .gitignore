@@ -349,3 +349,12 @@ reports/benchmarks/
 /Makefile
 /Meet-Toowix.svg
 /inlang.config.js
+
+# Untracked at explicit request
+/toowix-backend/tests/
+/toowix-backend/src/scripts/
+
+# Real staging secrets, if the template in /staging is ever filled in locally -- never commit
+# actual JVB/Jicofo/Prosody passwords. The .example template itself stays tracked.
+/staging/.env
+/staging/results/

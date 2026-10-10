@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { verifyIdentityToken, verifyFirebaseToken, AuthenticatedRequest } from '../middleware/auth';
 import { authRateLimiter } from '../middleware/rateLimit';
-import { signupHandler } from '../auth/signup';
-import { verifyEmailHandler } from '../auth/verify-email';
-import { loginGateHandler } from '../auth/login';
-import { forgotPasswordHandler } from '../auth/forgot-password';
-import { sendVerificationEmailHandler } from '../auth/send-verification-email';
+import {
+  signupHandler,
+  verifyEmailHandler,
+  loginGateHandler,
+  forgotPasswordHandler,
+  sendVerificationEmailHandler,
+} from '../auth/account/account.controller';
 
 const router = Router();
 

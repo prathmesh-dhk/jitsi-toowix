@@ -88,6 +88,14 @@ export class NoiseSuppressionEffect {
   private _stopped = false;
 
   startEffect(audioStream: MediaStream): MediaStream {
+    // A device switch disposes the old JitsiLocalTrack, which calls stopEffect() on THIS SAME
+    // effect instance (applyNoiseSuppressionToTrack in useJitsiMeeting.ts reuses it across
+    // switches rather than constructing a new one) before this method runs again on the new
+    // track. Without resetting _stopped here, the loadWorklets().then() guard below stays
+    // permanently tripped after the first switch, so the denoise/gate worklets are silently
+    // never (re)attached again -- the mic keeps producing audio, just unprocessed, while the UI
+    // still reports noise suppression as enabled.
+    this._stopped = false;
     this._originalMediaTrack = audioStream.getAudioTracks()[0];
     this._ctx = getContext();
     activeEffects++;
