@@ -323,3 +323,29 @@ reports/benchmarks/
 /react-native-sdk/
 /reports/
 /twa/
+
+# Untracked at explicit request -- docker/ is live deploy config
+# (web-staging.Dockerfile etc.), scripts/ and tests/ are referenced by
+# package.json (npm test, email:* scripts). Kept on disk, no longer versioned.
+/doc/
+/docker/
+/docs/
+/resources/
+/scripts/
+/tests/
+
+# Deleted directly on GitHub (not by me) -- added here so they don't get
+# accidentally re-added/recommitted later.
+/.env.example
+/ARCHITECTURE.md
+/CLAUDE.md
+/CONTRIBUTING.md
+/FEATURE_COMPARISON.md
+/GSD-STYLE.md
+/JITSI_INTEGRATION_AND_PERFORMANCE.md
+/LICENSE
+/LOW_NETWORK_BEHAVIOR.md
+/MILESTONE_1_PLAN.md
+/Makefile
+/Meet-Toowix.svg
+/inlang.config.js
