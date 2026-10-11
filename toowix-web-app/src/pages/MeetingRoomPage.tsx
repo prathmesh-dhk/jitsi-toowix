@@ -3781,13 +3781,51 @@ export function MeetingRoomPage() {
           const newAudioOut = audioOutput.find(isNew);
           const newVideoIn = videoInput.find(isNew);
 
-          if (newAudioIn && !audioId) {
-            setAudioId(newAudioIn.deviceId);
-            void applyJitsiDevice('audioInput', newAudioIn.deviceId);
-          }
-          if (newAudioOut && !outputId) {
-            setOutputId(newAudioOut.deviceId);
-            void applyJitsiDevice('audioOutput', newAudioOut.deviceId);
+          // A Bluetooth headset (AirPods or otherwise) that exposes both a microphone and a
+          // speaker reports them under the SAME groupId in browsers that support it (confirmed on
+          // Chrome/Brave; Safari's groupId support is inconsistent -- see
+          // audioOutputSwitchSupported below for the separate, bigger Safari gap). Matching on
+          // groupId is what makes this a coordinated switch of ONE physical device, not two
+          // independent "first new device of each kind" picks that could pair unrelated hardware
+          // if, say, a USB mic and a Bluetooth speaker both happened to appear in the same burst.
+          const newAudioInputs = audioInput.filter(isNew);
+          const newAudioOutputs = audioOutput.filter(isNew);
+          const pairedIn = newAudioInputs.find(
+            (inDev) => inDev.groupId && newAudioOutputs.some((outDev) => outDev.groupId === inDev.groupId)
+          );
+          const pairedOut = pairedIn ? newAudioOutputs.find((outDev) => outDev.groupId === pairedIn.groupId) : undefined;
+          // setSinkId is what JitsiMeetJS.mediaDevices.setAudioOutputDevice relies on internally;
+          // Safari has never shipped it, so an automatic speaker switch there silently does
+          // nothing today. Feature-detected (not a browser-name check) so it tracks reality if
+          // that ever changes. Spec requirement: never fail silently -- tell the person instead.
+          const audioOutputSwitchSupported = typeof HTMLMediaElement !== 'undefined'
+            && typeof (HTMLMediaElement.prototype as any).setSinkId === 'function';
+          const warnOutputUnsupported = () => {
+            if (audioOutputSwitchSupported) return;
+            setParticipantToast('Microphone switched automatically. This browser doesn\'t support automatic speaker switching -- please select the speaker manually in your system audio settings.');
+            setTimeout(() => setParticipantToast((t) => (t?.startsWith('Microphone switched automatically') ? null : t)), 7000);
+          };
+
+          if (pairedIn && pairedOut && !audioId && !outputId) {
+            // Coordinated, not transactional: each half is still its own best-effort operation
+            // (applyJitsiDevice already reports its own failure independently), since the Web
+            // Audio/WebRTC device APIs have no real "switch both or roll back both" primitive --
+            // a failure on one side does not undo a successful switch already applied on the other.
+            setAudioId(pairedIn.deviceId);
+            setOutputId(pairedOut.deviceId);
+            void applyJitsiDevice('audioInput', pairedIn.deviceId);
+            void applyJitsiDevice('audioOutput', pairedOut.deviceId);
+            warnOutputUnsupported();
+          } else {
+            if (newAudioIn && !audioId) {
+              setAudioId(newAudioIn.deviceId);
+              void applyJitsiDevice('audioInput', newAudioIn.deviceId);
+            }
+            if (newAudioOut && !outputId) {
+              setOutputId(newAudioOut.deviceId);
+              void applyJitsiDevice('audioOutput', newAudioOut.deviceId);
+              warnOutputUnsupported();
+            }
           }
           if (newVideoIn && !videoId) {
             setVideoId(newVideoIn.deviceId);
