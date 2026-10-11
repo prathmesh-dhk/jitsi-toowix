@@ -1936,6 +1936,14 @@ export function MeetingRoomPage() {
   useEffect(() => { try { if (audioId) localStorage.setItem('toowix_audio_device', audioId); else localStorage.removeItem('toowix_audio_device'); } catch { /* storage unavailable */ } }, [audioId]);
   useEffect(() => { try { if (videoId) localStorage.setItem('toowix_video_device', videoId); else localStorage.removeItem('toowix_video_device'); } catch { /* storage unavailable */ } }, [videoId]);
   useEffect(() => { try { if (outputId) localStorage.setItem('toowix_output_device', outputId); else localStorage.removeItem('toowix_output_device'); } catch { /* storage unavailable */ } }, [outputId]);
+  // Live mirrors of audioId/outputId for the bounded delayed Bluetooth-mic re-check below, which
+  // runs on its own setTimeout outside the devicechange effect's own closure -- reading the state
+  // variables directly there would see whatever they were AT THE TIME the effect was defined, not
+  // their current value a moment later (e.g. if the person picked a device manually in between).
+  const audioIdRef = useRef(audioId);
+  const outputIdRef = useRef(outputId);
+  useEffect(() => { audioIdRef.current = audioId; }, [audioId]);
+  useEffect(() => { outputIdRef.current = outputId; }, [outputId]);
   useEffect(() => {
     if (!media.devices.length) return;
     const ids = new Set(media.devices.map((d) => d.deviceId));
@@ -2636,6 +2644,38 @@ export function MeetingRoomPage() {
       setTimeout(() => setParticipantToast((t) => (t === 'You have been muted by the host' ? null : t)), 5000);
     }
   });
+
+  // Dev-only live-diagnosis helper for the reported "AirPods mic doesn't auto-switch" issue.
+  // Run window.__toowixMicStatus() in the console during a real test to see, in one place:
+  // what the UI thinks is selected, what's actually saved from a PAST session (the main
+  // suspected blocking condition -- see MICROPHONE_AUDIT.md), and what the real active track
+  // reports via MediaStreamTrack.getSettings().deviceId. Read-only; changes nothing.
+  useEffect(() => {
+    if (!deviceSwitchDiagnosticsEnabled) return;
+    (window as any).__toowixMicStatus = () => {
+      let savedMicId: string | null = null;
+      let savedSpeakerId: string | null = null;
+
+      try {
+        savedMicId = localStorage.getItem('toowix_audio_device');
+        savedSpeakerId = localStorage.getItem('toowix_output_device');
+      } catch { /* storage unavailable */ }
+      const realActiveMicId = jitsiMeeting.getActiveAudioInputDeviceId?.() ?? null;
+      const uiSelectedMicId = audioId || null;
+
+      return {
+        uiSelectedMicId: uiSelectedMicId ?? '(auto -- system default)',
+        uiSelectedSpeakerId: outputId || '(auto -- system default)',
+        savedMicIdInLocalStorage: savedMicId,
+        savedSpeakerIdInLocalStorage: savedSpeakerId,
+        realActiveMicDeviceId: realActiveMicId ?? '(unavailable)',
+        uiMatchesRealTrack: realActiveMicId == null ? 'unknown' : uiSelectedMicId === realActiveMicId,
+        autoSwitchCurrentlyBlockedByExplicitMicSelection: Boolean(uiSelectedMicId),
+      };
+    };
+
+    return () => { delete (window as any).__toowixMicStatus; };
+  }, [ audioId, outputId, jitsiMeeting ]);
 
   // Reconcile the custom mic/video buttons and self-view with the real conference state.
   const interruptedMediaRef = useRef<{ mic: boolean; video: boolean } | null>(null);
@@ -3652,11 +3692,18 @@ export function MeetingRoomPage() {
   // updating only React state here would leave the UI showing one device while the conference
   // keeps publishing another. Falls back to the system default and surfaces an error toast if
   // the switch itself fails (e.g. the device was unplugged between selection and the call).
+  // Returns the real outcome (success + the ACTUAL active deviceId, which the browser is not
+  // required to match the requested one) instead of void, so a caller that needs to know whether
+  // a switch genuinely took effect -- notably the Bluetooth auto-switch below -- doesn't have to
+  // guess from "did it throw" alone. Existing callers that don't need this still just `void` the
+  // call, unaffected.
   const applyJitsiDevice = useCallback(
     async (kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string) => {
-      if (!hasJoined) return;
+      if (!hasJoined) return null;
       try {
-        await jitsiMeeting.switchDevice(kind, deviceId);
+        const result = await jitsiMeeting.switchDevice(kind, deviceId);
+
+        return result ?? null;
       } catch (err) {
         console.warn(`Failed to switch ${kind}:`, err);
         setCallError(
@@ -3664,6 +3711,8 @@ export function MeetingRoomPage() {
             ? 'Could not switch speaker/output device. Falling back to the system default.'
             : `Could not switch ${kind === 'audioInput' ? 'microphone' : 'camera'}. It may be disconnected or in use by another app.`
         );
+
+        return null;
       }
     },
     [hasJoined, jitsiMeeting]
@@ -3773,6 +3822,21 @@ export function MeetingRoomPage() {
           void applyJitsiDevice('audioOutput', '');
         }
 
+        // DIAGNOSTIC (temporary, privacy-safe -- device kinds/counts/booleans only, never raw
+        // labels or deviceIds, which can contain a person's name e.g. "Jayesh's AirPods Pro").
+        // Added to directly observe, on real hardware, which of several suspected causes is
+        // actually happening when a Bluetooth mic fails to auto-switch: (a) audioId/outputId
+        // already pinned from a PAST session via localStorage, so the !audioId/!outputId guard
+        // blocks auto-switch before any of the logic below even runs: (b) the mic genuinely not
+        // enumerated yet in this burst while the speaker already is; (c) the mic enumerated but
+        // failing to open (see attemptAudioInputSwitch's own failure log).
+        if (deviceSwitchDiagnosticsEnabled) {
+          console.info('[Toowix device-switch] devicechange settled', {
+            audioInputCount: audioInput.length, audioOutputCount: audioOutput.length, videoInputCount: videoInput.length,
+            audioIdAlreadyPinned: Boolean(audioId), outputIdAlreadyPinned: Boolean(outputId),
+          });
+        }
+
         // previousIds is null only on the very first run (nothing to compare against yet, and
         // every device would look "new") -- skip auto-connecting until the second pass onward.
         if (previousIds) {
@@ -3806,27 +3870,105 @@ export function MeetingRoomPage() {
             setTimeout(() => setParticipantToast((t) => (t?.startsWith('Microphone switched automatically') ? null : t)), 7000);
           };
 
+          // Confirm-before-commit: a real, found code defect was that setAudioId/setOutputId ran
+          // BEFORE the switch was confirmed to have actually worked. If opening a Bluetooth mic
+          // failed (a well-documented macOS Core Audio/HFP handoff delay -- the mic can take a
+          // moment to become genuinely openable even after it's visible in enumerateDevices()),
+          // audioId still got set to the failed device's id, which permanently blocked any further
+          // auto-switch attempt (the !audioId guard was now false) for the rest of the session --
+          // while the UI's device menu claimed the Bluetooth mic was selected and the actual Jitsi
+          // track never changed. These two helpers only commit state on CONFIRMED success, and use
+          // the REAL active deviceId read back off the native track (actualDeviceId), not just the
+          // one that was requested, since the browser is not required to honor an exact request.
+          const attemptAudioInputSwitch = async (device: MediaDeviceInfo, source: string): Promise<boolean> => {
+            const result = await applyJitsiDevice('audioInput', device.deviceId);
+
+            if (!result?.success) {
+              if (deviceSwitchDiagnosticsEnabled) {
+                console.warn('[Toowix device-switch] auto-switch microphone FAILED, not committing UI state (will retry on next devicechange)', { source });
+              }
+
+              return false;
+            }
+            setAudioId(result.actualDeviceId || device.deviceId);
+            if (deviceSwitchDiagnosticsEnabled) {
+              console.info('[Toowix device-switch] auto-switched microphone', {
+                source, requestedMatchedActual: !result.actualDeviceId || result.actualDeviceId === device.deviceId,
+              });
+            }
+
+            return true;
+          };
+          const attemptAudioOutputSwitch = async (device: MediaDeviceInfo, source: string): Promise<boolean> => {
+            const result = await applyJitsiDevice('audioOutput', device.deviceId);
+
+            if (!result?.success) {
+              warnOutputUnsupported();
+              if (deviceSwitchDiagnosticsEnabled) {
+                console.warn('[Toowix device-switch] auto-switch speaker FAILED or unsupported, not committing UI state', { source });
+              }
+
+              return false;
+            }
+            setOutputId(device.deviceId);
+
+            return true;
+          };
+
           if (pairedIn && pairedOut && !audioId && !outputId) {
-            // Coordinated, not transactional: each half is still its own best-effort operation
-            // (applyJitsiDevice already reports its own failure independently), since the Web
-            // Audio/WebRTC device APIs have no real "switch both or roll back both" primitive --
-            // a failure on one side does not undo a successful switch already applied on the other.
-            setAudioId(pairedIn.deviceId);
-            setOutputId(pairedOut.deviceId);
-            void applyJitsiDevice('audioInput', pairedIn.deviceId);
-            void applyJitsiDevice('audioOutput', pairedOut.deviceId);
-            warnOutputUnsupported();
+            // Coordinated, not transactional: each half is still its own best-effort operation,
+            // since the Web Audio/WebRTC device APIs have no real "switch both or roll back both"
+            // primitive -- a failure on one side does not undo a successful switch already applied
+            // on the other. Each is independently confirmed before its own UI state commits.
+            void attemptAudioInputSwitch(pairedIn, 'paired-groupId');
+            void attemptAudioOutputSwitch(pairedOut, 'paired-groupId');
           } else {
             if (newAudioIn && !audioId) {
-              setAudioId(newAudioIn.deviceId);
-              void applyJitsiDevice('audioInput', newAudioIn.deviceId);
+              void attemptAudioInputSwitch(newAudioIn, 'independent');
             }
             if (newAudioOut && !outputId) {
-              setOutputId(newAudioOut.deviceId);
-              void applyJitsiDevice('audioOutput', newAudioOut.deviceId);
-              warnOutputUnsupported();
+              void attemptAudioOutputSwitch(newAudioOut, 'independent');
             }
           }
+
+          // Bounded follow-up: if this burst brought new audio OUTPUT activity (paired or
+          // independent) but the microphone still isn't selected, the AirPods mic may simply not
+          // have been enumerated yet in this exact burst -- macOS can finish the speaker (A2DP)
+          // handoff before the microphone (HFP) one. This re-enumerates up to twice more, at 600ms
+          // and 1500ms, specifically looking for a mic that wasn't there a moment ago. NOT an
+          // open-ended poll: it stops after 2 extra checks, or the instant audioId is set by any
+          // means (this chain, another devicechange burst, or the person picking one manually).
+          if ((pairedOut || newAudioOut) && !audioIdRef.current) {
+            void (async () => {
+              const delayedReenumerationDelaysMs = [ 600, 1500 ];
+
+              for (const delayMs of delayedReenumerationDelaysMs) {
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+                if (cancelled || audioIdRef.current) return;
+                try {
+                  const freshDevices = await navigator.mediaDevices?.enumerateDevices();
+
+                  if (cancelled || !freshDevices || audioIdRef.current) return;
+                  const freshAudioInputs = freshDevices.filter((d) => d.kind === 'audioinput' && d.deviceId);
+                  const stillKnown = knownDeviceIdsRef.current || new Set<string>();
+                  const candidate = freshAudioInputs.find((d) => !stillKnown.has(d.deviceId));
+
+                  if (!candidate) {
+                    if (deviceSwitchDiagnosticsEnabled) {
+                      console.info('[Toowix device-switch] delayed mic re-check: still no new input device', { delayMs });
+                    }
+                    continue;
+                  }
+                  knownDeviceIdsRef.current = new Set([ ...stillKnown, ...freshAudioInputs.map((d) => d.deviceId) ]);
+                  if (await attemptAudioInputSwitch(candidate, `delayed-reenumeration-${delayMs}ms`)) return;
+                } catch {
+                  // enumerateDevices unsupported here -- nothing further to retry.
+                  return;
+                }
+              }
+            })();
+          }
+
           if (newVideoIn && !videoId) {
             setVideoId(newVideoIn.deviceId);
             void applyJitsiDevice('videoInput', newVideoIn.deviceId);

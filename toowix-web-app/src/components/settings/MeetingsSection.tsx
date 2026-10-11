@@ -6,7 +6,7 @@ import {
 } from './SettingsShared';
 
 const DEFAULTS = {
-  cameraOffOnJoin: false, useHdVideo: true, mirrorMyVideo: false, displayParticipantNames: true,
+  cameraOffOnJoin: false, useHdVideo: true, displayParticipantNames: true,
   muteMicOnJoin: false, autoAdjustMicVolume: true, playJoinLeaveSounds: true, noiseSuppression: true,
   requireLobby: false, allowJoinBeforeHost: true, requireAuthenticatedUsers: false, allowExternalGuests: true,
   autoAdmitInternalUsers: true, notifyHostOnLobbyEntry: true, defaultDurationMinutes: 30, defaultMeetingType: 'Internal' as 'Internal' | 'Guest',
@@ -75,7 +75,6 @@ export function MeetingsSection() {
         <Section title="Video">
           <Toggle label="Camera off when joining" checked={form.cameraOffOnJoin} onChange={(v) => set('cameraOffOnJoin', v)} />
           <Toggle label="Use HD video when available" checked={form.useHdVideo} onChange={(v) => set('useHdVideo', v)} />
-          <Toggle label="Mirror my video" checked={form.mirrorMyVideo} onChange={(v) => set('mirrorMyVideo', v)} />
           <Toggle label="Display participant names" checked={form.displayParticipantNames} onChange={(v) => set('displayParticipantNames', v)} />
         </Section>
 

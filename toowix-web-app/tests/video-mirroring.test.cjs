@@ -5,20 +5,30 @@ const path = require('node:path');
 
 // Root cause investigated: MeetingParticipantCard.tsx is the ONLY place in the app that can
 // apply `transform: scaleX(-1)` to a video element (gated by its `mirrored` prop, default false).
-// None of its 3 call sites in MeetingRoomPage.tsx (local self-view tile, remote participant grid,
-// "orderedOthers" pinned-view filmstrip) ever pass `mirrored={true}`, so no in-call view is
-// actually mirrored today. The two prejoin preview <video> elements (videoPreviewRef) never had
-// a transform at all. The real, separate bug: the `mirrorMyVideo` Settings toggle defaulted to
-// `true` while being completely disconnected from rendering -- a misleading dead setting. Fixed
-// by flipping both the frontend form default (MeetingsSection.tsx) and the backend Mongoose
-// schema default (User.ts) to `false`, consistent with "no software mirroring" being the
-// required behavior. These tests guard all of the above from silently regressing.
+// None of its call sites in MeetingRoomPage.tsx (local self-view tile, remote participant grid,
+// "orderedOthers" pinned-view filmstrip) or ParticipantGallery.tsx (local + remote gallery cards,
+// extracted from MeetingRoomPage.tsx during a later refactor) ever pass `mirrored={true}`, so no
+// in-call view is actually mirrored today. The two prejoin preview <video> elements
+// (videoPreviewRef) never had a transform at all.
+//
+// A second, separate bug sat on top of this: the "Mirror my video" Settings toggle was fully
+// disconnected from rendering -- nothing anywhere ever read the saved mirrorMyVideo value back.
+// Toggling it visibly did nothing, which is worse than no setting at all (it lied about having an
+// effect). Removed from the frontend UI/form entirely rather than wired up, since "no software
+// mirroring, ever" is the confirmed, tested, intentional behavior this file guards. The backend
+// Mongoose schema field is deliberately KEPT (not removed) for backward compatibility with
+// already-stored user documents -- see the backend-side test below.
+//
+// These tests guard all of the above from silently regressing.
 
 const participantCardSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'components', 'MeetingParticipantCard.tsx'), 'utf8'
 );
 const meetingRoomSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'pages', 'MeetingRoomPage.tsx'), 'utf8'
+);
+const participantGallerySource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'components', 'meeting', 'ParticipantGallery.tsx'), 'utf8'
 );
 const directMeetingRoomSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'pages', 'DirectMeetingRoomPage.tsx'), 'utf8'
@@ -55,6 +65,20 @@ test('no MeetingParticipantCard usage in MeetingRoomPage.tsx passes mirrored={tr
   }
 });
 
+test('no MeetingParticipantCard usage in ParticipantGallery.tsx passes mirrored={true}', () => {
+  // ParticipantGallery.tsx renders the local and remote gallery cards post-refactor (extracted
+  // from MeetingRoomPage.tsx); not covered by the test above, so checked separately here.
+  const cardBlocks = participantGallerySource.match(/<MeetingParticipantCard\b[\s\S]*?\/>/g) || [];
+  assert.ok(cardBlocks.length >= 2, 'expected at least 2 MeetingParticipantCard render sites (local, remote) in ParticipantGallery.tsx');
+  for (const block of cardBlocks) {
+    assert.doesNotMatch(
+      block,
+      /mirrored(\s*=\s*{?\s*true\s*}?)?(?!\w)/,
+      `ParticipantGallery.tsx render site must not pass mirrored (found in: ${block.slice(0, 80)}...)`
+    );
+  }
+});
+
 test('neither prejoin preview <video> applies a transform', () => {
   const previewBlocks = meetingRoomSource.match(/<video\s+ref=\{videoPreviewRef\}[\s\S]*?\/>/g) || [];
   assert.equal(previewBlocks.length, 2, 'expected exactly 2 prejoin preview <video> elements (compact + full prejoin layouts)');
@@ -67,20 +91,32 @@ test('DirectMeetingRoomPage.tsx applies no mirroring transform', () => {
   assert.doesNotMatch(directMeetingRoomSource, /scaleX|rotateY|mirror/i);
 });
 
-test('mirrorMyVideo setting defaults to false on both the frontend form and backend schema', () => {
-  assert.match(
+test('the nonfunctional "Mirror my video" toggle is removed from Settings -> Meetings', () => {
+  // It was disconnected from rendering (see the file header comment) -- toggling it did nothing,
+  // which is actively misleading. Removed outright rather than wired up: "no software mirroring"
+  // is the confirmed, tested, intentional behavior the rest of this file guards.
+  assert.doesNotMatch(
     meetingsSectionSource,
-    /mirrorMyVideo:\s*false/,
-    'MeetingsSection.tsx DEFAULTS must set mirrorMyVideo: false'
+    /mirrorMyVideo/,
+    'MeetingsSection.tsx must not reference mirrorMyVideo at all -- the dead toggle must be fully removed, not just hidden'
   );
+  assert.doesNotMatch(
+    meetingsSectionSource,
+    /Mirror my video/i,
+    'the "Mirror my video" label must not be rendered anywhere in Settings -> Meetings'
+  );
+});
+
+test('mirrorMyVideo is kept on the backend schema for backward compatibility with already-stored user documents', () => {
   const userModelSource = fs.readFileSync(
     path.join(__dirname, '..', '..', 'toowix-backend', 'src', 'models', 'User.ts'), 'utf8'
   );
   assert.match(
     userModelSource,
     /mirrorMyVideo:\s*\{\s*type:\s*Boolean,\s*default:\s*false\s*\}/,
-    'User.ts meetingDefaults.mirrorMyVideo schema default must be false'
+    'User.ts meetingDefaults.mirrorMyVideo schema field must still exist (default false) -- removing it is a separate, ' +
+    'deliberately NOT-taken step here; it stays for documents that already stored a value'
   );
 });
 
-console.log('PASS: no view (self, remote, prejoin, pinned/filmstrip, /meet-direct) is software-mirrored, and mirrorMyVideo defaults to false');
+console.log('PASS: no view (self, remote, prejoin, gallery, pinned/filmstrip, /meet-direct) is software-mirrored; the dead "Mirror my video" toggle is removed from the frontend; the backend field is kept for compatibility');

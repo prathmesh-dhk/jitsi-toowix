@@ -1820,28 +1820,34 @@ export function useJitsiMeeting({
 
   const switchDeviceInFlightRef = useRef<Record<string, boolean>>({});
 
-  const switchDevice = useCallback(async (kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string) => {
+  const switchDevice = useCallback(async (
+      kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string
+  ): Promise<{ success: boolean; actualDeviceId?: string } | undefined> => {
     const JitsiMeetJS = window.JitsiMeetJS;
     const room = roomRef.current;
 
     if (!JitsiMeetJS) {
-      return;
+      return undefined;
     }
 
     if (kind === 'audioOutput') {
       try {
         await JitsiMeetJS.mediaDevices.setAudioOutputDevice(deviceId);
-      } catch {
-        // not supported on every browser; ignore
-      }
 
-      return;
+        return { success: true };
+      } catch {
+        // Not supported on every browser (e.g. Safari has never shipped setSinkId) -- this used
+        // to be swallowed with no signal at all, so a caller awaiting switchDevice() had no way
+        // to tell "actually switched" from "silently did nothing". Still doesn't throw (an
+        // unsupported browser isn't an error state worth surfacing as one), but now reports it.
+        return { success: false };
+      }
     }
 
     // Guard against parallel capture requests for the same media type (e.g. rapid double-click
     // on a device menu entry).
     if (switchDeviceInFlightRef.current[kind]) {
-      return;
+      return undefined;
     }
     switchDeviceInFlightRef.current[kind] = true;
 
@@ -1864,7 +1870,7 @@ export function useJitsiMeeting({
       });
 
       if (!newTrack) {
-        return;
+        return { success: false };
       }
 
       const enqueuedAt = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
@@ -1911,6 +1917,15 @@ export function useJitsiMeeting({
         setLocalCameraStream(trackToStream(newTrack));
         void applyVirtualBackgroundToTrack(newTrack);
       }
+
+      // The browser is not required to honor an exact deviceId request -- it can silently fall
+      // back to a different device (e.g. OverconstrainedError recovery, or a macOS Bluetooth
+      // device that isn't actually ready yet). Reading the REAL device back from the native track
+      // (not trusting that "no exception" means "got what was asked for") is what a caller needs
+      // to tell a genuine success from a silent substitution.
+      const actualDeviceId = newTrack.getTrack?.()?.getSettings?.()?.deviceId;
+
+      return { success: true, actualDeviceId };
     } catch (err: any) {
       throw new Error(describeMediaError(isAudio ? 'microphone' : 'camera', err));
     } finally {
@@ -2430,12 +2445,22 @@ export function useJitsiMeeting({
     }
   }, []);
 
+  // Pure, read-only: returns the deviceId MediaStreamTrack.getSettings() reports for the
+  // CURRENTLY active local mic track, i.e. the real, in-use device -- not whatever the UI's
+  // device picker happens to show as "selected". Added for live diagnosis of reported
+  // auto-switch issues (compare this against the UI's audioId and against
+  // localStorage.getItem('toowix_audio_device')); does not change any switching behavior.
+  const getActiveAudioInputDeviceId = useCallback((): string | undefined => {
+    return localAudioTrackRef.current?.getTrack?.()?.getSettings?.()?.deviceId;
+  }, []);
+
   return {
     connected,
     joined,
     error,
     cameraError,
     localAudioMuted,
+    getActiveAudioInputDeviceId,
     localVideoMuted,
     hasVideoTrack,
     localCameraStream,

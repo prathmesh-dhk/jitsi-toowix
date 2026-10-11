@@ -29,8 +29,8 @@ assert.match(
 );
 assert.match(
     source,
-    /setAudioId\(pairedIn\.deviceId\);\s*\n\s*setOutputId\(pairedOut\.deviceId\);\s*\n\s*void applyJitsiDevice\('audioInput', pairedIn\.deviceId\);\s*\n\s*void applyJitsiDevice\('audioOutput', pairedOut\.deviceId\);/,
-    'a genuine pair must switch both input and output together, and update the device-settings UI state for both'
+    /if \(pairedIn && pairedOut && !audioId && !outputId\) \{[\s\S]{0,600}void attemptAudioInputSwitch\(pairedIn, 'paired-groupId'\);\s*\n\s*void attemptAudioOutputSwitch\(pairedOut, 'paired-groupId'\);/,
+    'a genuine pair must switch both input and output together, EACH gated on its own confirmed success (see auto-switch-new-device.test.cjs for why optimistic state commit was a real bug)'
 );
 
 // The independent per-kind fallback (used when no groupId pairing is found -- a mic-only device,
@@ -38,12 +38,12 @@ assert.match(
 // worked keep working unchanged.
 assert.match(
     source,
-    /if \(newAudioIn && !audioId\) \{\s*\n\s*setAudioId\(newAudioIn\.deviceId\);\s*\n\s*void applyJitsiDevice\('audioInput', newAudioIn\.deviceId\);/,
+    /if \(newAudioIn && !audioId\) \{\s*\n\s*void attemptAudioInputSwitch\(newAudioIn, 'independent'\);/,
     'the independent microphone auto-switch fallback must still exist for unpaired devices'
 );
 assert.match(
     source,
-    /if \(newAudioOut && !outputId\) \{\s*\n\s*setOutputId\(newAudioOut\.deviceId\);\s*\n\s*void applyJitsiDevice\('audioOutput', newAudioOut\.deviceId\);/,
+    /if \(newAudioOut && !outputId\) \{\s*\n\s*void attemptAudioOutputSwitch\(newAudioOut, 'independent'\);/,
     'the independent speaker auto-switch fallback must still exist for unpaired devices'
 );
 
