@@ -129,15 +129,96 @@ export function getMediaQualityPolicy(
 
 const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// Real reported bug: on macOS Chrome, the camera came in portrait/narrow on the FIRST join of a
+// meeting, but correctly landscape after leaving and rejoining. Root cause -- the prejoin lobby
+// preview (useMediaPreview.ts) and the in-call track acquisition (useJitsiMeeting.ts) each built
+// their OWN getUserMedia constraints independently. The in-call path had already been given an
+// aspectRatio `advanced` constraint (see getPreferredCameraCaptureConstraints below) to fight a
+// camera driver that otherwise settles on a portrait-shaped mode -- but on the very first join,
+// useJitsiMeeting ADOPTS the lobby's already-open stream directly instead of requesting a fresh
+// one (specifically to avoid a stop-then-reacquire race on real hardware), so first join actually
+// runs on whatever the LOBBY preview's constraints produced, which never had that fix. Only a
+// rejoin or an explicit device switch ever requests a genuinely fresh track through
+// useJitsiMeeting's own constraint-building path, which is why only those came out correct. The
+// fix is a SINGLE shared constraint builder, used by both the lobby preview and every in-call
+// track-acquisition call site, so there is no longer a second, divergent path to drift out of
+// sync with the first.
+//
+// Device category also decides ORIENTATION now, not just resolution: desktop and tablet prefer
+// landscape (width > height); a phone prefers portrait (height > width), matching how someone
+// actually holds a phone for a video call. A tablet is easy to misclassify as "mobile" by a bare
+// UA regex (iPadOS Safari can even report as "Macintosh"), which would wrongly give it the
+// phone's portrait preference -- so this uses the same signal device libraries use: Android's UA
+// omits the literal "Mobile" token on tablets (present only on phones), and an iPad is detected
+// either by the literal "iPad" token or, for modern iPadOS spoofing as Macintosh, by real
+// multi-touch support a Mac never has.
+export type CameraDeviceCategory = 'desktop' | 'tablet' | 'phone';
+
+function isPhoneUA(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+
+  return /iPhone|iPod/i.test(ua) || (/Android/i.test(ua) && /Mobile/i.test(ua));
+}
+
+function isTabletUA(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const isIPadOSReportingAsMac = /Macintosh/i.test(ua) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1;
+
+  return /iPad/i.test(ua) || isIPadOSReportingAsMac || (/Android/i.test(ua) && !/Mobile/i.test(ua));
+}
+
+export function getCameraDeviceCategory(): CameraDeviceCategory {
+  if (isPhoneUA()) return 'phone';
+  if (isTabletUA()) return 'tablet';
+
+  return 'desktop';
+}
+
 // Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
 // so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
 // SENT is still capped by what the other participants ask the bridge for (see
-// getReceiveMaxHeightForCallSize) and by the bandwidth estimate. Phones stay at 1080p to keep the
-// encoder, battery and heat in check.
+// getReceiveMaxHeightForCallSize) and by the bandwidth estimate. Phones and tablets stay at 1080p
+// (same total pixel count as before, just reoriented for a phone) to keep the encoder, battery
+// and heat in check.
 export function getCameraCaptureIdeal(): { frameRate: number; height: number; width: number } {
-  return isMobileBrowser()
+  const category = getCameraDeviceCategory();
+
+  if (category === 'phone') {
+    return { frameRate: 30, height: 1920, width: 1080 };
+  }
+
+  return category === 'tablet'
     ? { frameRate: 30, height: 1080, width: 1920 }
     : { frameRate: 30, height: 2160, width: 3840 };
+}
+
+// A bare `aspectRatio: { ideal }` is only ONE input into the browser's overall constraint scoring
+// (width, height, frameRate and aspectRatio all get weighed together), so a driver that heavily
+// favors matching the requested width/height can still settle on the wrong-shaped mode despite
+// the aspectRatio preference losing that tug-of-war. `advanced` constraint sets are the part of
+// the getUserMedia spec built exactly for "try hard to satisfy this, but never fail the whole
+// request over it": the UA attempts each advanced set in order and silently skips any entry it
+// cannot satisfy, instead of throwing OverconstrainedError the way a bare non-ideal aspectRatio
+// would for a camera that genuinely cannot do the requested shape.
+//
+// The single shared constraint object every camera-capture call site (lobby preview, initial
+// join, rejoin/device-switch, ended-camera recovery, and the separate /meet-direct route) should
+// spread into its own getUserMedia/createLocalTracks call, alongside whatever deviceId constraint
+// that call site already has. Centralizing this is what the first-join/rejoin divergence above
+// was missing.
+export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
+  const ideal = getCameraCaptureIdeal();
+  const aspectRatio = getCameraDeviceCategory() === 'phone' ? 9 / 16 : 16 / 9;
+
+  return {
+    width: { ideal: ideal.width },
+    height: { ideal: ideal.height },
+    frameRate: { ideal: ideal.frameRate },
+    aspectRatio: { ideal: aspectRatio },
+    advanced: [ { aspectRatio } ]
+  };
 }
 
 // Highest video height this client asks the bridge for, by call size. A one-to-one call can use

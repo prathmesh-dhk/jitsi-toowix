@@ -11,14 +11,29 @@ const path = require('node:path');
 // as the other createLocalTrackWithRetry call-site tests -- it isn't unit-testable directly
 // (these calls hit the real, globally-loaded JitsiMeetJS.createLocalTracks against a live camera).
 const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'useJitsiMeeting.ts'), 'utf8');
+// A later bug (first-join portrait camera, fixed after this test was written) found that the
+// lobby preview and in-call acquisition still had their OWN constraint-building code even though
+// both called getCameraCaptureIdeal() -- the fix was to delegate the ENTIRE constraint object
+// (including the landscape/portrait aspectRatio logic) to one function in networkQuality.ts, used
+// identically everywhere, rather than just sharing the width/height/frameRate numbers. See that
+// file's own comment for the full story.
+const networkQuality = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'networkQuality.ts'), 'utf8');
 
 assert.match(
     source,
-    /function inCallVideoConstraints\(\): MediaTrackConstraints \{/,
-    'must have a shared helper for the in-call landscape video constraints, not three separately drifting copies'
+    /function inCallVideoConstraints\(\): MediaTrackConstraints \{\s*\n\s*return getPreferredCameraCaptureConstraints\(\);/,
+    'must have a shared helper for the in-call landscape video constraints, not three separately drifting copies, and it must delegate entirely to the one true shared builder'
 );
-assert.match(source, /aspectRatio: \{ ideal: 16 \/ 9 \}/, 'in-call video must explicitly request a landscape aspect ratio, matching the lobby preview');
-assert.match(source, /const ideal = getCameraCaptureIdeal\(\);/, 'must reuse the SAME ideal width/height/frameRate source the lobby preview uses (networkQuality.ts), not a second, possibly-drifting set of numbers');
+assert.match(
+    networkQuality,
+    /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{/,
+    'the single shared camera constraint builder must live in networkQuality.ts'
+);
+assert.match(
+    networkQuality,
+    /const aspectRatio = getCameraDeviceCategory\(\) === 'phone' \? 9 \/ 16 : 16 \/ 9;/,
+    'in-call video must explicitly request a landscape aspect ratio on desktop/tablet, matching the lobby preview -- and portrait on phone'
+);
 
 // All three places a video track is acquired during/after a call must pass the constraint, not
 // just the first (initial join) one. Matched as "{ video: inCallVideoConstraints() }" (the actual

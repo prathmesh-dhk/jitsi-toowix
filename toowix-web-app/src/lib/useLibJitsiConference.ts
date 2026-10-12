@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getPreferredCameraCaptureConstraints } from './networkQuality';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
 // low-level library Jitsi's own web app is built on, used directly so real MediaStreamTracks
@@ -251,7 +252,16 @@ export function useLibJitsiConference({
         // connection timing, so a slow signaling connection doesn't block camera/mic
         // permission prompts from appearing.
         try {
-          const tracks = await JitsiMeetJS.createLocalTracks({ devices: [ 'audio', 'video' ] });
+          // Real reported bug (shared with the main /meet route -- see networkQuality.ts for the
+          // full story): with no video constraints at all, the camera driver was free to pick
+          // whatever resolution/orientation it wanted, which could come out portrait-shaped on
+          // some cameras. This is the same shared constraint builder the main route's lobby
+          // preview and in-call acquisition both use now, so this separate /meet-direct route
+          // can't drift out of sync with that fix.
+          const tracks = await JitsiMeetJS.createLocalTracks({
+            devices: [ 'audio', 'video' ],
+            constraints: { video: getPreferredCameraCaptureConstraints() }
+          });
 
           if (disposedRef.current) {
             tracks.forEach((t: any) => t.dispose());

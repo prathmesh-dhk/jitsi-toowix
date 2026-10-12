@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getCameraCaptureIdeal } from './networkQuality';
+import { getPreferredCameraCaptureConstraints } from './networkQuality';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
   if (!(error instanceof Error)) {
@@ -244,7 +244,6 @@ export function useMediaPreview(
 
     const startVideo = async () => {
       try {
-        const captureIdeal = getCameraCaptureIdeal();
         let media: MediaStream;
         const constraints: MediaTrackConstraints = videoId
           ? { deviceId: { ideal: videoId } }
@@ -253,8 +252,11 @@ export function useMediaPreview(
         // Highest quality first, then progressively safer requests. A camera or driver that
         // rejects the high request (or a stricter frame-rate) must never end up with no camera
         // at all, so every non-permission failure falls through to the next, simpler request.
+        // The first (highest-quality) attempt uses the EXACT SAME constraint builder the in-call
+        // path uses (see its own comment in networkQuality.ts) -- this lobby preview's stream is
+        // what first join actually adopts, so the two must never drift apart again.
         const attempts: MediaStreamConstraints[] = [
-          { video: { ...constraints, width: { ideal: captureIdeal.width }, height: { ideal: captureIdeal.height }, frameRate: { ideal: captureIdeal.frameRate } } },
+          { video: { ...constraints, ...getPreferredCameraCaptureConstraints() } },
           { video: { ...constraints, width: { ideal: 1280 }, height: { ideal: 720 } } },
           { video: true }
         ];

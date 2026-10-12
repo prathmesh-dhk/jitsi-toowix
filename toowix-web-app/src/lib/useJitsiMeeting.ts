@@ -24,7 +24,7 @@ import { extractYoutubeId, isSharingStatus, sendShareVideoCommand } from './shar
 import {
   classifyNetwork,
   getAudioMaxBitrateBps,
-  getCameraCaptureIdeal,
+  getPreferredCameraCaptureConstraints,
   getMediaQualityPolicy,
   getReceiveMaxHeightForCallSize,
   getTargetVideoHeight,
@@ -258,34 +258,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): 
 
 // Real reported bug: on macOS Chrome, the prejoin lobby preview showed the camera correctly
 // landscape, but the moment the person actually joined the call, the SAME camera came in
-// portrait-cropped (an extreme vertical zoom into the face, not a normal headshot). Root cause --
-// the lobby preview (useMediaPreview.ts) explicitly requests landscape width/height/frameRate
-// ideals for getUserMedia, but the actual in-call track acquisition below passed lib-jitsi-meet
-// no video constraints at all, so the browser/camera driver was free to pick whatever resolution
-// it wanted once the call actually started -- on at least one real Mac + Chrome + camera
-// combination, that came out portrait-shaped, which a landscape-shaped card then cropped into a
-// tight vertical zoom via object-fit: cover.
-//
-// A bare `aspectRatio: { ideal: 16 / 9 }` turned out not to be enough to actually fix this for
-// every camera: `ideal` is only ONE input into the browser's overall constraint scoring (width,
-// height, frameRate and aspectRatio all get weighed together), so a driver that heavily favors
-// matching the requested width/height can still end up settling on a portrait-shaped mode despite
-// the aspectRatio preference losing that tug-of-war. `advanced` constraint sets are the part of
-// the getUserMedia spec built exactly for "try hard to satisfy this, but never fail the whole
-// request over it": the UA attempts each advanced set in order and silently skips any entry it
-// cannot satisfy, instead of throwing OverconstrainedError the way a bare non-ideal aspectRatio
-// would for a camera that genuinely cannot do 16:9. This makes the landscape preference a much
-// stronger ask without risking camera acquisition breaking entirely on an unusual device.
+// portrait-cropped (an extreme vertical zoom into the face, not a normal headshot). This used to
+// have its own locally-built constraint object (width/height/frameRate ideal + a bare aspectRatio
+// ideal), separate from the lobby preview's own constraints -- which is exactly what caused the
+// LATER first-join-vs-rejoin version of this same bug (see getPreferredCameraCaptureConstraints'
+// own comment in networkQuality.ts for the full story): first join adopts the lobby's already-
+// open stream directly rather than requesting a fresh one, so whichever of these two constraint
+// builders was actually "better" at avoiding portrait only ever reached the device-switch/rejoin
+// path, never the stream first join actually uses. Delegating entirely to the one shared builder
+// is what closes that gap.
 function inCallVideoConstraints(): MediaTrackConstraints {
-  const ideal = getCameraCaptureIdeal();
-
-  return {
-    width: { ideal: ideal.width },
-    height: { ideal: ideal.height },
-    frameRate: { ideal: ideal.frameRate },
-    aspectRatio: { ideal: 16 / 9 },
-    advanced: [ { aspectRatio: 16 / 9 } ]
-  };
+  return getPreferredCameraCaptureConstraints();
 }
 
 // Real reported bug: reconnecting a Bluetooth mic "took time, not fast". A device that has just
