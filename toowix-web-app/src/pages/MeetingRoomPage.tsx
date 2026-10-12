@@ -4711,6 +4711,7 @@ export function MeetingRoomPage() {
                   raisedHand={isHandRaised}
                   theme={localTheme}
                   compact
+                  mirrored
                   style={{ width: '100%', aspectRatio: '16 / 9' }}
                   onVideoElement={setInCallVideoNode}
                   isPinned={pinnedParticipantId === 'local'}
@@ -4988,6 +4989,7 @@ export function MeetingRoomPage() {
                     height: '100%',
                     objectFit: 'cover',
                     borderRadius: '24px',
+                    transform: 'scaleX(-1)',
                   }}
                 />
               ) : (
@@ -5193,7 +5195,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5338,7 +5340,7 @@ export function MeetingRoomPage() {
                             muted
                             playsInline
                             ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -7630,6 +7632,7 @@ export function MeetingRoomPage() {
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
+                  transform: 'scaleX(-1)',
                 }}
               />
             ) : (
@@ -7985,6 +7988,7 @@ export function MeetingRoomPage() {
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
+                  transform: 'scaleX(-1)',
                 }}
               />
             ) : (
