@@ -75,7 +75,6 @@ import { startMeetingRetentionScheduler } from './meetings/retention.service';
 import { startRecordingRetentionScheduler } from './recordings/retention.service';
 import settingsRoutes from './routes/settings.routes';
 import contactRoutes from './routes/contact.routes';
-import meetAccessRoutes from './routes/meetAccess.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
@@ -85,9 +84,6 @@ app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/contacts', contactRoutes);
-// New, additive Keycloak-auth + entitlement proof-of-concept route (local dev only so far --
-// see meetAccess.routes.ts). Does not touch any existing route above.
-app.use('/api/meet', meetAccessRoutes);
 // Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
