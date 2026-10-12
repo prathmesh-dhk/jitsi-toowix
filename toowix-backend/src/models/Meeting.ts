@@ -102,6 +102,13 @@ export interface IMeeting {
   hostJoined?: boolean;
   quickAccessEnabled?: boolean;
   endedAt?: Date | null;
+  // Why endedAt got set -- distinguishes a real host decision from the scheduled link's own
+  // validity window running out, so every participant (not just whichever client's own timer
+  // happened to fire) can be routed to the correct outcome page (/meeting-link-expired vs
+  // /meeting-ended). Optional and nullable for backward compatibility: a document written before
+  // this field existed has endedAt but no endReason -- getLiveStatus falls back to inferring it
+  // from scheduledAt/endedAt proximity in that case, never assumes a reason that wasn't recorded.
+  endReason?: 'LINK_EXPIRED' | 'HOST_ENDED' | 'DURATION_LIMIT' | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -257,6 +264,7 @@ const MeetingSchema = new Schema<IMeetingDocument>(
     hostJoined: { type: Boolean, default: false },
     quickAccessEnabled: { type: Boolean, default: true },
     endedAt: { type: Date, default: null },
+    endReason: { type: String, enum: [ 'LINK_EXPIRED', 'HOST_ENDED', 'DURATION_LIMIT' ], default: null },
   },
   {
     timestamps: true,

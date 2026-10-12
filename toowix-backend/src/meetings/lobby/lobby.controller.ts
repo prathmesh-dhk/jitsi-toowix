@@ -122,10 +122,21 @@ export async function announceLobbyHandler(req: AuthenticatedRequest, res: Respo
  * POST /api/meetings/room/:roomSlug/end-for-everyone
  * Moderator ends the meeting for everyone in the call.
  */
+const VALID_END_REASONS = [ 'LINK_EXPIRED', 'HOST_ENDED', 'DURATION_LIMIT' ] as const;
+
 export async function endMeetingForEveryoneHandler(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
-    const result = await lobbyService.endForEveryone(room, req.firebaseUid);
+    // Never trust an arbitrary client-supplied reason outright -- only accept one of the closed
+    // enum values and fall back to the default ('HOST_ENDED') otherwise. This doesn't widen who
+    // may call this at all (isHostUser inside endForEveryone is unchanged and still the only
+    // actual authorization check); it only changes which outcome page participants see.
+    const requestedReason = req.body?.reason;
+    const reason = VALID_END_REASONS.includes(requestedReason) ? requestedReason : undefined;
+    const result = reason
+      ? await lobbyService.endForEveryone(room, req.firebaseUid, reason)
+      : await lobbyService.endForEveryone(room, req.firebaseUid);
+
     res.status(result.httpStatus).json(result.body);
   } catch (err: any) {
     console.error('[WaitingRoom] End for everyone error:', err.message);
