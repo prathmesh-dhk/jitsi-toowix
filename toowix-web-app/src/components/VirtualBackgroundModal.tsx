@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Sparkles, Ban, Loader2 } from 'lucide-react';
 
 import { getSavedBackground, saveBackground } from '../lib/meetingPrefs';
 import { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
+import { preloadPresetBackgroundImages } from '../lib/virtualBackground/backgroundImageCache';
 
 export interface IVirtualBackgroundModalProps {
   isOpen: boolean;
@@ -70,6 +71,18 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
   });
   const [ busyKey, setBusyKey ] = useState<SelectionKey | null>(null);
   const [ error, setError ] = useState<string | null>(null);
+
+  // Phase 2 (Virtual Background & PiP Performance Audit): start decoding every preset the moment
+  // this modal opens, not when a preset is actually tapped -- by the time the user clicks one, it
+  // is very often already in the shared cache (see backgroundImageCache.ts), so
+  // JitsiStreamBackgroundEffect.setVirtualBackground() can apply it instantly instead of waiting
+  // on a fresh decode. Deliberately does not run before the modal is open (never delays the
+  // meeting itself loading), and preloadPresetBackgroundImages() loads one at a time rather than
+  // all 7 at once.
+  useEffect(() => {
+    if (!isOpen) return;
+    preloadPresetBackgroundImages(PRESET_IMAGES);
+  }, [ isOpen ]);
 
   if (!isOpen) {
     return null;

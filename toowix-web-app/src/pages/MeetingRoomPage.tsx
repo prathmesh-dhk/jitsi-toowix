@@ -84,6 +84,7 @@ import { MeetingSettingsDialog } from '../components/MeetingSettingsDialog';
 import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
 import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
+import { isOverlayDebugEnabled } from '../lib/virtualBackground/backgroundDebugTools';
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
@@ -617,6 +618,31 @@ export function MeetingRoomPage() {
   // Which window object's setInterval/clearInterval actually owns pipTimerRef's handle -- see
   // startPipDraw's own comment for why this is no longer always the ambient (opener) window.
   const pipTimerWindowRef = useRef<any>(null);
+  // Phase 3 (Virtual Background & PiP Performance Audit, section 11): dev-only PiP draw-FPS
+  // counter -- the audit's own gap ("PiP update FPS" was not measurable at all before this).
+  // Incrementing an integer is effectively free, so this runs unconditionally; only READING it
+  // (via window.__pipBench, registered below) is gated behind the same ?bgDebug=1 flag the
+  // virtual background text overlay already uses.
+  const pipFrameStatsRef = useRef<{ count: number; windowStartedAt: number }>({ count: 0, windowStartedAt: Date.now() });
+
+  // Phase 3 diagnostics: window.__pipBench() -- same console-hook shape as the virtual background
+  // effect's own window.__bgBench (JitsiStreamBackgroundEffect.ts), but for the PiP draw loop's
+  // own FPS, which that tool has no visibility into (it only measures the segmentation/compositing
+  // pipeline, not what the separate PiP draw loop does with the result). Registered/unregistered
+  // with this component's own lifetime rather than left as a dangling global.
+  useEffect(() => {
+    if (!isOverlayDebugEnabled()) return undefined;
+    (window as any).__pipBench = () => {
+      const { count, windowStartedAt } = pipFrameStatsRef.current;
+      const elapsedS = (Date.now() - windowStartedAt) / 1000;
+
+      return { approxFps: elapsedS > 0 ? Math.round((count / elapsedS) * 10) / 10 : 0, frameCount: count };
+    };
+
+    return () => {
+      if ((window as any).__pipBench) delete (window as any).__pipBench;
+    };
+  }, []);
   // Live refs so the PiP draw loop always reads current state
   const pipRemoteParticipantsRef = useRef<typeof remoteParticipants>([]);
   // Canvas-based Video PiP can only draw HTMLVideoElements, not a MediaStream directly.
@@ -989,6 +1015,7 @@ export function MeetingRoomPage() {
 
   // Synchronously draw a single PiP frame to canvas immediately
   const drawPipFrame = () => {
+    pipFrameStatsRef.current.count += 1;
     const canvas = pipCanvasRef.current;
     if (!canvas) return;
     const W = canvas.width;

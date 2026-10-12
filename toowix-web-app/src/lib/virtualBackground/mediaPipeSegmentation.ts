@@ -43,7 +43,7 @@ const FALLBACK_ENGINE: SegmentationEngine = 'v1';
 // as "no real GPU" here even though the browser itself reports WebGL as available.
 const SOFTWARE_RENDERER_PATTERN = /swiftshader|llvmpipe|software|microsoft basic render|vmware|virtualbox|basic render driver/i;
 
-function isMobileDevice(): boolean {
+export function isMobileDevice(): boolean {
   try {
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
 

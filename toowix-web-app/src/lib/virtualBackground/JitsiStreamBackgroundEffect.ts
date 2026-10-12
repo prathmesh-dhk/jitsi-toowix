@@ -9,7 +9,8 @@
 // readSegmentationEngineOverride() flag -- V1 (resizeSource/runInference, unchanged from before
 // Phase 2) remains the default and the mid-call fallback target if MediaPipe fails repeatedly.
 import { computeStats, isMaskDebugEnabled, isOverlayDebugEnabled, roundTo1Decimal } from './backgroundDebugTools';
-import { type SegmentationEngine, getNextMediaPipeTimestamp, readMediaPipeSegSizeOverride } from './mediaPipeSegmentation';
+import { getCachedBackgroundImage, preloadBackgroundImage } from './backgroundImageCache';
+import { type SegmentationEngine, getNextMediaPipeTimestamp, isMobileDevice, readMediaPipeSegSizeOverride } from './mediaPipeSegmentation';
 
 export const VIRTUAL_BACKGROUND_TYPE = {
     BLUR: 'blur',
@@ -237,6 +238,15 @@ const DEBUG_PERF_LOG = false;
 // ticks with ~0ms gap and starve the rest of the main thread (input handling, other rendering).
 const MIN_TICK_GAP_MS = 4;
 
+// Phase 4: how often the stall watchdog checks whether _cameraInputFrameCount has advanced since
+// its last check (see _checkForStall). Long enough that a legitimately slow device, a momentary
+// governor step-down, or one genuinely late requestVideoFrameCallback firing never looks like a
+// stall; short enough that a real stall (the browser silently stopping the rVFC loop -- a rare but
+// real edge case, distinct from Phase 1's intentional document.hidden+isMobileDevice() pause,
+// which this also harmlessly passes through) is noticed and a recovery attempted within a few
+// seconds rather than indefinitely.
+const STALL_WATCHDOG_INTERVAL_MS = 4000;
+
 // Phase 3, dev-only: speeds up the governor's own sustain/cooldown/backoff windows for real-
 // browser testing (a real 8s sustain window is impractical to assert against directly). Read
 // once per effect start, NEVER in a production build -- gated on both the flag AND
@@ -298,8 +308,35 @@ export default class JitsiStreamBackgroundEffect {
     _segmentationMaskCtx: CanvasRenderingContext2D | null = null;
     _segmentationPixelCount: number;
     _stream: MediaStream | null = null;
-    _virtualImage!: HTMLImageElement;
+    // Phase 2: no longer unconditionally assigned in the constructor -- an image background may
+    // still be decoding (or waiting its turn behind a newer selection) when this is read, so every
+    // call site must handle null. Owned by the shared backgroundImageCache module, not this effect
+    // -- never mutate (.src, .removeAttribute, etc.) an image this field points at.
+    _virtualImage: HTMLImageElement | null = null;
+    // The src _virtualImage currently reflects (or null) -- lets setVirtualBackground tell "already
+    // showing this exact image, nothing to do" apart from "showing something else, need to swap",
+    // without re-deriving it from the (possibly shared, possibly not-yet-assigned) image element.
+    _virtualImageSrc: string | null = null;
+    // Bumped on every setVirtualBackground()/constructor image request. An in-flight preload's
+    // .then()/.catch() compares against the token it captured before awaiting -- if a newer
+    // request has since bumped it, that stale completion is discarded instead of overwriting
+    // whatever the newer selection already applied (Phase 2 requirement: "the newest user
+    // selection wins and stale asynchronous completions cannot overwrite it").
+    _imageLoadToken = 0;
     _blurCanvas = document.createElement('canvas');
+    // Phase 3: cached instead of calling _blurCanvas.getContext('2d') fresh every single frame in
+    // the blur branch of runPostProcessing() -- every OTHER canvas this effect owns already caches
+    // its context this same way (_outputCanvasCtx, _segmentationMaskCtx, _sourceFrameCtx); this one
+    // was the one inconsistent holdout, a real (if small) redundant per-frame call.
+    _blurCanvasCtx: CanvasRenderingContext2D | null = null;
+    // Phase 3: reused scratch buffer for _fillSpatialHoles() -- see that method's own comment.
+    _fillSpatialHolesScratch: Uint8ClampedArray | null = null;
+    // Phase 3: whether _outputCanvasElement's width/height actually changed THIS frame -- lets
+    // runPostProcessing() only re-apply imageSmoothingEnabled/imageSmoothingQuality right after an
+    // actual resize (which is the only thing that resets a 2D context's own properties back to
+    // their defaults) instead of unconditionally on every single frame for a value that, once set,
+    // never changes on its own.
+    _outputCanvasJustResized = true;
     _sourceTrack: MediaStreamTrack | null = null;
     _lastPlaybackError = '';
     _frameErrorReported = false;
@@ -371,7 +408,7 @@ export default class JitsiStreamBackgroundEffect {
     // benchmark. Timed on its own now for both engines (0 for v1, whose equivalent blend work stays
     // fused inside the untouched runInference()).
     _lastMediaPipeBlendMs = 0;
-    _debugAccum = { blend: 0, compositing: 0, count: 0, droppedFrames: 0, readback: 0, segmentation: 0, total: 0 };
+    _debugAccum = { blend: 0, cameraInputCount: 0, compositing: 0, count: 0, droppedFrames: 0, readback: 0, segmentation: 0, total: 0 };
     _lastOverlayMetrics: Record<string, number | string> | null = null;
     _benchSamples: { blend: number[]; compositing: number[]; readback: number[]; segmentation: number[]; total: number[]; } | null = null;
     _benchDroppedFrames = 0;
@@ -379,6 +416,28 @@ export default class JitsiStreamBackgroundEffect {
     // resets every ~1s log interval), this is the ground truth for "is the frame loop still
     // running", used by the visibility-resume stability check.
     _totalFrameCount = 0;
+    // Phase 3 diagnostics: every requestVideoFrameCallback firing, regardless of whether the
+    // governor's own cadence gate (_nextTickDelayMs) actually allowed a render that tick -- the
+    // audit's own gap #1 ("camera input FPS" vs "segmentation FPS" as two separate numbers). The
+    // DIFFERENCE between this and _totalFrameCount's growth rate is exactly how many real camera
+    // frames the fps governor is currently skipping by design, not lost/dropped.
+    _cameraInputFrameCount = 0;
+    // Phase 3 diagnostics: wall-clock time of the last frame that was actually drawn to
+    // _outputCanvasElement (a successful render, not just an attempted one) -- lets a caller ask
+    // "how stale is what's on screen right now" directly (getFrameAgeMs()), instead of inferring it
+    // indirectly from totalFrameCount not advancing. This is exactly the measurement the audit
+    // proposed for confirming/measuring a hidden-tab freeze's real duration (see docs/
+    // VIRTUAL_BACKGROUND_PIP_PERFORMANCE_AUDIT.md section 11, item 1).
+    _lastSuccessfulRenderAt = 0;
+    // Phase 4: stall watchdog state -- see _checkForStall's own comment. Independent of the rVFC
+    // loop itself (a setInterval, not another requestVideoFrameCallback), specifically so it can
+    // detect the rVFC loop silently stopping, which it could never detect from inside itself.
+    _watchdogIntervalHandle: ReturnType<typeof setInterval> | null = null;
+    _watchdogLastCameraInputFrameCount = 0;
+    _watchdogWarned = false;
+    // Diagnostics only -- how many times the watchdog has actually attempted a recovery this
+    // effect's lifetime (surfaced in _lastOverlayMetrics, never read by any control-flow decision).
+    _watchdogRecoveryCount = 0;
     // Phase 2c: a small canvas MediaPipe is fed instead of the raw camera-resolution video element --
     // mirrors V1's resizeSource() stretch exactly (same SEG_WIDTH x SEG_HEIGHT, same drawImage call
     // shape), so MediaPipe's mask comes back at the same small fixed size V1 already uses instead of
@@ -487,10 +546,45 @@ export default class JitsiStreamBackgroundEffect {
         }
 
         if (virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
-            this._virtualImage = document.createElement('img');
-            this._virtualImage.crossOrigin = 'anonymous';
-            this._virtualImage.src = virtualBackground.virtualSource ?? '';
+            // Phase 2: goes through the same shared decode cache a later setVirtualBackground()
+            // call would use, instead of this constructor owning its own separate <img>. If this
+            // exact URL isn't decoded yet, _virtualImage stays null until it is -- _renderMask()'s
+            // own readiness gate already handles a null/not-ready image (there is no "previous
+            // background" to keep showing the very first time an effect starts directly on an
+            // image background; see that gate's own comment).
+            this._loadVirtualImage(virtualBackground.virtualSource ?? '', ++this._imageLoadToken);
         }
+    }
+
+    // Shared by the constructor (first-ever image background) and setVirtualBackground() (every
+    // later switch). `token` is whatever _imageLoadToken was immediately before this call --
+    // compared again once the (possibly async) load resolves so a stale completion from a
+    // superseded selection can never clobber a newer one.
+    _loadVirtualImage(src: string, token: number) {
+        if (!src) return;
+
+        const cached = getCachedBackgroundImage(src);
+
+        if (cached) {
+            this._virtualImage = cached;
+            this._virtualImageSrc = src;
+
+            return;
+        }
+        preloadBackgroundImage(src).then((image) => {
+            if (this._imageLoadToken !== token) return; // superseded by a later selection
+            this._virtualImage = image;
+            this._virtualImageSrc = src;
+        }).catch((error) => {
+            if (this._imageLoadToken !== token) return;
+
+            const message = error instanceof Error ? error.message : String(error);
+
+            // Phase 2 requirement: a failed image load must not break the active camera/meeting --
+            // warn and leave whatever was previously active (possibly nothing yet, if this was the
+            // very first selection) exactly as it was.
+            console.warn('[VirtualBackground] Failed to load background image, keeping previous background active:', message);
+        });
     }
 
     // Real reported defect (2026-09-30): switching backgrounds (blur strength, or to a different
@@ -504,30 +598,77 @@ export default class JitsiStreamBackgroundEffect {
     // already-running effect's background config in place instead, keeping the same engine,
     // governor state, and learned-cost table across a switch. Only the background-specific state
     // below changes; segmentation/compositing/governor code is untouched by this method.
+    // Phase 2 (Virtual Background & PiP Performance Audit, section 9): the one real cost Phase
+    // 2's own predecessor fix (in-place config reuse, see the big comment above) left behind --
+    // switching TO a not-yet-decoded image used to flip _options.virtualBackground to IMAGE
+    // immediately, and _renderMask()'s readiness gate then skipped every frame until that
+    // specific image finished loading. The fix: never flip _options.virtualBackground (or touch
+    // _virtualImage) until the replacement image is ACTUALLY ready -- segmentation/compositing
+    // keeps running against whatever was active a moment ago (the previous image, or blur) the
+    // entire time, so no frame is ever skipped waiting for THIS switch. Blur/none still apply
+    // immediately, exactly as before (nothing to decode).
     setVirtualBackground(virtualBackground: IVirtualBackground) {
-        const previous = this._options.virtualBackground;
+        const requestedAt = isOverlayDebugEnabled() ? Date.now() : 0;
+        // Invalidates any earlier in-flight image load from a PREVIOUS call to this method (or the
+        // constructor) -- see _loadVirtualImage's own comment on why this is compared again once
+        // that load resolves.
+        const token = ++this._imageLoadToken;
 
-        this._options.virtualBackground = virtualBackground;
-        if (virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
-            const nextSrc = virtualBackground.virtualSource ?? '';
+        if (virtualBackground.backgroundType !== VIRTUAL_BACKGROUND_TYPE.IMAGE) {
+            this._options.virtualBackground = virtualBackground;
 
-            if (!this._virtualImage) {
-                this._virtualImage = document.createElement('img');
-                this._virtualImage.crossOrigin = 'anonymous';
-            }
-            // Only reassign .src (which restarts image decode) if it actually changed -- switching
-            // blur strength while already on an image background, for example, must not re-decode.
-            if (this._virtualImage.src !== nextSrc && this._virtualImage.getAttribute('src') !== nextSrc) {
-                this._virtualImage.src = nextSrc;
-            }
-        } else if (previous.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
-            // Leaving an image background -- no need to keep decoding/holding it; the readyState checks
-            // in _renderMask() only gate the IMAGE branch, so this is safe to leave alone either way,
-            // but clearing the source stops a background decode/network fetch that's no longer needed.
-            try {
-                this._virtualImage.removeAttribute('src');
-            } catch { /* best-effort only */ }
+            return;
         }
+
+        const nextSrc = virtualBackground.virtualSource ?? '';
+
+        if (!nextSrc) {
+            this._options.virtualBackground = virtualBackground;
+
+            return;
+        }
+        // Re-selecting the exact image already active and applied is a pure no-op -- still update
+        // the config object itself (blurValue/backgroundType are irrelevant here, but a future
+        // field on IVirtualBackground should not silently stay stale).
+        if (this._options.virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE
+            && this._virtualImageSrc === nextSrc) {
+            this._options.virtualBackground = virtualBackground;
+
+            return;
+        }
+
+        const cached = getCachedBackgroundImage(nextSrc);
+
+        if (cached) {
+            // Already decoded (a previous selection this session, or the modal's own prefetch-on-
+            // open) -- apply immediately, together, no pending state at all.
+            this._virtualImage = cached;
+            this._virtualImageSrc = nextSrc;
+            this._options.virtualBackground = virtualBackground;
+            if (requestedAt) console.debug(`[VirtualBackground] Background switch applied instantly (cache hit) in ${Date.now() - requestedAt}ms`);
+
+            return;
+        }
+
+        // Not decoded yet: deliberately do NOT touch _options.virtualBackground or _virtualImage
+        // here -- the frame loop keeps producing frames from whatever is currently active until
+        // this resolves (or is superseded; see the token check below).
+        preloadBackgroundImage(nextSrc).then((image) => {
+            if (this._imageLoadToken !== token) return; // a newer selection already won
+            this._virtualImage = image;
+            this._virtualImageSrc = nextSrc;
+            this._options.virtualBackground = virtualBackground;
+            if (requestedAt) console.debug(`[VirtualBackground] Background switch applied after decode in ${Date.now() - requestedAt}ms (no frames were skipped meanwhile)`);
+        }).catch((error) => {
+            if (this._imageLoadToken !== token) return;
+
+            const message = error instanceof Error ? error.message : String(error);
+
+            // Phase 2 requirement: a failed load must not break the active camera/meeting, and the
+            // background that was active before this (now-failed) switch simply stays active,
+            // since _options.virtualBackground was never changed.
+            console.warn('[VirtualBackground] Failed to load background image, keeping previous background active:', message);
+        });
     }
 
     isEnabled(jitsiLocalTrack: any) {
@@ -582,6 +723,19 @@ export default class JitsiStreamBackgroundEffect {
     // "the loop stopped" apart from "we're just between log flushes".
     getTotalFrameCount(): number {
         return this._totalFrameCount;
+    }
+
+    // Phase 3 diagnostics -- see _cameraInputFrameCount's own comment.
+    getCameraInputFrameCount(): number {
+        return this._cameraInputFrameCount;
+    }
+
+    // Phase 3 diagnostics: milliseconds since the output canvas last actually received a newly
+    // composited frame. 0 before the very first successful render. A caller watching this stay
+    // large for longer than a frame period or two has direct, measured evidence of a stall --
+    // see _lastSuccessfulRenderAt's own comment.
+    getFrameAgeMs(): number {
+        return this._lastSuccessfulRenderAt === 0 ? 0 : Date.now() - this._lastSuccessfulRenderAt;
     }
 
     // The effect's own current composite rate -- min(camera's native frameRate, the governor's fps
@@ -787,6 +941,7 @@ export default class JitsiStreamBackgroundEffect {
         // whatever the receiver sees during that swap is a real picture of the person, not black.
         this._drawRawPassthroughFrame();
         this._stopTimerLoop();
+        this._stopStallWatchdog();
         try {
             this._onGiveUp?.();
         } catch (err) {
@@ -1038,6 +1193,10 @@ export default class JitsiStreamBackgroundEffect {
         }
 
         this._startTimerLoop();
+        // Phase 4: (re)started every startEffect() call, including a mid-call device switch on
+        // this SAME instance -- _startStallWatchdog() itself clears any previous interval first,
+        // so this is safe to call unconditionally rather than only on a true first start.
+        this._startStallWatchdog();
         // Phase 2b: window.__bgBench routes to whichever effect started most recently. Not a
         // this-alias in the sense the lint rule guards against (no closure capturing a stale
         // `this` across callbacks) -- it's a deliberate module-level registry of the active
@@ -1050,6 +1209,7 @@ export default class JitsiStreamBackgroundEffect {
 
     stopEffect() {
         this._stopTimerLoop();
+        this._stopStallWatchdog();
         document.removeEventListener('visibilitychange', this._resumeInput);
         window.removeEventListener('pageshow', this._resumeInput);
         this._sourceTrack?.removeEventListener('unmute', this._resumeInput);
@@ -1087,6 +1247,11 @@ export default class JitsiStreamBackgroundEffect {
     _startTimerLoop() {
         const onVideoFrame = () => {
             if (this._rvfcHandle === null) return; // stopped mid-flight; do not reschedule
+            // Counts every genuinely new camera frame the browser delivered, whether or not the
+            // governor's own cadence gate below ends up allowing a render for it -- see this
+            // counter's own field comment.
+            this._cameraInputFrameCount += 1;
+            this._debugAccum.cameraInputCount += 1;
             const now = Date.now();
 
             if (now - this._lastRenderAt >= this._nextTickDelayMs()) {
@@ -1116,34 +1281,97 @@ export default class JitsiStreamBackgroundEffect {
         }
     }
 
+    // Phase 4: an INDEPENDENT timer (not another requestVideoFrameCallback) that periodically
+    // checks whether the rVFC loop is still actually delivering camera frames, using the Phase 3
+    // _cameraInputFrameCount counter -- a signal the loop itself has no way to check about itself.
+    // Real, if rare, motivation: requestVideoFrameCallback is a relatively young API with less
+    // battle-testing than setInterval/rAF across every browser/OS combination, and nothing in this
+    // codebase previously detected the loop silently failing to reschedule itself for any reason
+    // other than an explicit stopEffect()/give-up. This intentionally does NOT distinguish that
+    // rare failure from Phase 1's expected document.hidden+isMobileDevice() pause (see
+    // _renderMask) -- a harmless no-op re-registration either way, since this only ever touches
+    // the rVFC registration on the SAME existing video element, never the camera track itself.
+    _startStallWatchdog() {
+        this._stopStallWatchdog(); // idempotent -- a mid-call device switch re-runs startEffect()
+        this._watchdogLastCameraInputFrameCount = this._cameraInputFrameCount;
+        this._watchdogWarned = false;
+        this._watchdogIntervalHandle = setInterval(this._checkForStall, STALL_WATCHDOG_INTERVAL_MS);
+    }
+
+    _stopStallWatchdog() {
+        if (this._watchdogIntervalHandle !== null) {
+            clearInterval(this._watchdogIntervalHandle);
+            this._watchdogIntervalHandle = null;
+        }
+    }
+
+    _checkForStall = () => {
+        // Nothing SHOULD be running right now -- not a stall, a deliberate stop.
+        if (this._hasGivenUp || this._rvfcHandle === null) return;
+        if (this._cameraInputFrameCount === this._watchdogLastCameraInputFrameCount) {
+            if (!this._watchdogWarned) {
+                console.warn('[VirtualBackground] No new camera frame observed for a full watchdog interval -- re-registering the frame callback as a precaution.');
+                this._watchdogWarned = true;
+            }
+            this._watchdogRecoveryCount += 1;
+            this._stopTimerLoop();
+            this._startTimerLoop();
+        } else {
+            this._watchdogWarned = false;
+        }
+        this._watchdogLastCameraInputFrameCount = this._cameraInputFrameCount;
+    };
+
     runPostProcessing(sourceFrame: CanvasImageSource = this._inputVideoElement) {
         const track = this._stream?.getVideoTracks()[0];
 
         if (!track || !this._outputCanvasCtx) {
             return;
         }
-        const settings = track.getSettings ? track.getSettings() : track.getConstraints();
-        const { height, width } = settings as any;
         const { backgroundType } = this._options.virtualBackground;
 
-        const nativeWidth = Number((sourceFrame as any).width) || this._inputVideoElement.videoWidth || Number(width) || 640;
-        const nativeHeight = Number((sourceFrame as any).height) || this._inputVideoElement.videoHeight || Number(height) || 360;
+        // Phase 3: track.getSettings() is a real (if small) per-call cost on a live
+        // MediaStreamTrack, and was being paid EVERY SINGLE FRAME here for a value that is only
+        // ever actually used as a last-resort fallback -- by the time _renderMask() ever reaches
+        // this call, its own readyState >= 2 gate already guarantees the video element has real
+        // dimensions (HAVE_CURRENT_DATA implies HAVE_METADATA already happened), so
+        // this._inputVideoElement.videoWidth/videoHeight is in practice always truthy and this
+        // fallback is never actually reached on the hot path. Computed lazily now -- only touches
+        // the track at all in the one case (no video dimensions yet) where it's actually needed.
+        let nativeWidth = Number((sourceFrame as any).width) || this._inputVideoElement.videoWidth;
+        let nativeHeight = Number((sourceFrame as any).height) || this._inputVideoElement.videoHeight;
+
+        if (!nativeWidth || !nativeHeight) {
+            const settings = track.getSettings ? track.getSettings() : track.getConstraints();
+
+            nativeWidth = nativeWidth || Number((settings as any)?.width) || 640;
+            nativeHeight = nativeHeight || Number((settings as any)?.height) || 360;
+        }
 
         this._inputVideoElement.width = nativeWidth;
         this._inputVideoElement.height = nativeHeight;
 
         const { width: outWidth, height: outHeight } = this._getOutputSize(nativeWidth, nativeHeight);
+        let outputCanvasResizedThisFrame = false;
 
-        if (this._outputCanvasElement.height !== outHeight) this._outputCanvasElement.height = outHeight;
-        if (this._outputCanvasElement.width !== outWidth) this._outputCanvasElement.width = outWidth;
+        if (this._outputCanvasElement.height !== outHeight) { this._outputCanvasElement.height = outHeight; outputCanvasResizedThisFrame = true; }
+        if (this._outputCanvasElement.width !== outWidth) { this._outputCanvasElement.width = outWidth; outputCanvasResizedThisFrame = true; }
         this._outputCanvasCtx.globalCompositeOperation = 'copy';
         // The mask is only SEG_WIDTH/MEDIAPIPE_SEG_WIDTH pixels wide and gets stretched up to the
         // full output size below -- often 4-8x. Without explicitly requesting high-quality smoothing,
         // a browser can fall back to a cheaper (blockier, more jagged-edged) scaling method for that
         // stretch. This is close to free and applies to every draw on this context, so it's set once
         // here rather than per-drawImage call.
-        this._outputCanvasCtx.imageSmoothingEnabled = true;
-        this._outputCanvasCtx.imageSmoothingQuality = 'high';
+        // Phase 3: resizing a canvas element resets its 2D context back to default state (including
+        // these two properties) -- but when the canvas did NOT just resize, whatever this already
+        // set on a previous frame is still in effect, so re-setting it again every single frame
+        // (the overwhelmingly common case -- the output size rarely changes frame to frame) was
+        // pure redundant property writes with no actual behaviour difference.
+        if (outputCanvasResizedThisFrame || this._outputCanvasJustResized) {
+            this._outputCanvasCtx.imageSmoothingEnabled = true;
+            this._outputCanvasCtx.imageSmoothingQuality = 'high';
+        }
+        this._outputCanvasJustResized = false;
 
         // Draw the (blurred-edge) segmentation mask, scaled to the (possibly capped) output size.
         // Real reported defect (2026-09-30): the old ratio-scaled formula (tuned for an 8px/4px base
@@ -1192,8 +1420,13 @@ export default class JitsiStreamBackgroundEffect {
         // a small blurred source scaled back up looks the same as a full-size one once blurred, for a
         // fraction of the pixels.
         this._outputCanvasCtx.globalCompositeOperation = 'destination-over';
-        if (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
+        if (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE && this._virtualImage) {
             this._outputCanvasCtx.drawImage(this._virtualImage, 0, 0, outWidth, outHeight);
+        } else if (backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE) {
+            // Defensive only: _renderMask()'s own readiness gate means this can't happen on the
+            // normal frame-loop path (it never calls runPostProcessing with backgroundType IMAGE
+            // and a null/not-ready _virtualImage) -- but runPostProcessing is also called directly
+            // by tests/diagnostics, so draw nothing rather than throw if it ever is.
         } else {
             const scale = Math.max(4, this._options.virtualBackground.blurValue || 8);
             const bWidth = Math.max(1, Math.round(outWidth / scale));
@@ -1201,7 +1434,11 @@ export default class JitsiStreamBackgroundEffect {
 
             if (this._blurCanvas.width !== bWidth) this._blurCanvas.width = bWidth;
             if (this._blurCanvas.height !== bHeight) this._blurCanvas.height = bHeight;
-            const context = this._blurCanvas.getContext('2d');
+            // Phase 3: cached on the instance (see _blurCanvasCtx's own comment) instead of calling
+            // getContext('2d') fresh every frame -- a canvas's context, once created, is the same
+            // object for that canvas's lifetime; resizing the canvas does not invalidate it.
+            if (!this._blurCanvasCtx) this._blurCanvasCtx = this._blurCanvas.getContext('2d');
+            const context = this._blurCanvasCtx;
 
             if (context) {
                 // A touch of real blur on the now-tiny source is nearly free and smooths out the
@@ -1317,7 +1554,17 @@ export default class JitsiStreamBackgroundEffect {
         } catch {
             return;
         }
-        const original = new Uint8ClampedArray(this._segmentationMask.data);
+        // Phase 3: reuses a scratch buffer across frames instead of `new Uint8ClampedArray(...)`
+        // every single call -- for a MediaPipe-engine effect, this ran on every frame regardless of
+        // whether any actual holes were found, allocating and then immediately garbage-collecting
+        // a full mask-sized (width*height*4 bytes) typed array each time. Reallocated only when the
+        // mask's own pixel dimensions actually change (_ensureMaskSize, a rare event), matching the
+        // same reuse pattern the mask canvas/ImageData already use.
+        if (!this._fillSpatialHolesScratch || this._fillSpatialHolesScratch.length !== this._segmentationMask.data.length) {
+            this._fillSpatialHolesScratch = new Uint8ClampedArray(this._segmentationMask.data.length);
+        }
+        this._fillSpatialHolesScratch.set(this._segmentationMask.data);
+        const original = this._fillSpatialHolesScratch;
         const luma = (index: number) => (source.data[index] * 0.2126) + (source.data[index + 1] * 0.7152) + (source.data[index + 2] * 0.0722);
         let changed = false;
 
@@ -1487,10 +1734,20 @@ export default class JitsiStreamBackgroundEffect {
     }
 
     _captureSourceFrame(): HTMLCanvasElement | null {
-        const track = this._stream?.getVideoTracks()[0];
-        const settings = track?.getSettings ? track.getSettings() : track?.getConstraints?.();
-        const width = this._inputVideoElement.videoWidth || Number((settings as any)?.width) || 640;
-        const height = this._inputVideoElement.videoHeight || Number((settings as any)?.height) || 360;
+        // Phase 3: same fix as runPostProcessing() -- track.getSettings() was being called every
+        // single frame (this method runs once per render, same cadence as runPostProcessing) for
+        // a fallback that videoWidth/videoHeight already satisfies in practice every time this is
+        // reached (see that method's comment for why). Only touches the track when actually needed.
+        let width = this._inputVideoElement.videoWidth;
+        let height = this._inputVideoElement.videoHeight;
+
+        if (!width || !height) {
+            const track = this._stream?.getVideoTracks()[0];
+            const settings = track?.getSettings ? track.getSettings() : track?.getConstraints?.();
+
+            width = width || Number((settings as any)?.width) || 640;
+            height = height || Number((settings as any)?.height) || 360;
+        }
 
         if (!this._sourceFrameCanvas) {
             this._sourceFrameCanvas = document.createElement('canvas');
@@ -1522,13 +1779,28 @@ export default class JitsiStreamBackgroundEffect {
     // loop, but this is a defensive no-op in case _renderMask is ever invoked directly (a test, a
     // stray call during teardown).
         if (this._hasGivenUp) return;
-        // iOS may suspend capture while the tab is hidden or another app owns the camera.
-        // Keep the last valid frame instead of segmenting a black/muted source into background-only video.
-        if (document.hidden || !this._sourceTrack || this._sourceTrack.muted
+        // Real OS-level camera suspension while a tab is backgrounded is a documented MOBILE
+        // phenomenon (iOS Safari can't even reach this effect at all -- canvas.captureStream() is
+        // unsupported there, see supportsVirtualBackground() in VirtualBackgroundModal.tsx -- but
+        // Android/mobile browsers that DO support virtual backgrounds can still have the OS
+        // suspend camera access while backgrounded). On desktop, a hidden tab does not stop the
+        // camera or frame decoding -- requestVideoFrameCallback keeps firing with genuinely new
+        // frames -- so gating ALL processing on document.hidden there was freezing the actual
+        // outgoing WebRTC video and PiP for no real reason (both are fed by this same effect's
+        // output, see the data-flow audit). Scoping the hidden-tab gate to mobile keeps the
+        // original protection where the real risk is, without freezing desktop for everyone.
+        // The track-state checks below are NOT scoped to mobile -- a muted/disabled/non-live
+        // camera track is a real stop condition on every platform.
+        if ((document.hidden && isMobileDevice()) || !this._sourceTrack || this._sourceTrack.muted
       || !this._sourceTrack.enabled || this._sourceTrack.readyState !== 'live') return;
         if (this._inputVideoElement.readyState < 2) return;
+        // Phase 2: setVirtualBackground() now only flips backgroundType to IMAGE once its image is
+        // ALREADY decoded (see that method's own comment), so this branch only ever actually skips
+        // a frame for the one case that can't avoid it -- an effect started directly on an image
+        // background (the very first frame, before the constructor's own _loadVirtualImage call
+        // resolves) with nothing previous to keep showing instead.
         if (this._options.virtualBackground.backgroundType === VIRTUAL_BACKGROUND_TYPE.IMAGE
-      && (!this._virtualImage.complete || !this._virtualImage.naturalWidth)) return;
+      && (!this._virtualImage || !this._virtualImage.complete || !this._virtualImage.naturalWidth)) return;
         const sourceFrame = this._captureSourceFrame();
 
         if (!sourceFrame) return;
@@ -1576,6 +1848,10 @@ export default class JitsiStreamBackgroundEffect {
         // successfully composited frame instead, which reads as a brief pause, not a visible glitch.
         if (segmentationSucceeded) {
             this.runPostProcessing(sourceFrame);
+            // Only on an actual successful composite -- a skipped frame (segmentation failure)
+            // leaves the output canvas showing its previous content, so the frame genuinely did
+            // NOT get newer just because _renderMask() ran; see getFrameAgeMs()'s own comment.
+            this._lastSuccessfulRenderAt = Date.now();
         }
         const compositingMs = Date.now() - compositeStart;
         const totalMs = Date.now() - frameStart;
@@ -1663,6 +1939,19 @@ export default class JitsiStreamBackgroundEffect {
             avgReadbackMs: roundTo1Decimal(avgReadbackMs),
             avgBlendMs: roundTo1Decimal(avgBlendMs),
             avgCompositingMs: roundTo1Decimal(avgCompositingMs),
+            // Phase 3 (audit section 11, gap #1): camera input and segmentation cadence as two
+            // SEPARATE numbers over the same ~1s window, instead of only one combined figure --
+            // camera frames the governor's own cadence gate intentionally skipped show up as a gap
+            // between these two, not as a bug. Both are approximate fps (count over this window,
+            // which is close enough to exactly 1s for a dev readout, not a precision measurement).
+            cameraInputFps: this._debugAccum.cameraInputCount,
+            segmentationFps: this._debugAccum.count,
+            // How stale the currently-displayed frame is RIGHT NOW (not an average) -- see
+            // getFrameAgeMs()'s own comment.
+            frameAgeMs: this.getFrameAgeMs(),
+            // Phase 4: should stay 0 on every normal device/session -- a nonzero value means the
+            // stall watchdog actually had to intervene at least once (see _checkForStall).
+            stallWatchdogRecoveries: this._watchdogRecoveryCount,
             // What's left of avgTotalMs once every timed sub-metric is subtracted -- should be small and
             // stable; a large or growing residual means some real cost still isn't being timed.
             residualMs: roundTo1Decimal(avgTotalMs - avgSegmentationMs - avgReadbackMs - avgBlendMs - avgCompositingMs),
@@ -1676,7 +1965,7 @@ export default class JitsiStreamBackgroundEffect {
             console.info('[VirtualBackground][perf]', this._lastOverlayMetrics);
         }
 
-        this._debugAccum = { blend: 0, compositing: 0, count: 0, droppedFrames: 0, readback: 0, segmentation: 0, total: 0 };
+        this._debugAccum = { blend: 0, cameraInputCount: 0, compositing: 0, count: 0, droppedFrames: 0, readback: 0, segmentation: 0, total: 0 };
     }
 
     // Dev-only (toowix_bg_debug_mask=1): overwrites the mask canvas with a full-frame grayscale
@@ -1840,5 +2129,22 @@ if (typeof window !== 'undefined' && !(import.meta as any)?.env?.PROD) {
         }
 
         return activeDebugEffect.runBenchmark(seconds);
+    };
+    // Phase 4 (audit section 9): a PiP draw-FPS counter alone (window.__pipBench, MeetingRoomPage.
+    // tsx) proves PiP is drawing ON SCHEDULE, never that the SOURCE video it's drawing from is
+    // actually advancing -- Phase 1's whole root cause was exactly a case where both were true at
+    // once (PiP drew on time, every time, the same frozen pixels). This is the frame-age
+    // cross-check meant to be read ALONGSIDE window.__pipBench(), not instead of it.
+    (window as any).__bgFrameStatus = () => {
+        if (!activeDebugEffect) {
+            return { error: 'No virtual background effect is currently active.' };
+        }
+
+        return {
+            frameAgeMs: activeDebugEffect.getFrameAgeMs(),
+            cameraInputFrameCount: activeDebugEffect.getCameraInputFrameCount(),
+            totalFrameCount: activeDebugEffect.getTotalFrameCount(),
+            stallWatchdogRecoveries: activeDebugEffect._watchdogRecoveryCount
+        };
     };
 }
