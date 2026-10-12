@@ -614,6 +614,9 @@ export function MeetingRoomPage() {
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipRafRef = useRef<number>(0);
   const pipTimerRef = useRef<any>(null);
+  // Which window object's setInterval/clearInterval actually owns pipTimerRef's handle -- see
+  // startPipDraw's own comment for why this is no longer always the ambient (opener) window.
+  const pipTimerWindowRef = useRef<any>(null);
   // Live refs so the PiP draw loop always reads current state
   const pipRemoteParticipantsRef = useRef<typeof remoteParticipants>([]);
   // Canvas-based Video PiP can only draw HTMLVideoElements, not a MediaStream directly.
@@ -1192,13 +1195,38 @@ export function MeetingRoomPage() {
     if (documentPip && !documentPip.closed && documentPip.document.visibilityState === 'hidden') return;
     if (pipTimerRef.current) return;
     drawPipFrame();
-    pipTimerRef.current = setInterval(drawPipFrame, 100); // 10fps
+    // Real reported bug: the PiP video appeared to freeze whenever the person switched AWAY from
+    // the main/opener tab while leaving a documentPictureInPicture window open and visible --
+    // exactly the normal "watch the call while doing something else" use case PiP exists for.
+    // Root cause: this setInterval was always registered on the ambient (opener) window. Chrome's
+    // background-tab timer throttling degrades setInterval/setTimeout on a HIDDEN document, and
+    // that throttling is keyed on the document the timer is REGISTERED on, not on whether some
+    // OTHER window it spawned (the PiP window) is still visible -- so switching tabs on the main
+    // window throttled this loop down to roughly once a second (or stopped it entirely in
+    // extended backgrounding), even though the PiP window itself never stopped being visible. A
+    // documentPictureInPicture window is a real, separate top-level browsing context with its own
+    // timer queue, governed by ITS OWN visibility (already handled by the hidden-check above) --
+    // registering the interval THERE instead means a hidden opener tab no longer throttles it at
+    // all. Classic (non-Document) PiP has no second window to move this to, so it keeps using the
+    // ambient window exactly as before.
+    const timerWindow = (documentPip && !documentPip.closed) ? documentPip : window;
+
+    pipTimerWindowRef.current = timerWindow;
+    pipTimerRef.current = timerWindow.setInterval(drawPipFrame, 100); // 10fps
   };
 
   const stopPipDraw = () => {
     if (pipTimerRef.current) {
-      clearInterval(pipTimerRef.current);
+      // clearInterval must be called on the SAME window whose setInterval produced this handle --
+      // timer ids are not portable across windows' separate timer namespaces. Wrapped in try/catch
+      // purely for the case where that window has since been closed out from under this call.
+      try {
+        (pipTimerWindowRef.current || window).clearInterval(pipTimerRef.current);
+      } catch {
+        // Nothing left to clear if its owning window is already gone.
+      }
       pipTimerRef.current = null;
+      pipTimerWindowRef.current = null;
     }
     cancelAnimationFrame(pipRafRef.current);
   };
@@ -2316,9 +2344,21 @@ export function MeetingRoomPage() {
           setWaitingDenied(true);
         } else if (eventData?.type === 'LOBBY_ENDED') {
           // This person never actually joined the conference (still in the waiting room), so
-          // this bypasses leaveMeeting() entirely and is a separate exit path -- must fire the
-          // same end-of-call tone itself, or "meeting ended" would silently have no sound for
-          // anyone who happened to be waiting when the host ended it.
+          // this bypasses leaveMeeting() entirely and is a separate exit path. eventData.payload
+          // carries this app's own `reason` (see endMeetingForEveryoneOnBackend); resolveMeetingEndReason
+          // is referenced here only inside this async callback, which runs well after render --
+          // by then it's already assigned, same as every other function this component closes
+          // over from a later line (no temporal-dead-zone issue, unlike a useCallback dependency
+          // array, which DOES evaluate immediately during render).
+          if (resolveMeetingEndReason(eventData.payload?.reason) === 'LINK_EXPIRED') {
+            navigate('/meeting-link-expired', { replace: true });
+
+            return;
+          }
+          // A real host decision still gets the same end-of-call tone a joined participant hears
+          // -- "meeting ended" would otherwise be silent for anyone who happened to be waiting
+          // when the host ended it. A link simply expiring plays no tone, matching how a plain
+          // expired-link page load never did either.
           playMeetingEndedTone();
           navigate('/meeting-ended', {
             replace: true,
@@ -2516,28 +2556,91 @@ export function MeetingRoomPage() {
     [navigate, recordAttendanceLeave, roomId, isModerator, displayName, participation, isFromConversation]
   );
 
-  const handleEndMeetingForEveryone = async () => {
-    setShowEndMeetingModal(false);
+  // Split out from handleEndMeetingForEveryone below so the auto-expiry effect (further down)
+  // can reuse the SAME server-side ending/broadcast without also inheriting that function's own
+  // leaveMeeting('You ended...') -> /meeting-ended navigation, which would otherwise race against
+  // and overwrite the /meeting-link-expired navigation the auto-expiry path needs instead.
+  // Deliberately a plain function, not useCallback: postRoomSignal itself is declared further
+  // down in this component (via its own useCallback), and only evaluating it lazily -- at CALL
+  // time, by which point render has already assigned it -- avoids a "used before its
+  // declaration" error that a useCallback dependency array (evaluated immediately, during this
+  // render) would hit.
+  // reason defaults to 'HOST_ENDED' (an explicit human decision) -- only the auto-expiry effect
+  // further down passes 'LINK_EXPIRED' explicitly. Propagated through BOTH the best-effort
+  // signal (so other already-connected clients can react immediately, without waiting for their
+  // next live-status poll) and the authoritative backend call (which persists it on the Meeting
+  // document, so a LATE joiner or a client that only ever sees live-status still gets it right).
+  const endMeetingForEveryoneOnBackend = async (reason: 'HOST_ENDED' | 'LINK_EXPIRED' = 'HOST_ENDED') => {
     // HTTP-reliable broadcast (see postRoomSignal) instead of sendEndpointTextMessage
     // directly -- same BridgeChannel-not-ready problem chat had. This is only an immediate
     // courtesy message; the authenticated backend end request is the source of truth and the
     // live-status fallback reaches participants if this signal cannot be delivered.
     try {
-      void postRoomSignal('MEETING_ENDED_FOR_EVERYONE', {});
+      void postRoomSignal('MEETING_ENDED_FOR_EVERYONE', { reason });
     } catch { }
+    const headers = await accountHeaders();
+    const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ reason }),
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) throw new Error(data.error || 'Could not end the meeting for everyone.');
+  };
+
+  const handleEndMeetingForEveryone = async () => {
+    setShowEndMeetingModal(false);
     try {
-      const headers = await accountHeaders();
-      const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/end-for-everyone`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not end the meeting for everyone.');
+      await endMeetingForEveryoneOnBackend('HOST_ENDED');
       leaveMeeting('You ended the meeting for everyone.');
     } catch (error) {
       setCallError(error instanceof Error ? error.message : 'Could not end the meeting for everyone.');
     }
   };
+
+  // Single, idempotent decision point for every "the call is over for a reason that ISN'T me
+  // personally leaving" path (the live-status poll, the MEETING_ENDED_FOR_EVERYONE signal, and
+  // the waiting-room LOBBY_ENDED event all funnel through this). Real reported bug this closes:
+  // a participant who was NOT the one whose own expiry timer fired (or who is still in the
+  // waiting room) kept seeing "Meeting Ended" instead of "Link Expired" for a real scheduled
+  // meeting, because those three receiving paths had no way to know WHY the meeting ended --
+  // they always assumed a deliberate host action. They now read the `reason` the backend/signal
+  // actually carries.
+  //
+  // "a late or duplicate event cannot overwrite the correct result page": leavingRef.current is
+  // the SAME guard leaveMeeting() itself already uses, reused here as a cross-path latch -- the
+  // FIRST of (local expiry timer, incoming signal, live-status poll, LOBBY_ENDED) to call this
+  // wins, and is set synchronously before any navigation, so a second, later, or duplicate call
+  // (even for a different reason) is a guaranteed no-op rather than a second navigate() racing
+  // the first.
+  //
+  // "treat backend scheduled-expiry truth as authoritative even if a generic signal arrives
+  // first": a reason-less event (a legacy client that predates this change, or a signal that
+  // genuinely carries none) is never assumed to be a deliberate host action outright -- it falls
+  // back to checking THIS client's own already-fetched meetingInfo.expiresAt, so a real scheduled
+  // meeting's expiry still wins the classification even from an unlabeled event.
+  const resolveMeetingEndReason = useCallback((signalReason?: string | null): 'LINK_EXPIRED' | 'HOST_ENDED' | 'DURATION_LIMIT' => {
+    if (signalReason === 'LINK_EXPIRED' || signalReason === 'HOST_ENDED' || signalReason === 'DURATION_LIMIT') {
+      return signalReason;
+    }
+    if (meetingInfo?.expiresAt && Date.now() >= new Date(meetingInfo.expiresAt).getTime()) {
+      return 'LINK_EXPIRED';
+    }
+
+    return 'HOST_ENDED';
+  }, [meetingInfo?.expiresAt]);
+
+  const handleMeetingTerminatedRemotely = useCallback((signalReason: string | null | undefined, hostEndedMessage: string) => {
+    if (leavingRef.current) return;
+    if (resolveMeetingEndReason(signalReason) === 'LINK_EXPIRED') {
+      leavingRef.current = true;
+      navigate('/meeting-link-expired', { replace: true });
+
+      return;
+    }
+    leaveMeeting(hostEndedMessage);
+  }, [resolveMeetingEndReason, navigate, leaveMeeting]);
 
   // Auto-end once the meeting's scheduled window (start + chosen duration) elapses. The
   // moderator's client broadcasts the real "ended for everyone" signal (same mechanism as
@@ -2560,7 +2663,41 @@ export function MeetingRoomPage() {
   useEffect(() => {
     if (!hasJoined || !effectiveExpiresAt) return;
     const msRemaining = new Date(effectiveExpiresAt).getTime() - Date.now();
+    // Real reported bug: join -> leave -> rejoin the SAME link -> after some time, auto-removed
+    // with "Meeting Ended" instead of "Link Expired". Root cause: meetingInfo.expiresAt is a
+    // genuine link-validity window the BACKEND itself enforces -- roomAdmission rejects any
+    // admission/lookup attempt made AFTER this same moment with a 410 "This meeting link has
+    // expired." Reaching that identical threshold while already inside an active call is the
+    // SAME underlying condition, so it must resolve to the SAME page; it was instead always
+    // routed through leaveMeeting() -> /meeting-ended, which is the right page for an explicit
+    // host action, not for the link's own validity window running out from under you.
+    //
+    // A free INSTANT meeting's cap (effectiveExpiresAt falling back to freeInstantExpiresAtRef,
+    // see above) is NOT a link-validity window -- an instant meeting's link never expires on its
+    // own; this is purely an app-level safety cap on how long one session may run. "Meeting
+    // Ended" stays the honest, correct label for THAT case, so only a genuinely scheduled
+    // meeting's real expiresAt gets routed to the link-expired page.
+    const isRealScheduledExpiry = Boolean(meetingInfo?.expiresAt);
     const fire = () => {
+      if (isRealScheduledExpiry) {
+        // Same cross-path latch handleMeetingTerminatedRemotely uses -- guarantees this timer
+        // firing at nearly the same moment as the MEETING_ENDED_FOR_EVERYONE signal or the
+        // live-status poll (all computing essentially the same wall-clock threshold) can only
+        // ever navigate once, from whichever of them actually runs first.
+        if (leavingRef.current) return;
+        leavingRef.current = true;
+        if (isModerator) {
+          // Still end it for everyone server-side, tagged with the real reason -- other
+          // participants' signal/poll handlers now see LINK_EXPIRED too, instead of defaulting
+          // to "the host ended it". Fire-and-forget (not awaited into this navigation): this
+          // client's own outcome page must not wait on, or be overwritten by, that request's own
+          // leaveMeeting side effect (see endMeetingForEveryoneOnBackend's own comment).
+          void endMeetingForEveryoneOnBackend('LINK_EXPIRED').catch(() => { });
+        }
+        navigate('/meeting-link-expired', { replace: true });
+
+        return;
+      }
       if (isModerator) {
         void handleEndMeetingForEveryone();
       } else {
@@ -2971,13 +3108,19 @@ export function MeetingRoomPage() {
         const res = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/live-status`);
         if (!res.ok) return;
         const data = await res.json();
-        if (data.ended || data.cancelled) {
+        if (data.cancelled) {
           leaveMeeting('The host has ended the meeting for everyone.');
+        } else if (data.ended) {
+          // data.reason comes from the backend (see getLiveStatus) -- this is the authoritative
+          // fallback for a participant whose own client-side timer never fired this round (a
+          // moderator-triggered end, or a slow/dropped signal), so it must resolve exactly the
+          // same way handleMeetingTerminatedRemotely does everywhere else.
+          handleMeetingTerminatedRemotely(data.reason, 'The host has ended the meeting for everyone.');
         }
       } catch { }
     }, 10000);
     return () => clearInterval(interval);
-  }, [hasJoined, roomId, leaveMeeting]);
+  }, [hasJoined, roomId, leaveMeeting, handleMeetingTerminatedRemotely]);
 
   const formattedRoomTitle = roomId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const networkStatusLabel = getNetworkStatusLabel(jitsiMeeting.lowDataMode, jitsiMeeting.networkState);
@@ -3530,7 +3673,10 @@ export function MeetingRoomPage() {
       if (msgId) addProcessedSignalId(msgId);
 
       if (type === 'MEETING_ENDED_FOR_EVERYONE') {
-        leaveMeeting('The host has ended the meeting for everyone.');
+        // payload.reason is this app's own addition (see endMeetingForEveryoneOnBackend) --
+        // absent entirely from an older client that predates it, which
+        // handleMeetingTerminatedRemotely's own fallback already handles safely.
+        handleMeetingTerminatedRemotely(payload?.reason, 'The host has ended the meeting for everyone.');
         // SCREEN_SHARE_STARTED/STOPPED and the WEBRTC_* mesh signal types are no longer
         // handled here: screen sharing now goes through Jitsi's own toggleShareScreen
         // command and JVB media path (see handleToggleScreenShare below), so remote
