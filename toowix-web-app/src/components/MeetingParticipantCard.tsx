@@ -1,7 +1,7 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
-import { useCameraVideoOrientation } from '../lib/videoOrientation';
+import { useCameraVideoAspect } from '../lib/videoOrientation';
 
 export interface ParticipantCardTheme {
   avatarBg: string;
@@ -28,20 +28,31 @@ export interface MeetingParticipantCardProps {
   onDoubleClick?: () => void;
   onMute?: () => void;
   onVideoElement?: (node: HTMLVideoElement | null) => void;
+  // Reports this card's real, bucketed video aspect ratio (default 16:9, see
+  // DEFAULT_CAMERA_VIDEO_ASPECT) whenever it changes -- so a gallery that sizes cards per-
+  // participant (see ParticipantGallery.tsx / calculateMixedAspectLayout) can react. The card's
+  // OWN size is still fully controlled by `style` from the caller; this never resizes itself.
+  onAspectRatioChange?: (ratio: number) => void;
 }
 
 /** Shared visual card used by gallery, pin and presentation participant layouts. */
 export function MeetingParticipantCard({
   participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, theme, style,
   compact = false, mirrored = false, speaking = false, isPinned = false, onPin,
-  onDoubleClick, onMute, onVideoElement,
+  onDoubleClick, onMute, onVideoElement, onAspectRatioChange,
 }: MeetingParticipantCardProps) {
   const initial = (name.trim() || 'P').charAt(0).toUpperCase();
   const size = compact ? 44 : 72;
-  // Mobile camera orientation fix (Option A): a portrait (9:16) incoming stream must show fully
-  // inside this card's existing 16:9 dimensions, not get cropped by 'cover' into a vertical zoom.
-  // Orientation is read from the video's own actual decoded size, never assumed from device type.
-  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
+  // Mobile camera orientation fix: a portrait (9:16) incoming stream must show fully, not get
+  // cropped by 'cover' into a vertical zoom (objectFit), AND the gallery that places this card
+  // can reshape the card itself to match (ratio, reported upward via onAspectRatioChange). Both
+  // come from the video's own actual decoded size, never assumed from device type.
+  const { objectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+
+  useEffect(() => {
+    onAspectRatioChange?.(ratio);
+  }, [ ratio, onAspectRatioChange ]);
+
   const attachVideo = useCallback((node: HTMLVideoElement | null) => {
     onVideoElement?.(node);
     bindOrientation(node);
