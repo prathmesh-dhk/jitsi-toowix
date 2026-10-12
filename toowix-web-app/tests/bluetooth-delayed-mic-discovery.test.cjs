@@ -15,10 +15,15 @@ const path = require('node:path');
 //    session while the UI claimed it had switched. See auto-switch-new-device.test.cjs and
 //    bluetooth-paired-device-switch.test.cjs for the fix itself (attemptAudioInputSwitch/
 //    attemptAudioOutputSwitch, confirm-then-commit).
-// 2. HYPOTHESIS, not confirmed without real hardware: the mic may simply not be enumerated yet in
-//    the SAME devicechange burst the speaker appears in (macOS can finish the A2DP handoff before
-//    the HFP one). Mitigated here by a bounded (NOT open-ended) re-enumeration check -- this file
-//    verifies the mechanism exists and is actually bounded.
+// 2. CONFIRMED CODE DEFECT (fixed 2026-10-12, see MICROPHONE_AUDIT.md): the bounded re-check used
+//    to only fire when the SAME devicechange burst also brought new audio OUTPUT activity
+//    (`(pairedOut || newAudioOut) && !audioIdRef.current`). That misses the case where NEITHER
+//    channel of a brand-new device is visible yet in the triggering burst -- plausible for a
+//    first-ever Bluetooth pairing, whose handshake can take noticeably longer than a reconnect of
+//    an already-known device. Now the re-check fires whenever the mic is still unset after ANY
+//    settled burst, extended to three bounded steps (600ms/1500ms/3000ms) to give a slower
+//    first-time pairing more room, and guarded against overlapping chains via
+//    delayedMicRecheckInFlightRef. This file verifies the mechanism exists and is actually bounded.
 // 3. CONFIRMED, BY-DESIGN MECHANISM worth flagging (not changed here -- see the audit report):
 //    audioId/outputId persist in localStorage across sessions. If the person ever manually picked
 //    a specific microphone in ANY past session, auto-switch for input is disabled from page load
@@ -44,14 +49,24 @@ test('a privacy-safe diagnostic reports device counts and whether audioId/output
 test('a late-discovered Bluetooth mic gets a BOUNDED (not open-ended) follow-up re-check', () => {
   assert.match(
       source,
-      /const delayedReenumerationDelaysMs = \[ 600, 1500 \];/,
+      /const delayedReenumerationDelaysMs = \[ 600, 1500, 3000 \];/,
       'the follow-up re-check must be a fixed, finite list of delays, not an open-ended poll loop'
   );
   assert.match(
       source,
-      /if \(\(pairedOut \|\| newAudioOut\) && !audioIdRef\.current\) \{/,
-      'the follow-up re-check must only trigger after new audio OUTPUT activity with no microphone selected yet -- not unconditionally on every burst'
+      /if \(!audioIdRef\.current && !delayedMicRecheckInFlightRef\.current\) \{/,
+      'the follow-up re-check must trigger whenever the mic is still unset after a settled burst (not only when new OUTPUT activity happened to be in the SAME burst), guarded against overlapping chains'
   );
+});
+
+test('the delayed re-check guard prevents overlapping chains from back-to-back devicechange bursts', () => {
+  const triggerIdx = source.indexOf('delayedMicRecheckInFlightRef.current = true;');
+
+  assert.notEqual(triggerIdx, -1, 'must set the in-flight guard before starting the async re-check chain');
+  const block = source.slice(triggerIdx, triggerIdx + 2200);
+
+  assert.match(block, /delayedMicRecheckInFlightRef\.current = false;/, 'must clear the in-flight guard once the chain ends (success, exhaustion, or audioId being set elsewhere)');
+  assert.match(block, /\}\s*finally\s*\{\s*delayedMicRecheckInFlightRef\.current = false;/, 'the guard must be cleared in a finally block, so it clears even if a step throws');
 });
 
 test('the follow-up re-check stops as soon as audioId is set by ANY means, and reuses the same confirm-before-commit switch path', () => {

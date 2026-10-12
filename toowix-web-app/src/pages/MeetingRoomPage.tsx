@@ -220,7 +220,7 @@ export function MeetingRoomPage() {
   });
   const autoRejoinStartedRef = useRef(false);
   // Free/unauthenticated instant meeting from the public landing page's "New Meeting" button --
-  // capped at 30 minutes, like a free-tier call limit. Captured once at mount (not re-read from
+  // capped at 2 hours, like a free-tier call limit. Captured once at mount (not re-read from
   // location.state on every render) so it can't be lost on an in-page navigation.
   const [isFreeInstantMeeting] = useState<boolean>(Boolean((location.state as any)?.freeInstantMeeting));
   const freeInstantExpiresAtRef = useRef<number | null>(null);
@@ -3783,6 +3783,11 @@ export function MeetingRoomPage() {
   // audit's measurements are in.
   const burstStartedAtRef = useRef<number | null>(null);
   const deviceSwitchDiagnosticsEnabled = import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true';
+  // Guards for the two mic-recovery helpers below -- prevent two overlapping chains from being
+  // spawned by back-to-back devicechange bursts (e.g. a first-time Bluetooth pairing handshake
+  // firing several settled bursts in quick succession before the mic is actually found).
+  const delayedMicRecheckInFlightRef = useRef(false);
+  const defaultDriftCheckInFlightRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -3931,40 +3936,91 @@ export function MeetingRoomPage() {
             }
           }
 
-          // Bounded follow-up: if this burst brought new audio OUTPUT activity (paired or
-          // independent) but the microphone still isn't selected, the AirPods mic may simply not
-          // have been enumerated yet in this exact burst -- macOS can finish the speaker (A2DP)
-          // handoff before the microphone (HFP) one. This re-enumerates up to twice more, at 600ms
-          // and 1500ms, specifically looking for a mic that wasn't there a moment ago. NOT an
-          // open-ended poll: it stops after 2 extra checks, or the instant audioId is set by any
-          // means (this chain, another devicechange burst, or the person picking one manually).
-          if ((pairedOut || newAudioOut) && !audioIdRef.current) {
+          // Confirmed gap (by code inspection, not yet observed on real hardware): the switches
+          // above only fire when enumerateDevices() reports a deviceId that WASN'T in
+          // previousIds -- a genuinely new device. They miss the case where the OS's *default*
+          // audio input silently moves to a device whose deviceId the browser already knew about
+          // (e.g. AirPods granted permission in an earlier session or an earlier, unrelated
+          // burst) -- no new ID ever appears, so newAudioIn is never found, and the mic never
+          // switches even though "Default System Microphone" no longer means what it used to.
+          // Cheap, bounded check: ask the browser what deviceId 'default' currently resolves to
+          // (an unattached, immediately-stopped probe stream -- never surfaced anywhere), and
+          // compare it against the REAL active track's deviceId (getActiveAudioInputDeviceId,
+          // not just whatever the UI happens to show as selected). Only replaces the track on a
+          // CONFIRMED mismatch, through the same confirm-before-commit attemptAudioInputSwitch
+          // path everything else above uses -- never an unconditional restart.
+          if (!newAudioIn && !pairedIn && !audioIdRef.current && hasJoined && !defaultDriftCheckInFlightRef.current) {
+            defaultDriftCheckInFlightRef.current = true;
             void (async () => {
-              const delayedReenumerationDelaysMs = [ 600, 1500 ];
+              try {
+                const activeId = jitsiMeeting.getActiveAudioInputDeviceId?.();
 
-              for (const delayMs of delayedReenumerationDelaysMs) {
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-                if (cancelled || audioIdRef.current) return;
-                try {
-                  const freshDevices = await navigator.mediaDevices?.enumerateDevices();
+                if (!activeId) return;
+                const probeStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: 'default' } });
+                const probeDeviceId = probeStream.getAudioTracks()[0]?.getSettings?.()?.deviceId;
 
-                  if (cancelled || !freshDevices || audioIdRef.current) return;
-                  const freshAudioInputs = freshDevices.filter((d) => d.kind === 'audioinput' && d.deviceId);
-                  const stillKnown = knownDeviceIdsRef.current || new Set<string>();
-                  const candidate = freshAudioInputs.find((d) => !stillKnown.has(d.deviceId));
-
-                  if (!candidate) {
-                    if (deviceSwitchDiagnosticsEnabled) {
-                      console.info('[Toowix device-switch] delayed mic re-check: still no new input device', { delayMs });
-                    }
-                    continue;
-                  }
-                  knownDeviceIdsRef.current = new Set([ ...stillKnown, ...freshAudioInputs.map((d) => d.deviceId) ]);
-                  if (await attemptAudioInputSwitch(candidate, `delayed-reenumeration-${delayMs}ms`)) return;
-                } catch {
-                  // enumerateDevices unsupported here -- nothing further to retry.
-                  return;
+                probeStream.getTracks().forEach((t) => t.stop());
+                if (cancelled || audioIdRef.current || !probeDeviceId || probeDeviceId === activeId) return;
+                if (deviceSwitchDiagnosticsEnabled) {
+                  console.info('[Toowix device-switch] default input drifted without a new deviceId, replacing track');
                 }
+                await attemptAudioInputSwitch({ deviceId: probeDeviceId } as MediaDeviceInfo, 'default-drift-probe');
+              } catch {
+                // A best-effort probe -- getUserMedia can legitimately fail here (permission
+                // edge cases, device busy); never worth surfacing an error for this.
+              } finally {
+                defaultDriftCheckInFlightRef.current = false;
+              }
+            })();
+          }
+
+          // Bounded follow-up: the microphone may simply not have been enumerated yet in this
+          // exact burst -- macOS can finish the speaker (A2DP) handoff before the microphone
+          // (HFP) one, and a first-ever Bluetooth pairing's handshake can take noticeably longer
+          // than a reconnect of an already-known device. Previously gated on "this burst also
+          // brought new audio OUTPUT activity", which missed the case where NEITHER channel of a
+          // brand-new device is visible yet in the triggering burst -- confirmed gap, not just a
+          // hardware timing guess: if nothing here is "new" at all, the old gate never scheduled
+          // this check, and nothing else would retry unless a second, independent devicechange
+          // event happened to fire later on its own. Now runs whenever the mic is still unset
+          // after ANY settled burst. Re-enumerates up to three more times, at 600ms, 1500ms, and
+          // 3000ms (the third step specifically for a slower first-time pairing handshake). NOT
+          // an open-ended poll: it stops after 3 extra checks, or the instant audioId is set by
+          // any means (this chain, another devicechange burst, the drift probe above, or the
+          // person picking one manually). Guarded against overlapping chains from back-to-back
+          // bursts via delayedMicRecheckInFlightRef.
+          if (!audioIdRef.current && !delayedMicRecheckInFlightRef.current) {
+            delayedMicRecheckInFlightRef.current = true;
+            void (async () => {
+              try {
+                const delayedReenumerationDelaysMs = [ 600, 1500, 3000 ];
+
+                for (const delayMs of delayedReenumerationDelaysMs) {
+                  await new Promise((resolve) => setTimeout(resolve, delayMs));
+                  if (cancelled || audioIdRef.current) return;
+                  try {
+                    const freshDevices = await navigator.mediaDevices?.enumerateDevices();
+
+                    if (cancelled || !freshDevices || audioIdRef.current) return;
+                    const freshAudioInputs = freshDevices.filter((d) => d.kind === 'audioinput' && d.deviceId);
+                    const stillKnown = knownDeviceIdsRef.current || new Set<string>();
+                    const candidate = freshAudioInputs.find((d) => !stillKnown.has(d.deviceId));
+
+                    if (!candidate) {
+                      if (deviceSwitchDiagnosticsEnabled) {
+                        console.info('[Toowix device-switch] delayed mic re-check: still no new input device', { delayMs });
+                      }
+                      continue;
+                    }
+                    knownDeviceIdsRef.current = new Set([ ...stillKnown, ...freshAudioInputs.map((d) => d.deviceId) ]);
+                    if (await attemptAudioInputSwitch(candidate, `delayed-reenumeration-${delayMs}ms`)) return;
+                  } catch {
+                    // enumerateDevices unsupported here -- nothing further to retry.
+                    return;
+                  }
+                }
+              } finally {
+                delayedMicRecheckInFlightRef.current = false;
               }
             })();
           }
