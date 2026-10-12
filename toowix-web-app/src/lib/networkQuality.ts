@@ -221,6 +221,40 @@ export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
   };
 }
 
+// getUserMedia's `advanced` aspectRatio constraint above is a strong hint, not a guarantee --
+// some camera/driver/browser/OS combinations silently ignore it and deliver the opposite
+// orientation anyway. This reads back what the browser ACTUALLY delivered
+// (MediaStreamTrack.getSettings(), the real post-negotiation capture mode) and reports a
+// mismatch as a one-time console warning -- a real, visible signal for diagnosing a specific
+// device/browser's limitation. Deliberately NEVER retries or re-acquires the camera: a camera
+// that genuinely cannot do portrait would just fail the exact same way again, and the existing
+// stream (whatever shape it came in) is always preserved and used as-is -- this is reporting
+// only, never a race or a stop/reacquire loop.
+export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | undefined): void {
+  if (!track || typeof track.getSettings !== 'function') return;
+  // Only phones have a strict orientation EXPECTATION worth verifying -- desktop/tablet already
+  // correctly prefer landscape, and a landscape result there is success, not a mismatch.
+  if (getCameraDeviceCategory() !== 'phone') return;
+
+  let settings: MediaTrackSettings;
+
+  try {
+    settings = track.getSettings();
+  } catch {
+    return;
+  }
+  const width = Number(settings.width) || 0;
+  const height = Number(settings.height) || 0;
+
+  if (width > 0 && height > 0 && width > height) {
+    console.warn(
+        '[Camera] This phone/browser delivered a LANDSCAPE camera stream ' +
+      `(${width}x${height}) despite requesting portrait capture -- the camera driver or browser ` +
+      'does not honor the portrait aspect-ratio preference on this device. Using the stream as-is.'
+    );
+  }
+}
+
 // Highest video height this client asks the bridge for, by call size. A one-to-one call can use
 // the whole (large) tile so it may go up to 4K when the sender's camera and the network allow it;
 // as the grid fills the tiles shrink so the request drops. Phones never ask for more than 720p

@@ -32,7 +32,8 @@ import {
   type LowDataMode,
   NETWORK_RECOVERY_STABLE_MS,
   NETWORK_STATS_INTERVAL_MS,
-  type NetworkState
+  type NetworkState,
+  verifyCameraCaptureOrientation
 } from './networkQuality';
 
 export interface ISharedVideoState {
@@ -423,6 +424,11 @@ async function acquireLocalTracks(
       result.videoError = err;
     }
   }
+
+  // Covers every path above -- adopted from the lobby's already-open stream, or freshly
+  // acquired -- with one check, right before this result is handed back to the caller. See
+  // verifyCameraCaptureOrientation's own comment: reporting only, never a retry/reacquire.
+  verifyCameraCaptureOrientation(result.videoTrack?.getTrack?.());
 
   return result;
 }
@@ -1554,6 +1560,7 @@ export function useJitsiMeeting({
       if (!newTrack) {
         return;
       }
+      verifyCameraCaptureOrientation(newTrack.getTrack?.());
       localVideoTrackRef.current = newTrack;
       setHasVideoTrack(true);
       setLocalCameraStream(trackToStream(newTrack));
@@ -1855,6 +1862,7 @@ export function useJitsiMeeting({
       if (!newTrack) {
         return { success: false };
       }
+      if (!isAudio) verifyCameraCaptureOrientation(newTrack.getTrack?.());
 
       const enqueuedAt = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
       const runTimed = (op: () => Promise<any>, label: string) => runSerializedRoomOperation(() => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPreferredCameraCaptureConstraints } from './networkQuality';
+import { getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
   if (!(error instanceof Error)) {
@@ -285,6 +285,7 @@ export function useMediaPreview(
 
         const newTrack = media.getVideoTracks()[0];
         if (!newTrack) throw new Error('No video track returned');
+        verifyCameraCaptureOrientation(newTrack);
 
         // Stop previous video track
         if (videoTrackRef.current) {

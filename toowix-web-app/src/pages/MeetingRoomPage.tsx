@@ -96,6 +96,7 @@ import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal
 import { PollsModal, type IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
 import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/participantColorTheme';
+import { useCameraVideoOrientation } from '../lib/videoOrientation';
 import { DocumentPipContent } from '../components/meeting/PictureInPicture';
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
@@ -108,6 +109,31 @@ const SPEAKER_RAIL_PROMOTION_REMOTE_INDEX = SPEAKER_RAIL_VISIBLE_COUNT - 2;
 const SPEAKER_RAIL_PROMOTION_DELAY_MS = 1600;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
+// Real reported bug: reopening the SAME link right after the host clicked "End Meeting for
+// Everyone" could still admit the person into a real Jitsi call, only to be ejected a few
+// seconds later by the live-status poll -- see admitToRoom's own fix (lobby.service.ts) for the
+// backend half of this. The other half is here: isUnavailableMeetingResponse's own message-
+// sniffing (below) already matched the backend's "Meeting has already ended" 403 against
+// /ended/i -- but routed EVERY such match to /meeting-link-expired, which is wrong for a real
+// host decision (must be /meeting-ended, exactly like the in-call HOST_ENDED/LINK_EXPIRED split
+// resolveMeetingEndReason already enforces elsewhere in this file). The backend now returns an
+// explicit, closed-enum `reason` (or `meeting.endReason` for the GET metadata shape) precisely so
+// this never has to guess from the message string again. Returns null when no explicit reason is
+// present, so the caller falls back to the existing isUnavailableMeetingResponse-driven
+// /meeting-link-expired path for every other unavailable case (cancelled, not found, etc.).
+function resolvePrejoinEndedDestination(data: any): '/meeting-ended' | '/meeting-link-expired' | null {
+  // Three real shapes reach this: the POST admission/knock error body (`{ error, reason }`), the
+  // unwrapped `meeting` object from a GET metadata lookup (`{ ended, endReason, ... }`), and
+  // (defensively) the full outer GET response wrapper (`{ meeting: { endReason } }`) in case a
+  // future caller passes that instead of already unwrapping it.
+  const reason = data?.reason ?? data?.endReason ?? data?.meeting?.endReason;
+
+  if (reason === 'LINK_EXPIRED') return '/meeting-link-expired';
+  if (reason === 'HOST_ENDED' || reason === 'DURATION_LIMIT') return '/meeting-ended';
+
+  return null;
+}
 
 // These responses mean that the URL cannot be used to enter a meeting. Keep access-policy
 // failures (for example, a valid private meeting that requires sign-in) in the lobby so the
@@ -2113,8 +2139,15 @@ export function MeetingRoomPage() {
       signal: probeController.signal,
     }).then(async response => {
       const data = await response.json();
-      if (active && !isFromConversation && (isUnavailableMeetingResponse(response.status, data.error)
-        || data.meeting?.expired || data.meeting?.cancelled)) {
+
+      if (!active || isFromConversation) return;
+      const endedDestination = resolvePrejoinEndedDestination(data.meeting);
+
+      if (endedDestination) {
+        navigate(endedDestination, endedDestination === '/meeting-ended'
+          ? { replace: true, state: { roomId, reason: 'This meeting has ended.' } }
+          : { replace: true });
+      } else if (isUnavailableMeetingResponse(response.status, data.error) || data.meeting?.expired || data.meeting?.cancelled) {
         navigate('/meeting-link-expired', { replace: true });
       }
     }).catch(() => { /* Authenticated lookup below reports network errors. */ });
@@ -2134,8 +2167,16 @@ export function MeetingRoomPage() {
         if (active) {
           setMeetingInfo(data.meeting);
           meetingInfoRef.current = data.meeting;
-          if (!isFromConversation && (data.meeting?.cancelled || data.meeting?.expired)) {
-            navigate('/meeting-link-expired', { replace: true });
+          if (!isFromConversation) {
+            const endedDestination = resolvePrejoinEndedDestination(data.meeting);
+
+            if (endedDestination) {
+              navigate(endedDestination, endedDestination === '/meeting-ended'
+                ? { replace: true, state: { roomId, reason: 'This meeting has ended.' } }
+                : { replace: true });
+            } else if (data.meeting?.cancelled || data.meeting?.expired) {
+              navigate('/meeting-link-expired', { replace: true });
+            }
           }
         }
       } catch (error) {
@@ -2275,9 +2316,21 @@ export function MeetingRoomPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        if (!isFromConversation && isUnavailableMeetingResponse(response.status, data.error)) {
-          navigate('/meeting-link-expired', { replace: true });
-          return;
+        if (!isFromConversation) {
+          const endedDestination = resolvePrejoinEndedDestination(data);
+
+          if (endedDestination) {
+            navigate(endedDestination, endedDestination === '/meeting-ended'
+              ? { replace: true, state: { roomId, reason: 'This meeting has ended.' } }
+              : { replace: true });
+
+            return;
+          }
+          if (isUnavailableMeetingResponse(response.status, data.error)) {
+            navigate('/meeting-link-expired', { replace: true });
+
+            return;
+          }
         }
         // The host may have locked the meeting after this page loaded: pick up the new rules so the
         // password box appears and the next attempt goes through the waiting room.
@@ -3200,6 +3253,17 @@ export function MeetingRoomPage() {
       node.play().catch(() => { });
     }
   }, [inCallVideo, inCallStream]);
+
+  // Mobile camera orientation fix (Option A): every raw <video> element below that renders the
+  // LOCAL camera outside of MeetingParticipantCard (solo stage, pinned-local, filmstrip local
+  // tile -- all share this same stable setInCallVideoNode ref, so one orientation instance
+  // covers all of them), the single pinned-REMOTE main-stage video, and the small joining/
+  // prejoin self-preview widget, each get their own orientation tracker. Composed into each
+  // existing ref callback below (`ref={(el) => { existingRef(el); xBind(el); }}`) -- this never
+  // replaces srcObject/play() logic, only adds orientation tracking alongside it.
+  const localVideoOrientation = useCameraVideoOrientation();
+  const pinnedRemoteVideoOrientation = useCameraVideoOrientation();
+  const previewVideoOrientation = useCameraVideoOrientation();
 
   // Safari can pause the self-view independently of the outgoing canvas stream.
   useEffect(() => {
@@ -5153,14 +5217,14 @@ export function MeetingRoomPage() {
               {/* Camera-ON State */}
               {inCallVideo ? (
                 <video
-                  ref={setInCallVideoNode}
+                  ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
                   autoPlay
                   playsInline
                   muted
                   style={{
                     width: '100%',
                     height: '100%',
-                    objectFit: 'cover',
+                    objectFit: localVideoOrientation.objectFit,
                     borderRadius: '24px',
                     transform: 'scaleX(-1)',
                   }}
@@ -5367,8 +5431,8 @@ export function MeetingRoomPage() {
                             autoPlay
                             muted
                             playsInline
-                            ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
+                            style={{ width: '100%', height: '100%', objectFit: localVideoOrientation.objectFit, transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -5404,8 +5468,9 @@ export function MeetingRoomPage() {
                               el.srcObject = (pinned as any).stream;
                               el.play().catch(() => { });
                             }
+                            pinnedRemoteVideoOrientation.bind(el);
                           }}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          style={{ width: '100%', height: '100%', objectFit: pinnedRemoteVideoOrientation.objectFit }}
                         />
                       ) : (
                         <div
@@ -5512,8 +5577,8 @@ export function MeetingRoomPage() {
                             autoPlay
                             muted
                             playsInline
-                            ref={setInCallVideoNode}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+                            ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
+                            style={{ width: '100%', height: '100%', objectFit: localVideoOrientation.objectFit, transform: 'scaleX(-1)' }}
                           />
                         ) : (
                           <div
@@ -7797,14 +7862,14 @@ export function MeetingRoomPage() {
           >
             {videoEnabled && !cameraPermissionError ? (
               <video
-                ref={videoPreviewRef}
+                ref={(el) => { videoPreviewRef.current = el; previewVideoOrientation.bind(el); }}
                 autoPlay
                 playsInline
                 muted
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'cover',
+                  objectFit: previewVideoOrientation.objectFit,
                   transform: 'scaleX(-1)',
                 }}
               />
@@ -8153,14 +8218,14 @@ export function MeetingRoomPage() {
           >
             {videoEnabled && !cameraPermissionError ? (
               <video
-                ref={videoPreviewRef}
+                ref={(el) => { videoPreviewRef.current = el; previewVideoOrientation.bind(el); }}
                 autoPlay
                 playsInline
                 muted
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: 'cover',
+                  objectFit: previewVideoOrientation.objectFit,
                   transform: 'scaleX(-1)',
                 }}
               />

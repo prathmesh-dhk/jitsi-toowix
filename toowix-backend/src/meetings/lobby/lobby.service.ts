@@ -75,7 +75,29 @@ function generateCredentials(room: string, identity: { email: string; id: string
   return { attendanceToken, jitsiToken, participantEntryId };
 }
 
-const endedMeetingSlugs = new Set<string>();
+export type IMeetingEndReason = 'LINK_EXPIRED' | 'HOST_ENDED' | 'DURATION_LIMIT';
+
+// Shared by getLiveStatus and admitToRoom -- both need "why did this ended meeting end" and must
+// agree on the answer. meeting.endReason exists for any document written after this field was
+// added; a document from before that (endedAt set, endReason missing) is inferred from timing
+// instead of guessed outright: this backend only ever sets endedAt at or after a meeting's own
+// scheduled end (the auto-expiry path) or on an explicit host click (which could happen at any
+// time, including before the scheduled end) -- so "ended at/after its own scheduled end" is read
+// as the scheduled window having run out, and anything else as a genuine host decision. This is
+// the best backward-compatible guess available without a data migration; it cannot be exact for
+// every historical row, but it is never wrong in the common case either path produces.
+function inferEndReason(meeting: any): IMeetingEndReason {
+  return meeting.endReason
+    ?? (meeting.scheduledAt && meeting.durationMinutes
+      && meeting.endedAt.getTime() >= new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000
+      ? 'LINK_EXPIRED'
+      : 'HOST_ENDED');
+}
+
+// Maps roomSlug -> why it ended, not just whether it did -- so every participant polling
+// live-status (not just whichever client's own timer happened to notice first) can be routed to
+// the correct outcome page. Was a plain Set<string> before this distinction existed.
+const endedMeetingSlugs = new Map<string, IMeetingEndReason>();
 
 // Pilot cache (see src/lib/simpleCache.ts): GET live-status is polled every 10s by every
 // participant in a room for the whole call. Keyed by roomSlug so all of a room's participants
@@ -83,7 +105,7 @@ const endedMeetingSlugs = new Set<string>();
 // every write site that already touches endedMeetingSlugs above (same reasoning -- this cache
 // additionally covers hostJoined/cancelledAt, which that Set does not), plus cancelMeetingHandler
 // in meetings.ts.
-const liveStatusCache = new SimpleCache<{ cancelled: boolean; ended: boolean; hostJoined: boolean; live: boolean }>(5000);
+const liveStatusCache = new SimpleCache<{ cancelled: boolean; ended: boolean; hostJoined: boolean; live: boolean; reason: IMeetingEndReason | null }>(5000);
 const liveStatusCacheEnabled = () => process.env.CACHE_LIVE_STATUS !== 'false';
 
 /**
@@ -105,7 +127,7 @@ export function invalidateLiveStatusCache(roomSlug: string): void {
 export async function reactivateMeetingForConversation(roomSlug: string): Promise<void> {
   endedMeetingSlugs.delete(roomSlug);
   invalidateLiveStatusCache(roomSlug);
-  await Meeting.updateOne({ roomSlug }, { $set: { endedAt: null } });
+  await Meeting.updateOne({ roomSlug }, { $set: { endedAt: null, endReason: null } });
 }
 
 // ---- Knock / waiting-room entry request ----
@@ -396,8 +418,17 @@ export async function broadcastAnnouncement(room: string, firebaseUid: string | 
 
 // ---- End meeting / live status ----
 
-/** Moderator ends the meeting for everyone in the call. */
-export async function endForEveryone(room: string, firebaseUid: string | undefined): Promise<IServiceResult> {
+/**
+ * Moderator ends the meeting for everyone in the call.
+ * `reason` defaults to 'HOST_ENDED' (an explicit human decision) for backward compatibility with
+ * any existing caller that doesn't pass one -- only the auto-expiry path in MeetingRoomPage.tsx
+ * passes 'LINK_EXPIRED' explicitly, since authorization (isHostUser, right below) is identical
+ * either way: this parameter only changes which outcome page participants land on, never who is
+ * allowed to call this.
+ */
+export async function endForEveryone(
+  room: string, firebaseUid: string | undefined, reason: IMeetingEndReason = 'HOST_ENDED'
+): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
   if (!meeting) {
     return { body: { error: 'Meeting not found' }, httpStatus: 404 };
@@ -405,15 +436,18 @@ export async function endForEveryone(room: string, firebaseUid: string | undefin
   if (!(await isHostUser(firebaseUid, meeting))) {
     return { body: { error: 'Only the meeting host can end the meeting for everyone' }, httpStatus: 403 };
   }
-  endedMeetingSlugs.add(room);
+  endedMeetingSlugs.set(room, reason);
   invalidateLiveStatusCache(room);
 
   meeting.endedAt = new Date();
+  meeting.endReason = reason;
   meeting.waitingQueue = [];
   meeting.hostJoined = false;
   publishLobbyEvent(room, {
     type: 'LOBBY_ENDED',
-    payload: { message: 'This meeting was ended by the host' }
+    // reason is a closed, non-sensitive enum (see IMeetingEndReason) -- never anything from the
+    // meeting document itself, so this broadcast can't leak participant/meeting details.
+    payload: { message: 'This meeting was ended by the host', reason }
   });
 
   // Per the retention policy, an instant meeting (no scheduledAt, not part of a recurring
@@ -439,7 +473,7 @@ export async function endForEveryone(room: string, firebaseUid: string | undefin
     await meeting.save({ validateBeforeSave: false });
   }
 
-  return { body: { success: true, message: 'Meeting ended for everyone', endedAt: meeting.endedAt }, httpStatus: 200 };
+  return { body: { success: true, message: 'Meeting ended for everyone', endedAt: meeting.endedAt, reason }, httpStatus: 200 };
 }
 
 /** Checks whether the meeting has ended or is still live (GET .../live-status). */
@@ -453,22 +487,27 @@ export async function getLiveStatus(room: string): Promise<IServiceResult> {
     }
   }
 
-  if (endedMeetingSlugs.has(room)) {
-    const result = { live: false, ended: true, cancelled: false, hostJoined: false };
+  const cachedReason = endedMeetingSlugs.get(room);
+
+  if (cachedReason) {
+    const result = { live: false, ended: true, cancelled: false, hostJoined: false, reason: cachedReason };
     if (cacheOn) liveStatusCache.set(room, result);
     return { body: result, httpStatus: 200 };
   }
 
   const meeting = await Meeting.findOne({ roomSlug: room });
+  let reason: IMeetingEndReason | null = null;
 
   if (meeting?.endedAt) {
-    endedMeetingSlugs.add(room);
+    reason = inferEndReason(meeting);
+    endedMeetingSlugs.set(room, reason);
   }
   const result = {
     live: !!meeting && !meeting.endedAt && !meeting.cancelledAt,
     ended: !!meeting?.endedAt,
     cancelled: !!meeting?.cancelledAt,
     hostJoined: !!meeting?.hostJoined,
+    reason,
   };
 
   if (cacheOn) liveStatusCache.set(room, result);
@@ -555,6 +594,17 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       ? new Date(new Date(meeting.scheduledAt).getTime() + meeting.durationMinutes * 60000)
       : null;
     const expired = !params.fromConversation && !!expiresAt && Date.now() > expiresAt.getTime();
+    // Real reported bug: a meeting the host ended for everyone could still be rejoined -- the
+    // browser would get a fresh Jitsi token and actually join the call, only to be ejected a few
+    // seconds later once the client's own live-status poll (or a lobby/signal fallback) noticed
+    // endedAt was set. Root cause: this direct-admission path (unlike requestEntry, the waiting-
+    // room path, and admitParticipants -- see their own `meeting.endedAt` checks) never checked
+    // endedAt at all before minting a token. fromConversation is the one explicit, already-
+    // trusted exception (reactivateMeetingForConversation clears endedAt for that flow, further
+    // down in this same function) -- every other caller must be rejected authoritatively, before
+    // a token is ever issued, not discovered after the fact by polling.
+    const ended = !params.fromConversation && !!meeting?.endedAt;
+    const endReason = ended ? inferEndReason(meeting) : null;
     const creatorId = meeting ? String(meeting.createdBy) : '';
     const isCreator = !!user && creatorId === String(user._id);
     const activePassword = meeting?.lockedPassword || meeting?.passcode || null;
@@ -578,6 +628,11 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       type: meeting?.type || 'Guest', organizerId: meeting ? String(meeting.createdBy) : '',
       organizerName: '', description: meeting?.description || null,
       accessAllowed: true, cancelled: false, expired, expiresAt: expiresAt ? expiresAt.toISOString() : null,
+      // Metadata-level visibility (GET, before a Join click) for the same reason `expired`/
+      // `cancelled` are already exposed here -- lets the prejoin screen route to the correct
+      // outcome page immediately, the same way it already does for an expired scheduled link,
+      // instead of only discovering it after a POST admission attempt.
+      ended, endReason,
       passwordRequired, inviteRestricted: meeting?.type === 'Private', locked: isLocked,
       recordingEnabled, autoRecording: recordingEnabled && !!policy?.autoRecording,
       requireLobbyPolicy, allowScreenShare: policy?.allowScreenShare !== false,
@@ -590,6 +645,14 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
     };
     if (params.method === 'GET') {
       return { body: { meeting: info }, httpStatus: 200 };
+    }
+    // Authoritative rejection -- checked BEFORE a token is ever minted, not discovered afterward
+    // by the client's own live-status poll. endedAt takes priority over the clock-based `expired`
+    // check below: a meeting that was explicitly ended (for whatever persisted reason) stays
+    // ended even if its scheduled window also happens to have elapsed, and reports the REAL
+    // reason rather than guessing LINK_EXPIRED just because the clock also agrees.
+    if (ended) {
+      return { body: { error: 'Meeting has already ended', reason: endReason }, httpStatus: 403 };
     }
     if (expired) {
       return { body: { error: 'This meeting link has expired.' }, httpStatus: 410 };

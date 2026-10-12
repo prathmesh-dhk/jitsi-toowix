@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useLibJitsiConference } from '../lib/useLibJitsiConference';
+import { useCameraVideoOrientation } from '../lib/videoOrientation';
 
 // Direct lib-jitsi-meet meeting room -- no Jitsi IFrame. Real MediaStreamTracks attached
 // directly to our own <video> elements. New route (/meet-direct/:roomId), completely separate
@@ -13,16 +14,22 @@ const JITSI_DOMAIN = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 function RemoteTile({ participant }: { participant: { id: string; name: string; audioTrack: any; videoTrack: any; muted: boolean; videoMuted: boolean } }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Mobile camera orientation fix (Option A): this remote participant's own actual video
+  // dimensions decide 'contain' (full portrait image, no crop) vs 'cover' (unchanged landscape
+  // behavior) -- never assumed from their device/user-agent.
+  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
 
   useEffect(() => {
     if (videoRef.current && participant.videoTrack) {
       participant.videoTrack.attach(videoRef.current);
+      bindOrientation(videoRef.current);
     }
 
     return () => {
       if (videoRef.current && participant.videoTrack) {
         participant.videoTrack.detach(videoRef.current);
       }
+      bindOrientation(null);
     };
     // The <video> element only mounts once videoMuted is false (see JSX below), which often
     // happens on a LATER render than the one that first set videoTrack (Jitsi commonly fires
@@ -30,7 +37,7 @@ function RemoteTile({ participant }: { participant: { id: string; name: string; 
     // this effect would never re-run for that unmute render, leaving videoRef.current pointing
     // at a freshly-mounted element that attach() was never called on. videoMuted is added so
     // the effect re-fires exactly when the element actually appears.
-  }, [ participant.videoTrack, participant.videoMuted ]);
+  }, [ participant.videoTrack, participant.videoMuted, bindOrientation ]);
 
   useEffect(() => {
     if (audioRef.current && participant.audioTrack) {
@@ -61,7 +68,7 @@ function RemoteTile({ participant }: { participant: { id: string; name: string; 
           autoPlay
           playsInline
           ref={videoRef}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          style={{ width: '100%', height: '100%', objectFit }}
         />
       ) : (
         <div style={{
@@ -123,6 +130,8 @@ export function DirectMeetingRoomPage() {
   const [ jwt, setJwt ] = useState<string | undefined>();
   const [ hasJoined, setHasJoined ] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Mobile camera orientation fix (Option A) -- see RemoteTile's own comment above.
+  const localVideoOrientation = useCameraVideoOrientation();
 
   useEffect(() => {
     if (!hasJoined) {
@@ -250,8 +259,9 @@ export function DirectMeetingRoomPage() {
               ref={el => {
                 localVideoRef.current = el;
                 setLocalVideoElement(el);
+                localVideoOrientation.bind(el);
               }}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
+              style={{ width: '100%', height: '100%', objectFit: localVideoOrientation.objectFit, transform: 'scaleX(-1)' }}
             />
           ) : (
             <div style={{

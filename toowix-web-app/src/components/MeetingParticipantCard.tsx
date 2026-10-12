@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
+import { useCameraVideoOrientation } from '../lib/videoOrientation';
 
 export interface ParticipantCardTheme {
   avatarBg: string;
@@ -37,13 +38,18 @@ export function MeetingParticipantCard({
 }: MeetingParticipantCardProps) {
   const initial = (name.trim() || 'P').charAt(0).toUpperCase();
   const size = compact ? 44 : 72;
+  // Mobile camera orientation fix (Option A): a portrait (9:16) incoming stream must show fully
+  // inside this card's existing 16:9 dimensions, not get cropped by 'cover' into a vertical zoom.
+  // Orientation is read from the video's own actual decoded size, never assumed from device type.
+  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
   const attachVideo = useCallback((node: HTMLVideoElement | null) => {
     onVideoElement?.(node);
+    bindOrientation(node);
     if (node && stream && node.srcObject !== stream) {
       node.srcObject = stream;
       void node.play().catch(() => { /* browser may require a gesture */ });
     }
-  }, [onVideoElement, stream]);
+  }, [onVideoElement, stream, bindOrientation]);
 
   return (
     <div
@@ -67,7 +73,7 @@ export function MeetingParticipantCard({
           playsInline
           muted={participantId === 'local'}
           ref={attachVideo}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', transform: mirrored ? 'scaleX(-1)' : undefined }}
+          style={{ width: '100%', height: '100%', objectFit, transform: mirrored ? 'scaleX(-1)' : undefined }}
         />
       ) : (
         <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', backgroundColor: theme.tileBg }}>
