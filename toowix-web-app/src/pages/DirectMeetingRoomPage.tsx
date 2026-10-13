@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useLibJitsiConference } from '../lib/useLibJitsiConference';
-import { useCameraVideoAspect } from '../lib/videoOrientation';
+import { useCameraVideoOrientation } from '../lib/videoOrientation';
 
 // Direct lib-jitsi-meet meeting room -- no Jitsi IFrame. Real MediaStreamTracks attached
 // directly to our own <video> elements. New route (/meet-direct/:roomId), completely separate
@@ -14,13 +14,10 @@ const JITSI_DOMAIN = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 function RemoteTile({ participant }: { participant: { id: string; name: string; audioTrack: any; videoTrack: any; muted: boolean; videoMuted: boolean } }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Mobile camera orientation fix: this remote participant's own actual video dimensions decide
-  // both 'contain' vs 'cover' (objectFit, no crop for portrait) AND this tile's own CSS aspect-
-  // ratio (ratio) -- never assumed from their device/user-agent. /meet-direct's gallery is a plain
-  // CSS grid (not the custom absolute-positioned engine the main /meet route uses), so reshaping
-  // a tile is simply handing the browser's own grid layout a different `aspectRatio` -- the grid
-  // reflows row heights on its own, no separate packing algorithm needed here.
-  const { objectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+  // Mobile camera orientation fix (Option A): this remote participant's own actual video
+  // dimensions decide 'contain' (full portrait image, no crop) vs 'cover' (unchanged landscape
+  // behavior) -- never assumed from their device/user-agent.
+  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
 
   useEffect(() => {
     if (videoRef.current && participant.videoTrack) {
@@ -60,7 +57,7 @@ function RemoteTile({ participant }: { participant: { id: string; name: string; 
       borderRadius: '24px',
       overflow: 'hidden',
       backgroundColor: '#3c3020',
-      aspectRatio: String(ratio),
+      aspectRatio: '16 / 9',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center'
@@ -134,7 +131,7 @@ export function DirectMeetingRoomPage() {
   const [ hasJoined, setHasJoined ] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   // Mobile camera orientation fix (Option A) -- see RemoteTile's own comment above.
-  const localVideoOrientation = useCameraVideoAspect();
+  const localVideoOrientation = useCameraVideoOrientation();
 
   useEffect(() => {
     if (!hasJoined) {
@@ -248,7 +245,7 @@ export function DirectMeetingRoomPage() {
           borderRadius: '24px',
           overflow: 'hidden',
           backgroundColor: '#2A1F3D',
-          aspectRatio: String(localVideoOrientation.ratio),
+          aspectRatio: '16 / 9',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center'
