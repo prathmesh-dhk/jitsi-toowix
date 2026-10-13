@@ -12,6 +12,8 @@ import {
   calculateCellPositions,
   MOBILE_GALLERY_TILES_PER_PAGE,
   useStableMeetingLayout,
+  useStableMixedAspectLayout,
+  type MixedAspectCardInput,
 } from '../../lib/meetingLayout';
 import { animateGalleryCell, readVisualFrame } from '../../lib/galleryMotion';
 import type { GalleryFrame } from '../../lib/galleryMotion';
@@ -217,7 +219,75 @@ export function ParticipantGallery({
   const galleryPositions = calculateCellPositions(
     galleryCellKeys.length, galleryLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
   );
-  const galleryStructureKey = `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`;
+
+  // Per-participant real video aspect ratio (bucketed, see videoOrientation.ts), reported upward
+  // by each MeetingParticipantCard via onAspectRatioChange -- null means "no live video right
+  // now" (camera off, no stream), reported IMMEDIATELY from authoritative videoEnabled/stream
+  // state, not guessed by this card itself. Screen shares always stay 16:9 (their own tile type,
+  // never reports here).
+  const [ cellRatios, setCellRatios ] = useState<Map<string, number | null>>(new Map());
+  const setCellRatio = useCallback((key: string, ratio: number | null) => {
+    setCellRatios((previous) => {
+      if (previous.get(key) === ratio) return previous;
+      const next = new Map(previous);
+
+      next.set(key, ratio);
+
+      return next;
+    });
+  }, []);
+  // Dropping a departed participant's remembered ratio isn't required for correctness (unused
+  // entries are simply never read), but keeps the map from growing across a long call's worth of
+  // joins/leaves.
+  useEffect(() => {
+    setCellRatios((previous) => {
+      const liveKeys = new Set(galleryAllCellKeys);
+      let changed = false;
+      const next = new Map(previous);
+
+      previous.forEach((_, key) => {
+        if (!liveKeys.has(key)) {
+          next.delete(key);
+          changed = true;
+        }
+      });
+
+      return changed ? next : previous;
+    });
+    // galleryAllCellKeys is a fresh array every render; comparing its CONTENT (join) is what
+    // actually matters here, not object identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ galleryAllCellKeys.join(',') ]);
+
+  // Camera-off fallback ratio depends on how many participants are actually in the gallery, per
+  // the adaptive-gallery spec: a small call (2-3) keeps the familiar 16:9 default; once the
+  // gallery is dense enough (4+) a more compact 4:3 shape fits noticeably more cards per row for
+  // every camera-off participant, without affecting anyone whose camera is actually on (an active
+  // portrait/landscape ratio always wins -- cellRatios.get(key) is only null/absent when there is
+  // no live video to measure).
+  const cameraOffDefaultRatio = galleryCellKeys.length <= 3 ? 16 / 9 : 4 / 3;
+  const mixedAspectCards: MixedAspectCardInput[] = galleryCellKeys.map((key) => ({
+    key,
+    ratio: key.startsWith('share:') ? 16 / 9 : (cellRatios.get(key) ?? cameraOffDefaultRatio),
+  }));
+  const mixedLayout = useStableMixedAspectLayout(
+    mixedAspectCards, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
+  );
+  const mixedCellFramesByKey = new Map(mixedLayout.cells.map((cell) => [ cell.key, cell ]));
+
+  // Forced mobile pagination keeps its own existing fixed-grid, crop-to-fill behavior untouched
+  // (see calculateForcedColumnLayout's own comment) -- mixed-ratio packing applies only to the
+  // normal, unpaginated gallery, which is also the only place multiple differently-shaped cards
+  // actually need to coexist edge to edge.
+  const cellFrames = galleryCellKeys.map((key, index) => (
+    mobileGalleryPaged
+      ? { key, ...galleryPositions[index], width: galleryLayout.cardWidth, height: galleryLayout.cardHeight }
+      : (mixedCellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight })
+  ));
+  const cellFramesByKey = new Map(cellFrames.map((frame) => [ frame.key, frame ]));
+  const galleryStructureKey = mobileGalleryPaged
+    ? `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
+    : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
 
   // Only an intentional structure change animates. Ordinary size updates and unrelated renders leave running
   // animations alone. Only animations this effect started are cancelled, never all of a card's animations.
@@ -242,12 +312,10 @@ export function ParticipantGallery({
 
     const frames = new Map<string, GalleryFrame>();
 
-    galleryCellKeys.forEach((key, index) => {
-      frames.set(key, {
-        ...galleryPositions[index],
-        width: galleryLayout.cardWidth,
-        height: galleryLayout.cardHeight,
-      });
+    galleryCellKeys.forEach((key) => {
+      const frame = cellFramesByKey.get(key);
+
+      if (frame) frames.set(key, { left: frame.left, top: frame.top, width: frame.width, height: frame.height });
     });
 
     const previousFrames = galleryFramesRef.current;
@@ -345,14 +413,19 @@ export function ParticipantGallery({
                   mirrored
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
+                  adaptiveAspect
+                  onAspectRatioChange={(ratio) => setCellRatio('local', ratio)}
                   isPinned={pinnedParticipantId === 'local'}
                   onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
                   onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
                 />
               ),
             },
-            ...remoteParticipants.map((remote, idx) => ({
-              key: `remote:${remote.id || idx}`,
+            ...remoteParticipants.map((remote, idx) => {
+              const remoteKey = `remote:${remote.id || idx}`;
+
+              return {
+              key: remoteKey,
               node: (
                 <MeetingParticipantCard
                   participantId={remote.id}
@@ -365,6 +438,8 @@ export function ParticipantGallery({
                   theme={getParticipantColorTheme(remote.name, idx + 1)}
                   speaking={isSpeakingNow(remote.id)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
+                  adaptiveAspect
+                  onAspectRatioChange={(ratio) => setCellRatio(remoteKey, ratio)}
                   isPinned={pinnedParticipantId === remote.id}
                   onPin={() => {
                     const isPinned = pinnedParticipantId === remote.id;
@@ -379,7 +454,8 @@ export function ParticipantGallery({
                   onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
                 />
               ),
-            })),
+              };
+            }),
           ];
 
           // Only mount this page's cells. Filtering before assigning positions is vital:
@@ -388,22 +464,28 @@ export function ParticipantGallery({
           // a re-render of the same page preserves its existing video element.
           const visibleCells = cells.filter((cell) => galleryCellKeys.includes(cell.key));
 
-          return visibleCells.map((cell, index) => (
-            <div
-              key={cell.key}
-              data-gallery-cell={cell.key}
-              style={{
-                position: 'absolute',
-                left: `${galleryPositions[index].left}px`,
-                top: `${galleryPositions[index].top}px`,
-                width: `${galleryLayout.cardWidth}px`,
-                height: `${galleryLayout.cardHeight}px`,
-                transformOrigin: 'top left',
-              }}
-            >
-              {cell.node}
-            </div>
-          ));
+          return visibleCells.map((cell) => {
+            const frame = cellFramesByKey.get(cell.key);
+
+            if (!frame) return null;
+
+            return (
+              <div
+                key={cell.key}
+                data-gallery-cell={cell.key}
+                style={{
+                  position: 'absolute',
+                  left: `${frame.left}px`,
+                  top: `${frame.top}px`,
+                  width: `${frame.width}px`,
+                  height: `${frame.height}px`,
+                  transformOrigin: 'top left',
+                }}
+              >
+                {cell.node}
+              </div>
+            );
+          });
         })()}
       </div>
     </div>

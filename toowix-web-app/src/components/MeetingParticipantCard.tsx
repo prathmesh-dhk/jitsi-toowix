@@ -1,7 +1,7 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
-import { useCameraVideoOrientation } from '../lib/videoOrientation';
+import { useCameraVideoAspect } from '../lib/videoOrientation';
 
 export interface ParticipantCardTheme {
   avatarBg: string;
@@ -28,20 +28,51 @@ export interface MeetingParticipantCardProps {
   onDoubleClick?: () => void;
   onMute?: () => void;
   onVideoElement?: (node: HTMLVideoElement | null) => void;
+  // Opt-in: only the plain Gallery View (grid/tile view) card is allowed to reshape itself and
+  // switch to 'contain' for a portrait source. Every other usage of this shared component --
+  // Toggle View's right-side rail, Screen Share's participant thumbnails, the "side people box" --
+  // must stay the existing fixed-shape, always-'cover' (centered crop) card regardless of the
+  // real source orientation, per the adaptive-gallery spec's explicit "square-looking rail, never
+  // 9:16" requirement. Defaults to false so every existing non-gallery call site is unaffected
+  // unless it deliberately opts in.
+  adaptiveAspect?: boolean;
+  // Reports this card's real, bucketed video aspect ratio whenever it changes, or null while no
+  // video is actually live (camera off, no stream, or metadata not loaded yet) -- the gallery
+  // (not this card) owns what ratio a camera-off participant should fall back to, since that
+  // depends on the TOTAL participant count (see ParticipantGallery.tsx), not anything this single
+  // card knows. Only ever called when adaptiveAspect is true. The card's OWN size is still fully
+  // controlled by `style` from the caller; this never resizes itself.
+  onAspectRatioChange?: (ratio: number | null) => void;
 }
 
 /** Shared visual card used by gallery, pin and presentation participant layouts. */
 export function MeetingParticipantCard({
   participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, theme, style,
   compact = false, mirrored = false, speaking = false, isPinned = false, onPin,
-  onDoubleClick, onMute, onVideoElement,
+  onDoubleClick, onMute, onVideoElement, adaptiveAspect = false, onAspectRatioChange,
 }: MeetingParticipantCardProps) {
   const initial = (name.trim() || 'P').charAt(0).toUpperCase();
   const size = compact ? 44 : 72;
-  // Mobile camera orientation fix (Option A): a portrait (9:16) incoming stream must show fully
-  // inside this card's existing 16:9 dimensions, not get cropped by 'cover' into a vertical zoom.
-  // Orientation is read from the video's own actual decoded size, never assumed from device type.
-  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
+  // Mobile camera orientation fix: a portrait (9:16) incoming stream must show fully, not get
+  // cropped by 'cover' into a vertical zoom (objectFit), AND -- ONLY when adaptiveAspect is true --
+  // the gallery that places this card can reshape the card itself to match (ratio, reported
+  // upward via onAspectRatioChange). Both come from the video's own actual decoded size, never
+  // assumed from device type. The hook itself is called unconditionally regardless of
+  // adaptiveAspect (React's own rule: hooks can't be called conditionally) -- only whether its
+  // result is USED differs below.
+  const { objectFit: adaptiveObjectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+  const hasLiveVideo = videoEnabled && !!stream;
+  const objectFit = adaptiveAspect ? adaptiveObjectFit : 'cover';
+
+  useEffect(() => {
+    if (!adaptiveAspect) return;
+    // Authoritative reset: report null (not a guessed 16:9) the INSTANT there is no live video,
+    // straight from videoEnabled/stream -- not from waiting on the <video> element's own unmount/
+    // ref-callback timing. The gallery is the one that knows what a camera-off participant should
+    // fall back to (see ParticipantGallery.tsx's own participant-count-aware default).
+    onAspectRatioChange?.(hasLiveVideo ? ratio : null);
+  }, [ adaptiveAspect, hasLiveVideo, ratio, onAspectRatioChange ]);
+
   const attachVideo = useCallback((node: HTMLVideoElement | null) => {
     onVideoElement?.(node);
     bindOrientation(node);
@@ -67,7 +98,7 @@ export function MeetingParticipantCard({
       }}
     >
       <SpeakingOverlay id={participantId} compact={compact} />
-      {videoEnabled && stream ? (
+      {hasLiveVideo ? (
         <video
           autoPlay
           playsInline

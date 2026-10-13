@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useLibJitsiConference } from '../lib/useLibJitsiConference';
-import { useCameraVideoOrientation } from '../lib/videoOrientation';
+import { useCameraVideoAspect } from '../lib/videoOrientation';
 
 // Direct lib-jitsi-meet meeting room -- no Jitsi IFrame. Real MediaStreamTracks attached
 // directly to our own <video> elements. New route (/meet-direct/:roomId), completely separate
@@ -11,13 +11,23 @@ import { useCameraVideoOrientation } from '../lib/videoOrientation';
 const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const JITSI_DOMAIN = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
-function RemoteTile({ participant }: { participant: { id: string; name: string; audioTrack: any; videoTrack: any; muted: boolean; videoMuted: boolean } }) {
+function RemoteTile({ participant, totalParticipants }: { participant: { id: string; name: string; audioTrack: any; videoTrack: any; muted: boolean; videoMuted: boolean }; totalParticipants: number }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Mobile camera orientation fix (Option A): this remote participant's own actual video
-  // dimensions decide 'contain' (full portrait image, no crop) vs 'cover' (unchanged landscape
-  // behavior) -- never assumed from their device/user-agent.
-  const { objectFit, bind: bindOrientation } = useCameraVideoOrientation();
+  // Mobile camera orientation fix: this remote participant's own actual video dimensions decide
+  // both 'contain' vs 'cover' (objectFit, no crop for portrait) AND this tile's own CSS aspect-
+  // ratio (ratio) -- never assumed from their device/user-agent. /meet-direct's gallery is a plain
+  // CSS grid (not the custom absolute-positioned engine the main /meet route uses), so reshaping
+  // a tile is simply handing the browser's own grid layout a different `aspectRatio` -- the grid
+  // reflows row heights on its own, no separate packing algorithm needed here.
+  const { objectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+  const hasLiveVideo = !participant.videoMuted && !!participant.videoTrack;
+  // Camera-off fallback depends on how many participants are in this call -- same policy as the
+  // main /meet route's gallery (see ParticipantGallery.tsx): small calls keep 16:9, a denser call
+  // prefers the more compact 4:3 for whoever's camera is off. An actually-live video's own real
+  // ratio always wins regardless of this default.
+  const cameraOffDefaultRatio = totalParticipants <= 3 ? 16 / 9 : 4 / 3;
+  const effectiveRatio = hasLiveVideo ? ratio : cameraOffDefaultRatio;
 
   useEffect(() => {
     if (videoRef.current && participant.videoTrack) {
@@ -57,7 +67,7 @@ function RemoteTile({ participant }: { participant: { id: string; name: string; 
       borderRadius: '24px',
       overflow: 'hidden',
       backgroundColor: '#3c3020',
-      aspectRatio: '16 / 9',
+      aspectRatio: String(effectiveRatio),
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center'
@@ -131,7 +141,7 @@ export function DirectMeetingRoomPage() {
   const [ hasJoined, setHasJoined ] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   // Mobile camera orientation fix (Option A) -- see RemoteTile's own comment above.
-  const localVideoOrientation = useCameraVideoOrientation();
+  const localVideoOrientation = useCameraVideoAspect();
 
   useEffect(() => {
     if (!hasJoined) {
@@ -216,6 +226,10 @@ export function DirectMeetingRoomPage() {
   }
 
   const remoteList = Object.values(remoteParticipants);
+  const totalParticipants = remoteList.length + 1;
+  const localHasLiveVideo = !localVideoMuted;
+  const localCameraOffDefaultRatio = totalParticipants <= 3 ? 16 / 9 : 4 / 3;
+  const localEffectiveRatio = localHasLiveVideo ? localVideoOrientation.ratio : localCameraOffDefaultRatio;
 
   return (
     <div style={{
@@ -245,7 +259,7 @@ export function DirectMeetingRoomPage() {
           borderRadius: '24px',
           overflow: 'hidden',
           backgroundColor: '#2A1F3D',
-          aspectRatio: '16 / 9',
+          aspectRatio: String(localEffectiveRatio),
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center'
@@ -295,7 +309,7 @@ export function DirectMeetingRoomPage() {
           </div>
         </div>
         {remoteList.map(p => (
-          <RemoteTile key={p.id} participant={p} />
+          <RemoteTile key={p.id} participant={p} totalParticipants={totalParticipants} />
         ))}
       </div>
       <div style={{ padding: '20px', display: 'flex', justifyContent: 'center', gap: '16px' }}>
