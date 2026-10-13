@@ -279,14 +279,27 @@ export function ParticipantGallery({
   // (see calculateForcedColumnLayout's own comment) -- mixed-ratio packing applies only to the
   // normal, unpaginated gallery, which is also the only place multiple differently-shaped cards
   // actually need to coexist edge to edge.
+  //
+  // Exactly 4 participants is a dedicated case: the justified-row mixed-aspect packer above treats
+  // a portrait participant as its own narrow column (or its own tall, unevenly-sized row), which
+  // reads as a lopsided, unstable grid rather than the classic "balanced 2x2" every 4-person video
+  // call is expected to look like. Instead, reuse the ORIGINAL, already-stable uniform engine
+  // (calculateMeetingLayout/calculateCellPositions -- the same one forced mobile pagination uses)
+  // to give all 4 cells one shared, equal size -- it already auto-balances between 16:9 and 4:3
+  // for whatever uses the stage best, it's never literally forcing 16:9. A portrait participant's
+  // video still shows in full (never cropped/distorted): MeetingParticipantCard's own
+  // adaptiveObjectFit switches to 'contain' for a portrait source regardless of the outer cell's
+  // own shape, so the video letterboxes neatly inside its equal-sized 2x2 cell instead of the cell
+  // itself being reshaped around it.
+  const useUniformFourGrid = !mobileGalleryPaged && galleryCellKeys.length === 4;
   const cellFrames = galleryCellKeys.map((key, index) => (
-    mobileGalleryPaged
+    (mobileGalleryPaged || useUniformFourGrid)
       ? { key, ...galleryPositions[index], width: galleryLayout.cardWidth, height: galleryLayout.cardHeight }
       : (mixedCellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight })
   ));
   const cellFramesByKey = new Map(cellFrames.map((frame) => [ frame.key, frame ]));
-  const galleryStructureKey = mobileGalleryPaged
-    ? `${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
+  const galleryStructureKey = (mobileGalleryPaged || useUniformFourGrid)
+    ? `${mobileGalleryPaged ? 'paged' : 'uniform4'}:${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
     : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
 
   // Only an intentional structure change animates. Ordinary size updates and unrelated renders leave running

@@ -4949,7 +4949,7 @@ export function MeetingRoomPage() {
                   theme={localTheme}
                   compact
                   mirrored
-                  style={{ width: '100%', aspectRatio: '16 / 9' }}
+                  style={{ width: '100%', aspectRatio: '1 / 1' }}
                   onVideoElement={setInCallVideoNode}
                   isPinned={pinnedParticipantId === 'local'}
                   onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
@@ -5074,7 +5074,7 @@ export function MeetingRoomPage() {
                     raisedHand={remote.raisedHand}
                     theme={rTheme}
                     compact
-                    style={{ width: '100%', aspectRatio: '16 / 9' }}
+                    style={{ width: '100%', aspectRatio: '1 / 1' }}
                     isPinned={pinnedParticipantId === remote.id}
                     onPin={() => { setPinnedManually(pinnedParticipantId === remote.id ? null : remote.id); setTileViewEnabled(false); }}
                   />;
@@ -5559,7 +5559,7 @@ export function MeetingRoomPage() {
                         title="Pin yourself"
                         style={{
                           width: '100%',
-                          aspectRatio: '16 / 9',
+                          aspectRatio: '1 / 1',
                           borderRadius: '16px',
                           overflow: 'hidden',
                           position: 'relative',
@@ -5653,7 +5653,7 @@ export function MeetingRoomPage() {
                           raisedHand={p.raisedHand}
                           theme={t}
                           compact
-                          style={{ width: '100%', aspectRatio: '16 / 9' }}
+                          style={{ width: '100%', aspectRatio: '1 / 1' }}
                           isPinned={pinnedParticipantId === p.id}
                           onPin={() => setPinnedManually(pinnedParticipantId === p.id ? null : p.id)}
                           onDoubleClick={() => setPinnedManually(p.id)}
