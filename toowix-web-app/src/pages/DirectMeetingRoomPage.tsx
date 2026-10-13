@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 
 import { useLibJitsiConference } from '../lib/useLibJitsiConference';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
+import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
 
 // Direct lib-jitsi-meet meeting room -- no Jitsi IFrame. Real MediaStreamTracks attached
 // directly to our own <video> elements. New route (/meet-direct/:roomId), completely separate
@@ -241,6 +242,7 @@ export function DirectMeetingRoomPage() {
       fontFamily: 'sans-serif'
     }}
     >
+      <GalleryOrientationDebugOverlay />
       <div style={{ padding: '12px 24px', color: '#fff', display: 'flex', justifyContent: 'space-between' }}>
         <span>{roomId} -- {connected ? (joined ? 'Joined' : 'Connecting to conference...') : 'Connecting...'}</span>
         {error && <span style={{ color: '#F87171' }}>{error}</span>}
