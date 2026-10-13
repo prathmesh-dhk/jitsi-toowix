@@ -15,6 +15,7 @@
 // element's own 'resize' event (fired whenever its intrinsic size changes), not just once at
 // load.
 import { useCallback, useRef, useState } from 'react';
+import { logGalleryDebug } from './galleryOrientationDebug';
 
 export type CameraVideoObjectFit = 'cover' | 'contain';
 
@@ -137,16 +138,26 @@ export const DEFAULT_CAMERA_VIDEO_ASPECT: CameraVideoAspectInfo = { objectFit: '
 // landing on different frames (its own object-fit flipping to 'contain' a frame before or after
 // its card resizes to match would show a visibly wrong crop for that one frame).
 export function bindCameraVideoAspectListener(
-    video: HTMLVideoElement, onChange: (info: CameraVideoAspectInfo) => void
+    video: HTMLVideoElement, onChange: (info: CameraVideoAspectInfo) => void, debugLabel?: string
 ): () => void {
   const update = () => {
     const { videoWidth, videoHeight } = video;
 
     if (videoWidth > 0 && videoHeight > 0) {
-      onChange({
+      const info = {
         objectFit: determineObjectFit(videoWidth, videoHeight),
         ratio: bucketAspectRatio(videoWidth / videoHeight),
-      });
+      };
+
+      // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the exact point where a real
+      // decoded video frame's raw dimensions become the bucketed ratio the gallery layout uses.
+      if (debugLabel) {
+        logGalleryDebug('receiver video metadata', {
+          participant: debugLabel, videoWidth, videoHeight,
+          rawRatio: videoWidth / videoHeight, bucketedRatio: info.ratio, objectFit: info.objectFit,
+        });
+      }
+      onChange(info);
     }
   };
 
@@ -161,7 +172,9 @@ export function bindCameraVideoAspectListener(
 }
 
 // React hook wrapper, same one-call-per-persistent-instance rule as useCameraVideoOrientation.
-export function useCameraVideoAspect(): CameraVideoAspectInfo & { bind: (node: HTMLVideoElement | null) => void } {
+export function useCameraVideoAspect(
+    debugLabel?: string
+): CameraVideoAspectInfo & { bind: (node: HTMLVideoElement | null) => void } {
   const [ info, setInfo ] = useState<CameraVideoAspectInfo>(DEFAULT_CAMERA_VIDEO_ASPECT);
   const boundRef = useRef<{ node: HTMLVideoElement; unsubscribe: () => void } | null>(null);
 
@@ -171,16 +184,21 @@ export function useCameraVideoAspect(): CameraVideoAspectInfo & { bind: (node: H
       boundRef.current = null;
     }
     if (!node) {
+      // TEMPORARY diagnostic -- an explicit unbind (camera off, card unmounted, or a changed ref
+      // callback identity causing React to re-run this with null) resets to the 16:9 default; log
+      // it so a "ratio flickers back to 16:9 then never recovers" report can be told apart from a
+      // genuine camera-off from a spurious unbind/rebind churn.
+      if (debugLabel) logGalleryDebug('receiver video unbound (reset to default 16:9)', { participant: debugLabel });
       setInfo(DEFAULT_CAMERA_VIDEO_ASPECT);
 
       return;
     }
     if (boundRef.current?.node === node) return;
 
-    const unsubscribe = bindCameraVideoAspectListener(node, setInfo);
+    const unsubscribe = bindCameraVideoAspectListener(node, setInfo, debugLabel);
 
     boundRef.current = { node, unsubscribe };
-  }, []);
+  }, [ debugLabel ]);
 
   return { objectFit: info.objectFit, ratio: info.ratio, bind };
 }

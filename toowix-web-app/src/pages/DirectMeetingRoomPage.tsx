@@ -20,7 +20,7 @@ function RemoteTile({ participant, totalParticipants }: { participant: { id: str
   // CSS grid (not the custom absolute-positioned engine the main /meet route uses), so reshaping
   // a tile is simply handing the browser's own grid layout a different `aspectRatio` -- the grid
   // reflows row heights on its own, no separate packing algorithm needed here.
-  const { objectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+  const { objectFit, ratio, bind: bindOrientation } = useCameraVideoAspect(participant.id);
   const hasLiveVideo = !participant.videoMuted && !!participant.videoTrack;
   // Camera-off fallback depends on how many participants are in this call -- same policy as the
   // main /meet route's gallery (see ParticipantGallery.tsx): small calls keep 16:9, a denser call
@@ -141,7 +141,7 @@ export function DirectMeetingRoomPage() {
   const [ hasJoined, setHasJoined ] = useState(false);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   // Mobile camera orientation fix (Option A) -- see RemoteTile's own comment above.
-  const localVideoOrientation = useCameraVideoAspect();
+  const localVideoOrientation = useCameraVideoAspect('local');
 
   useEffect(() => {
     if (!hasJoined) {

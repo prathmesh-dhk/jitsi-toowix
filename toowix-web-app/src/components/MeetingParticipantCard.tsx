@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
+import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 
 export interface ParticipantCardTheme {
   avatarBg: string;
@@ -60,7 +61,12 @@ export function MeetingParticipantCard({
   // assumed from device type. The hook itself is called unconditionally regardless of
   // adaptiveAspect (React's own rule: hooks can't be called conditionally) -- only whether its
   // result is USED differs below.
-  const { objectFit: adaptiveObjectFit, ratio, bind: bindOrientation } = useCameraVideoAspect();
+  // TEMPORARY diagnostic (see galleryOrientationDebug.ts): only passed when adaptiveAspect is true
+  // (the Gallery View card), so the rail/filmstrip/screen-share cards -- which never report a
+  // ratio anywhere -- stay silent even with the debug flag on.
+  const { objectFit: adaptiveObjectFit, ratio, bind: bindOrientation } = useCameraVideoAspect(
+    adaptiveAspect ? participantId : undefined,
+  );
   const hasLiveVideo = videoEnabled && !!stream;
   const objectFit = adaptiveAspect ? adaptiveObjectFit : 'cover';
 
@@ -70,8 +76,11 @@ export function MeetingParticipantCard({
     // straight from videoEnabled/stream -- not from waiting on the <video> element's own unmount/
     // ref-callback timing. The gallery is the one that knows what a camera-off participant should
     // fall back to (see ParticipantGallery.tsx's own participant-count-aware default).
-    onAspectRatioChange?.(hasLiveVideo ? ratio : null);
-  }, [ adaptiveAspect, hasLiveVideo, ratio, onAspectRatioChange ]);
+    const nextRatio = hasLiveVideo ? ratio : null;
+
+    logGalleryDebug('card reporting ratio to gallery', { participantId, hasLiveVideo, ratio: nextRatio });
+    onAspectRatioChange?.(nextRatio);
+  }, [ adaptiveAspect, hasLiveVideo, ratio, onAspectRatioChange, participantId ]);
 
   const attachVideo = useCallback((node: HTMLVideoElement | null) => {
     onVideoElement?.(node);

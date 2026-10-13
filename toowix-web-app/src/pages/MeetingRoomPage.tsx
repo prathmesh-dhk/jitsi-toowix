@@ -97,6 +97,7 @@ import { PollsModal, type IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
 import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/participantColorTheme';
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
+import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 import { DocumentPipContent } from '../components/meeting/PictureInPicture';
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
@@ -3302,6 +3303,22 @@ export function MeetingRoomPage() {
   // every time -- the toggle click during an active share is what the restored condition here now
   // actually honors, instead of always being overridden back to the stage layout.
   const showShareStage = Boolean(jitsiMeeting.sharedVideo) || (anyScreenShare && !tileViewEnabled);
+  // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- which of the four top-level render
+  // branches (screen-share stage / solo stage / Toggle(speaker) View / Gallery(tile) view) is
+  // actually active, so a "portrait card never appeared" report can be told apart from "it
+  // correctly never appears here because this isn't Gallery View right now" (rail/filmstrip and
+  // screen-share cards are fixed-shape by design, see MeetingParticipantCard's adaptiveAspect).
+  useEffect(() => {
+    const viewMode = showShareStage
+      ? 'screen-share-stage'
+      : remoteParticipants.length === 0
+        ? 'solo-stage'
+        : (!tileViewEnabled || activePanel)
+          ? 'toggle-speaker-view'
+          : 'gallery-tile-view';
+
+    logGalleryDebug('active view mode', { viewMode, remoteParticipantCount: remoteParticipants.length, tileViewEnabled, hasActivePanel: Boolean(activePanel) });
+  }, [ showShareStage, remoteParticipants.length, tileViewEnabled, activePanel ]);
   const [screenShareFullView, setScreenShareFullView] = useState(false);
   const tileBeforeShareRef = useRef(true);
   const wasSharingRef = useRef(false);

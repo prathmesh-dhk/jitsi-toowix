@@ -16,6 +16,7 @@ import {
   type MixedAspectCardInput,
 } from '../../lib/meetingLayout';
 import { animateGalleryCell, readVisualFrame } from '../../lib/galleryMotion';
+import { logGalleryDebug } from '../../lib/galleryOrientationDebug';
 import type { GalleryFrame } from '../../lib/galleryMotion';
 import { getParticipantColorTheme, type IParticipantColorTheme } from '../../lib/participantColorTheme';
 import { isSpeakingNow } from '../../lib/speakingStore';
@@ -301,6 +302,26 @@ export function ParticipantGallery({
   const galleryStructureKey = (mobileGalleryPaged || useUniformFourGrid)
     ? `${mobileGalleryPaged ? 'paged' : 'uniform4'}:${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
     : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
+
+  // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- logs the exact ratio map the gallery
+  // is working from and which layout path/engine was selected, only when that structure actually
+  // changes (not every render), so a "ratio arrived correctly but the card stayed landscape"
+  // report can be distinguished from "the ratio itself never arrived".
+  const debugLoggedStructureRef = useRef('');
+  useEffect(() => {
+    if (galleryStructureKey === debugLoggedStructureRef.current) return;
+    debugLoggedStructureRef.current = galleryStructureKey;
+    logGalleryDebug('gallery layout selection', {
+      viewMode: mobileGalleryPaged ? 'mobile-paginated-grid' : useUniformFourGrid ? 'four-participant-uniform-2x2' : 'gallery-mixed-aspect',
+      cellRatios: Object.fromEntries(cellRatios),
+      cameraOffDefaultRatio,
+      mixedAspectCards,
+      finalCellFrames: cellFrames,
+    });
+    // cellFrames/cellRatios/mixedAspectCards are freshly built every render; the dependency that
+    // actually matters is whether the STRUCTURE (key) changed, checked above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ galleryStructureKey ]);
 
   // Only an intentional structure change animates. Ordinary size updates and unrelated renders leave running
   // animations alone. Only animations this effect started are cancelled, never all of a card's animations.

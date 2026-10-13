@@ -33,8 +33,10 @@ import {
   NETWORK_RECOVERY_STABLE_MS,
   NETWORK_STATS_INTERVAL_MS,
   type NetworkState,
-  verifyCameraCaptureOrientation
+  verifyCameraCaptureOrientation,
+  getCameraCaptureDebugInfo
 } from './networkQuality';
+import { logGalleryDebug } from './galleryOrientationDebug';
 
 export interface ISharedVideoState {
   muted?: boolean;
@@ -429,6 +431,11 @@ async function acquireLocalTracks(
   // acquired -- with one check, right before this result is handed back to the caller. See
   // verifyCameraCaptureOrientation's own comment: reporting only, never a retry/reacquire.
   verifyCameraCaptureOrientation(result.videoTrack?.getTrack?.());
+  // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
+  // settings vs what was requested, for every device category (not just the phone-only mismatch
+  // warning above), so a capture-side investigation can see this before any receiver-side code
+  // (videoOrientation.ts, the gallery) ever gets involved.
+  logGalleryDebug('local capture settings', getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()));
 
   return result;
 }

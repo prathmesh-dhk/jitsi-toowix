@@ -230,6 +230,37 @@ export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
 // that genuinely cannot do portrait would just fail the exact same way again, and the existing
 // stream (whatever shape it came in) is always preserved and used as-is -- this is reporting
 // only, never a race or a stop/reacquire loop.
+// TEMPORARY diagnostic (see galleryOrientationDebug.ts): pure data only, no logging/import here --
+// this file's own test harnesses load it with `vm.runInNewContext` and no `require` shim at all
+// (every existing networkQuality.ts test does this; it has never had an external import before),
+// so any `import` added to this file breaks all of them. The caller (useJitsiMeeting.ts, which
+// already imports project modules normally) does the actual logGalleryDebug() call with this data.
+export function getCameraCaptureDebugInfo(track: MediaStreamTrack | null | undefined): {
+  deviceCategory: CameraDeviceCategory;
+  requested: MediaTrackConstraints;
+  actualWidth: number | null;
+  actualHeight: number | null;
+  actualAspectRatio: number | null;
+} {
+  let settings: MediaTrackSettings | null = null;
+
+  if (track && typeof track.getSettings === 'function') {
+    try {
+      settings = track.getSettings();
+    } catch {
+      settings = null;
+    }
+  }
+
+  return {
+    deviceCategory: getCameraDeviceCategory(),
+    requested: getPreferredCameraCaptureConstraints(),
+    actualWidth: settings ? Number(settings.width) || 0 : null,
+    actualHeight: settings ? Number(settings.height) || 0 : null,
+    actualAspectRatio: settings ? Number(settings.aspectRatio) || null : null,
+  };
+}
+
 export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | undefined): void {
   if (!track || typeof track.getSettings !== 'function') return;
   // Only phones have a strict orientation EXPECTATION worth verifying -- desktop/tablet already
