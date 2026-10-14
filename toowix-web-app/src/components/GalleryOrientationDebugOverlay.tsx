@@ -67,6 +67,8 @@ export function GalleryOrientationDebugOverlay() {
           <Row label="actualAspectRatio" value={snapshot.captureSettings.actualAspectRatio} />
           <Row label="requestedOrientation" value={snapshot.captureSettings.requestedOrientation} />
           <Row label="requested" value={snapshot.captureSettings.requested} />
+          <Row label="path" value={snapshot.captureSettings.path} />
+          <Row label="orientationCorrection" value={snapshot.captureSettings.orientationCorrection} />
         </>
       ) : (
         <div>(no local video track yet)</div>
