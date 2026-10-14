@@ -19,6 +19,13 @@ import { getCameraDeviceCategory, getCameraCaptureOrientationPreference } from '
 export interface PortraitCropHandle {
   track: MediaStreamTrack;
   stop: () => void;
+  // The REAL numbers the crop math actually used, for the debug overlay -- exact pixel dimensions,
+  // not a rounded-off "it worked" boolean, so a ratio mismatch report can be diagnosed from real
+  // data instead of re-guessing.
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
 }
 
 // width / height -- matches the 9:16 ideal every phone capture already requests (see
@@ -93,12 +100,12 @@ export async function createPortraitCroppedTrack(
       return null;
     }
 
-    // Capped at the same 1920 ceiling every phone portrait capture already targets (see
-    // getCameraCaptureIdeal) -- a weak/constrained call (low JVB-estimated bandwidth, the kind
-    // that was already struggling before this feature existed) must not be made to encode a
-    // LARGER frame than a normal camera capture ever would have asked for. Source dimensions
-    // above that still get the full-height crop math; the RESULT is then downscaled to fit.
-    const MAX_OUTPUT_HEIGHT = 1920;
+    // Capped well below the 1920 a phone capture's IDEAL targets (see getCameraCaptureIdeal) --
+    // the call's own simulcast/quality policy (getMediaQualityPolicy) sends at most 720p-ish
+    // normally, so drawing/encoding a much larger canvas every frame was pure wasted CPU, and a
+    // real reported cause of lag on real devices. 1280 keeps real headroom over what the call
+    // actually sends while meaningfully cutting the per-frame draw/encode cost.
+    const MAX_OUTPUT_HEIGHT = 1280;
     const cropHeight = sourceHeight;
     const cropWidth = Math.min(sourceWidth, Math.round(cropHeight * TARGET_RATIO));
     const cropX = Math.round((sourceWidth - cropWidth) / 2);
@@ -120,25 +127,51 @@ export async function createPortraitCroppedTrack(
 
     let stopped = false;
     let rafId = 0;
+    let vfcId = 0;
 
-    const drawFrame = () => {
-      if (stopped) return;
+    const draw = () => {
       try {
         ctx.drawImage(sourceVideo, cropX, 0, cropWidth, cropHeight, 0, 0, outputWidth, outputHeight);
       } catch {
         // A transient decode error on one frame is not fatal -- the next frame just tries again.
       }
-      rafId = requestAnimationFrame(drawFrame);
     };
 
-    rafId = requestAnimationFrame(drawFrame);
+    // requestVideoFrameCallback fires only when the <video> element actually decoded a NEW camera
+    // frame (typically ~24-30fps for a phone camera), unlike requestAnimationFrame, which fires at
+    // the DISPLAY's own refresh rate (60Hz+ on many phones) regardless of whether a new frame ever
+    // arrived -- redrawing/re-encoding the same stale frame 2-3x more often than needed was real,
+    // avoidable CPU cost and a confirmed cause of lag on a real device. Falls back to rAF only on
+    // browsers that don't support it yet.
+    const hasVideoFrameCallback = typeof (sourceVideo as any).requestVideoFrameCallback === 'function';
 
-    const outputStream = canvas.captureStream(30);
+    if (hasVideoFrameCallback) {
+      const onVideoFrame = () => {
+        if (stopped) return;
+        draw();
+        vfcId = (sourceVideo as any).requestVideoFrameCallback(onVideoFrame);
+      };
+
+      vfcId = (sourceVideo as any).requestVideoFrameCallback(onVideoFrame);
+    } else {
+      const drawFrame = () => {
+        if (stopped) return;
+        draw();
+        rafId = requestAnimationFrame(drawFrame);
+      };
+
+      rafId = requestAnimationFrame(drawFrame);
+    }
+
+    // Matches the fallback capture target every phone call already ships (see
+    // getCameraCaptureIdeal's frameRate) -- no reason to encode faster than the capture itself.
+    const outputStream = canvas.captureStream(24);
     const [ outputTrack ] = outputStream.getVideoTracks();
 
     if (!outputTrack) {
       stopped = true;
-      cancelAnimationFrame(rafId);
+      if (hasVideoFrameCallback) (sourceVideo as any).cancelVideoFrameCallback?.(vfcId);
+      else cancelAnimationFrame(rafId);
       sourceVideo.srcObject = null;
 
       return null;
@@ -147,7 +180,8 @@ export async function createPortraitCroppedTrack(
     const stop = () => {
       if (stopped) return;
       stopped = true;
-      cancelAnimationFrame(rafId);
+      if (hasVideoFrameCallback) (sourceVideo as any).cancelVideoFrameCallback?.(vfcId);
+      else cancelAnimationFrame(rafId);
       sourceVideo.srcObject = null;
       outputTrack.stop();
     };
@@ -156,7 +190,7 @@ export async function createPortraitCroppedTrack(
     // derived output track too -- otherwise it would keep publishing a frozen last frame forever.
     nativeTrack.addEventListener('ended', stop);
 
-    return { track: outputTrack, stop };
+    return { track: outputTrack, stop, sourceWidth, sourceHeight, outputWidth, outputHeight };
   } catch {
     return null;
   }
@@ -194,6 +228,13 @@ export async function applyPortraitCropIfNeeded(JitsiMeetJS: any, jitsiTrack: an
 
       return jitsiTrack;
     }
+
+    // Exposed for the debug overlay (see galleryOrientationDebug.ts) -- the exact pixel numbers
+    // the crop math actually used, not just a "did it run" flag.
+    derivedTrack.__portraitCropInfo = {
+      sourceWidth: cropped.sourceWidth, sourceHeight: cropped.sourceHeight,
+      outputWidth: cropped.outputWidth, outputHeight: cropped.outputHeight,
+    };
 
     const originalDispose = derivedTrack.dispose?.bind(derivedTrack);
 

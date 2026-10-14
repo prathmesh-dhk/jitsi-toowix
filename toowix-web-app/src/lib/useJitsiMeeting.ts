@@ -451,7 +451,8 @@ async function acquireLocalTracks(
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
   logGalleryDebug('local capture settings', {
-    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection, portraitCropped
+    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection, portraitCropped,
+    portraitCropInfo: (result.videoTrack as any)?.__portraitCropInfo ?? null,
   });
 
   return result;
@@ -1590,7 +1591,8 @@ export function useJitsiMeeting({
 
       newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
       logGalleryDebug('local capture settings', {
-        ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection, portraitCropped: newTrack !== preCropTrack
+        ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection,
+        portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
       });
       localVideoTrackRef.current = newTrack;
       setHasVideoTrack(true);
@@ -1900,7 +1902,8 @@ export function useJitsiMeeting({
 
         newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
         logGalleryDebug('local capture settings', {
-          ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection, portraitCropped: newTrack !== preCropTrack
+          ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection,
+          portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
         });
       }
 
