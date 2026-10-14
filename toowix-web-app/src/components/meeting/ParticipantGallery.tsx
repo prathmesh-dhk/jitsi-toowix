@@ -10,6 +10,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { flushSync } from 'react-dom';
 import {
   calculateCellPositions,
+  calculateMobileAspectAwareLayout,
   MOBILE_GALLERY_TILES_PER_PAGE,
   useStableMeetingLayout,
   useStableMixedAspectLayout,
@@ -276,32 +277,50 @@ export function ParticipantGallery({
   );
   const mixedCellFramesByKey = new Map(mixedLayout.cells.map((cell) => [ cell.key, cell ]));
 
-  // Forced mobile pagination keeps its own existing fixed-grid, crop-to-fill behavior untouched
-  // (see calculateForcedColumnLayout's own comment) -- mixed-ratio packing applies only to the
-  // normal, unpaginated gallery, which is also the only place multiple differently-shaped cards
-  // actually need to coexist edge to edge.
-  //
-  // Exactly 4 participants is a dedicated case: the justified-row mixed-aspect packer above treats
-  // a portrait participant as its own narrow column (or its own tall, unevenly-sized row), which
-  // reads as a lopsided, unstable grid rather than the classic "balanced 2x2" every 4-person video
-  // call is expected to look like. Instead, reuse the ORIGINAL, already-stable uniform engine
-  // (calculateMeetingLayout/calculateCellPositions -- the same one forced mobile pagination uses)
-  // to give all 4 cells one shared, equal size -- it already auto-balances between 16:9 and 4:3
-  // for whatever uses the stage best, it's never literally forcing 16:9. A portrait participant's
+  // Mobile 4+ Gallery View: the fixed 2-column/8-per-page pagination itself (above) stays
+  // untouched, but each page's own cell GEOMETRY now comes from the aspect-aware packer instead of
+  // the old uniform crop-to-fill grid (TOOWIX_MOBILE_PORTRAIT_GALLERY_FIX_PLAN.md fixes 1-2): a
+  // real 9:16 portrait stream renders as a genuinely 9:16 outer card, not a square/landscape cell
+  // with the video merely letterboxed inside it. This is a plain pure-function call, not a hook --
+  // no hysteresis is needed here because the row PAIRING is derived only from this page's card
+  // count (ceil(n/2)), never from stage size, so there is no structural ambiguity to hold stable
+  // against the way there is for the general mixed-aspect engine's row-count search; only the
+  // continuous scale factor changes on resize, which is already smooth.
+  const mobileAspectLayout = calculateMobileAspectAwareLayout(
+    mixedAspectCards, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
+  );
+  const mobileAspectFramesByKey = new Map(mobileAspectLayout.cells.map((cell) => [ cell.key, cell ]));
+
+  // Exactly 4 participants (non-mobile-paginated) is a dedicated case: the justified-row mixed-
+  // aspect packer above treats a portrait participant as its own narrow column (or its own tall,
+  // unevenly-sized row), which reads as a lopsided, unstable grid rather than the classic
+  // "balanced 2x2" every 4-person video call is expected to look like. Instead, reuse the
+  // ORIGINAL, already-stable uniform engine (calculateMeetingLayout/calculateCellPositions) to
+  // give all 4 cells one shared, equal size -- it already auto-balances between 16:9 and 4:3 for
+  // whatever uses the stage best, it's never literally forcing 16:9. A portrait participant's
   // video still shows in full (never cropped/distorted): MeetingParticipantCard's own
   // adaptiveObjectFit switches to 'contain' for a portrait source regardless of the outer cell's
   // own shape, so the video letterboxes neatly inside its equal-sized 2x2 cell instead of the cell
-  // itself being reshaped around it.
+  // itself being reshaped around it. This dedicated case is unaffected by the mobile aspect-aware
+  // packer above, which only ever applies while mobileGalleryPaged is true.
   const useUniformFourGrid = !mobileGalleryPaged && galleryCellKeys.length === 4;
-  const cellFrames = galleryCellKeys.map((key, index) => (
-    (mobileGalleryPaged || useUniformFourGrid)
-      ? { key, ...galleryPositions[index], width: galleryLayout.cardWidth, height: galleryLayout.cardHeight }
-      : (mixedCellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight })
-  ));
+  const cellFrames = galleryCellKeys.map((key, index) => {
+    if (mobileGalleryPaged) {
+      return mobileAspectFramesByKey.get(key)
+        ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
+    }
+    if (useUniformFourGrid) {
+      return { key, ...galleryPositions[index], width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
+    }
+
+    return mixedCellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
+  });
   const cellFramesByKey = new Map(cellFrames.map((frame) => [ frame.key, frame ]));
-  const galleryStructureKey = (mobileGalleryPaged || useUniformFourGrid)
-    ? `${mobileGalleryPaged ? 'paged' : 'uniform4'}:${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
-    : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
+  const galleryStructureKey = mobileGalleryPaged
+    ? `mobile-aspect:${safeGalleryPageIndex}:${mobileAspectLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`
+    : useUniformFourGrid
+      ? `uniform4:${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
+      : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
 
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- logs the exact ratio map the gallery
   // is working from and which layout path/engine was selected, only when that structure actually
@@ -312,7 +331,7 @@ export function ParticipantGallery({
     if (galleryStructureKey === debugLoggedStructureRef.current) return;
     debugLoggedStructureRef.current = galleryStructureKey;
     logGalleryDebug('gallery layout selection', {
-      viewMode: mobileGalleryPaged ? 'mobile-paginated-grid' : useUniformFourGrid ? 'four-participant-uniform-2x2' : 'gallery-mixed-aspect',
+      viewMode: mobileGalleryPaged ? 'mobile-paginated-aspect-aware-grid' : useUniformFourGrid ? 'four-participant-uniform-2x2' : 'gallery-mixed-aspect',
       cellRatios: Object.fromEntries(cellRatios),
       cameraOffDefaultRatio,
       mixedAspectCards,
@@ -401,6 +420,7 @@ export function ParticipantGallery({
       className="tw-grid"
       data-count={galleryCellKeys.length}
       data-gallery-layout={`${galleryLayout.columns}x${galleryLayout.rows}`}
+      data-layout-mode={mobileGalleryPaged ? 'mobile-aspect-aware' : useUniformFourGrid ? 'uniform-four' : 'mixed-aspect'}
       style={{
         width: '100%',
         flex: 1,
@@ -507,6 +527,8 @@ export function ParticipantGallery({
               <div
                 key={cell.key}
                 data-gallery-cell={cell.key}
+                data-gallery-cell-key={cell.key}
+                data-video-ratio={(frame.width / Math.max(1, frame.height)).toFixed(4)}
                 style={{
                   position: 'absolute',
                   left: `${frame.left}px`,

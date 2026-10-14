@@ -572,6 +572,105 @@ export function useStableMixedAspectLayout(
  * Card geometry is recalculated every call; only columns/rows/ratio are held stable. Call once
  * per render with the latest measured width/height.
  */
+// --- Mobile aspect-aware two-column gallery packing -----------------------------------------
+// The general mixed-aspect engine above (calculateMixedAspectLayout) searches over ROW count and
+// lets each row's own height float freely to whatever makes that row's combined ratios fill the
+// stage width -- correct for the normal desktop gallery, but on a narrow mobile viewport it can
+// legitimately decide a single full-width row packs more total area than two narrower columns,
+// exactly the "everything stacks into one column" bug the mobile forced-2-column rule
+// (MeetingLayoutInput.forceColumns) exists to prevent for the uniform engine. Mobile 4+ Gallery
+// View needs that same hard two-column constraint, but -- unlike calculateForcedColumnLayout --
+// must still size each card to its OWN real ratio: a 9:16 portrait stream must render as a
+// genuinely 9:16 outer card, never cropped or stretched to fill a shared uniform cell (see
+// TOOWIX_MOBILE_PORTRAIT_GALLERY_FIX_PLAN.md section 4).
+//
+// Algorithm (plan section 4, "recommended first implementation"): pair cards into rows of up to
+// two, IN ORIGINAL ORDER -- preserves reading/swipe order, unlike a masonry/balanced-column
+// approach which would reorder cards unpredictably. Every card in a row shares the SAME column
+// width (half the stage width, minus one fixed gap); a row's height is the TALLER of its (up to
+// two) cards' natural heights at that column width, and the shorter card is vertically centered
+// within the row rather than stretched to match it. The whole stack is then uniformly scaled DOWN
+// (never up -- same "only ever shrink to fit" policy as every other engine in this file) if it
+// would otherwise overflow the stage height, so every card keeps its exact real ratio at every
+// stage size. A lone last-row card keeps the SAME column width as a paired row (never doubles to
+// fill the row), so it reads as "one tile at the same scale" rather than an unexpectedly giant crop.
+//
+// Gaps are fixed CSS pixels, not scaled with content -- consistent with layoutForRowCount's own
+// policy elsewhere in this file (the plan's own pseudocode flags a scaled-gap variant as an
+// alternative; fixed gaps were chosen for consistency with the rest of this module).
+//
+// No minimum-tile-size rejection here (unlike sizeForStructure/layoutForRowCount): exactly two
+// columns, up to 8 cards/page and real aspect ratios can be geometrically impossible to keep above
+// any given minimum tile size on a very small or unusual viewport. Phase 1 of the plan explicitly
+// chooses to keep 8/page with no scrolling and scale the whole page down rather than changing
+// pagination or cropping a card's real ratio -- so this function always returns a usable layout
+// rather than ever returning null.
+function safeAspectRatio(ratio: number): number {
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : DEFAULT_CARD_RATIO;
+}
+
+function chunkPairs<T>(items: T[]): T[][] {
+  const pairs: T[][] = [];
+
+  for (let index = 0; index < items.length; index += 2) {
+    pairs.push(items.slice(index, index + 2));
+  }
+
+  return pairs;
+}
+
+export function calculateMobileAspectAwareLayout(
+  cards: MixedAspectCardInput[], width: number, height: number, gap = 12,
+): MixedAspectLayoutResult {
+  // Defensive clamp, same reasoning as calculateForcedColumnLayout's own: the caller is expected
+  // to already hand this at most one page's worth of cards, but this keeps a chunking bug from
+  // ever producing more rows than a single mobile page is supposed to hold.
+  const pageCards = cards.slice(0, MOBILE_GALLERY_TILES_PER_PAGE);
+  const safeCards = pageCards.length > 0 ? pageCards : [ { key: '__empty__', ratio: DEFAULT_CARD_RATIO } ];
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const rowsOfCards = chunkPairs(safeCards);
+  const columnWidth = Math.max(1, (safeWidth - gap) / 2);
+
+  const rowNaturalHeights = rowsOfCards.map((row) => (
+    Math.max(...row.map((card) => columnWidth / safeAspectRatio(card.ratio)))
+  ));
+  const sumNaturalHeights = rowNaturalHeights.reduce((sum, h) => sum + h, 0);
+  const availableForRows = safeHeight - gap * Math.max(0, rowsOfCards.length - 1);
+  const scale = sumNaturalHeights > 0 && availableForRows > 0
+    ? Math.min(1, availableForRows / sumNaturalHeights)
+    : 1;
+  const cellWidth = roundHalfPixel(columnWidth * scale);
+  const scaledRowHeights = rowNaturalHeights.map((h) => roundHalfPixel(h * scale));
+  const totalContentHeight = scaledRowHeights.reduce((sum, h) => sum + h, 0) + gap * Math.max(0, rowsOfCards.length - 1);
+  const top0 = Math.max(0, roundHalfPixel((safeHeight - totalContentHeight) / 2));
+
+  const cells: MixedAspectCell[] = [];
+  let totalArea = 0;
+  let top = top0;
+
+  rowsOfCards.forEach((row, rowIndex) => {
+    const rowHeight = scaledRowHeights[rowIndex];
+    const rowContentWidth = row.length === 2 ? cellWidth * 2 + gap : cellWidth;
+    const left0 = Math.max(0, roundHalfPixel((safeWidth - rowContentWidth) / 2));
+
+    row.forEach((card, columnIndex) => {
+      // Derived directly from this card's own ratio (not clamped against rowHeight) so the
+      // rendered card is always EXACTLY its real ratio, never approximated -- rowHeight is by
+      // construction already the max over the row, so this is always <= rowHeight.
+      const cardHeight = roundHalfPixel(cellWidth / safeAspectRatio(card.ratio));
+      const cardTop = roundHalfPixel(top + (rowHeight - cardHeight) / 2);
+      const cardLeft = left0 + columnIndex * (cellWidth + gap);
+
+      cells.push({ key: card.key, left: cardLeft, top: cardTop, width: cellWidth, height: cardHeight });
+      totalArea += cellWidth * cardHeight;
+    });
+    top += rowHeight + gap;
+  });
+
+  return { rows: rowsOfCards.length, cells, totalArea };
+}
+
 export function useStableMeetingLayout(input: MeetingLayoutInput): MeetingLayoutResult {
   const committedRef = useRef<{ count: number; layout: MeetingLayoutResult } | null>(null);
   const count = Math.max(1, Math.floor(input.participantCount));
