@@ -374,6 +374,7 @@ async function acquireLocalTracks(
     audioError: null,
     videoError: null
   };
+  let videoPath = 'none';
 
   if (liveAudio) {
     try {
@@ -394,6 +395,7 @@ async function acquireLocalTracks(
       ]);
 
       result.videoTrack = adopted ?? null;
+      if (result.videoTrack) videoPath = 'lobby-adopted';
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error('[useJitsiMeeting] video adoption failed, falling back to fresh acquisition:', err?.name, err?.message, err);
@@ -422,6 +424,7 @@ async function acquireLocalTracks(
         cameraDeviceId: explicitVideoId,
         constraints: { video: inCallVideoConstraints() }
       });
+      if (result.videoTrack) videoPath = 'fresh-in-call';
     } catch (err) {
       result.videoError = err;
     }
@@ -435,7 +438,7 @@ async function acquireLocalTracks(
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
-  logGalleryDebug('local capture settings', getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()));
+  logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath });
 
   return result;
 }

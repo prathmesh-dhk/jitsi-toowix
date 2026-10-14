@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { logGalleryDebug } from './galleryOrientationDebug';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
   if (!(error instanceof Error)) {
@@ -257,7 +258,7 @@ export function useMediaPreview(
         // what first join actually adopts, so the two must never drift apart again.
         const attempts: MediaStreamConstraints[] = [
           { video: { ...constraints, ...getPreferredCameraCaptureConstraints() } },
-          { video: { ...constraints, width: { ideal: 1280 }, height: { ideal: 720 } } },
+          { video: { ...constraints, ...getFallbackCameraCaptureConstraints() } },
           { video: true }
         ];
         let lastError: any = null;
@@ -286,6 +287,9 @@ export function useMediaPreview(
         const newTrack = media.getVideoTracks()[0];
         if (!newTrack) throw new Error('No video track returned');
         verifyCameraCaptureOrientation(newTrack);
+        logGalleryDebug('local capture settings', {
+          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh'
+        });
 
         // Stop previous video track
         if (videoTrackRef.current) {
@@ -345,6 +349,22 @@ export function useMediaPreview(
     const videoElement = preview.current;
     videoElement.srcObject = stream.current;
     void videoElement.play().catch(() => {});
+  }, [joined, video]);
+
+  // Capture settings are available before decoded preview metadata.  Record both stages because
+  // a settings-only result cannot prove the actual outgoing preview dimensions.
+  useEffect(() => {
+    const videoElement = preview.current;
+    if (joined || !videoElement) return;
+    const report = () => {
+      if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+        logGalleryDebug('local preview metadata', { path: 'lobby-preview', videoWidth: videoElement.videoWidth, videoHeight: videoElement.videoHeight, ratio: videoElement.videoWidth / videoElement.videoHeight });
+      }
+    };
+    videoElement.addEventListener('loadedmetadata', report);
+    videoElement.addEventListener('resize', report);
+    report();
+    return () => { videoElement.removeEventListener('loadedmetadata', report); videoElement.removeEventListener('resize', report); };
   }, [joined, video]);
 
   // Full cleanup on unmount or when joining. NOTE: stream.current (and its tracks) is

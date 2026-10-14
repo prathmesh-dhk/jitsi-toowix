@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { logGalleryDebug } from './galleryOrientationDebug';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
 // low-level library Jitsi's own web app is built on, used directly so real MediaStreamTracks
@@ -274,6 +275,7 @@ export function useLibJitsiConference({
             } else {
               localVideoTrackRef.current = track;
               verifyCameraCaptureOrientation(track.getTrack?.());
+              logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh' });
               if (localVideoElRef.current) {
                 track.attach(localVideoElRef.current);
               }

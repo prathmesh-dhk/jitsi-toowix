@@ -65,11 +65,17 @@ export function GalleryOrientationDebugOverlay() {
           <Row label="actualWidth" value={snapshot.captureSettings.actualWidth} />
           <Row label="actualHeight" value={snapshot.captureSettings.actualHeight} />
           <Row label="actualAspectRatio" value={snapshot.captureSettings.actualAspectRatio} />
+          <Row label="requestedOrientation" value={snapshot.captureSettings.requestedOrientation} />
           <Row label="requested" value={snapshot.captureSettings.requested} />
         </>
       ) : (
         <div>(no local video track yet)</div>
       )}
+      {snapshot.localPreview && <>
+        <Row label="previewPath" value={snapshot.localPreview.path} />
+        <Row label="previewWidth" value={snapshot.localPreview.videoWidth} />
+        <Row label="previewHeight" value={snapshot.localPreview.videoHeight} />
+      </>}
 
       <div style={{ marginTop: '6px', opacity: 0.85 }}>-- active view mode --</div>
       {snapshot.viewMode ? (

@@ -153,6 +153,7 @@ const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhon
 // either by the literal "iPad" token or, for modern iPadOS spoofing as Macintosh, by real
 // multi-touch support a Mac never has.
 export type CameraDeviceCategory = 'desktop' | 'tablet' | 'phone';
+export type CameraCaptureOrientation = 'portrait' | 'landscape';
 
 function isPhoneUA(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -176,6 +177,30 @@ export function getCameraDeviceCategory(): CameraDeviceCategory {
   return 'desktop';
 }
 
+// This is a capture *preference*, not a claim about the pixels a camera will deliver.  A phone
+// can be held sideways, so use the Screen Orientation API when it is present; matchMedia is a
+// secondary browser signal.  We intentionally do not use innerWidth/innerHeight: browser chrome,
+// split screen and an already-rotated page do not describe the camera sensor.  The phone-portrait
+// default retains the normal video-call behaviour on older Safari where neither API is exposed.
+export function getCameraCaptureOrientationPreference(): CameraCaptureOrientation {
+  if (getCameraDeviceCategory() !== 'phone') return 'landscape';
+
+  try {
+    const type = String((screen as any)?.orientation?.type || '');
+    if (type.startsWith('landscape')) return 'landscape';
+    if (type.startsWith('portrait')) return 'portrait';
+  } catch { /* unavailable (notably older iOS Safari) */ }
+
+  try {
+    if (typeof matchMedia === 'function') {
+      if (matchMedia('(orientation: landscape)').matches) return 'landscape';
+      if (matchMedia('(orientation: portrait)').matches) return 'portrait';
+    }
+  } catch { /* retain safe fallback */ }
+
+  return 'portrait';
+}
+
 // Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
 // so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
 // SENT is still capped by what the other participants ask the bridge for (see
@@ -186,7 +211,9 @@ export function getCameraCaptureIdeal(): { frameRate: number; height: number; wi
   const category = getCameraDeviceCategory();
 
   if (category === 'phone') {
-    return { frameRate: 30, height: 1920, width: 1080 };
+    return getCameraCaptureOrientationPreference() === 'portrait'
+      ? { frameRate: 30, height: 1920, width: 1080 }
+      : { frameRate: 30, height: 1080, width: 1920 };
   }
 
   return category === 'tablet'
@@ -210,7 +237,7 @@ export function getCameraCaptureIdeal(): { frameRate: number; height: number; wi
 // was missing.
 export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
   const ideal = getCameraCaptureIdeal();
-  const aspectRatio = getCameraDeviceCategory() === 'phone' ? 9 / 16 : 16 / 9;
+  const aspectRatio = getCameraCaptureOrientationPreference() === 'portrait' ? 9 / 16 : 16 / 9;
 
   return {
     width: { ideal: ideal.width },
@@ -218,6 +245,21 @@ export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
     frameRate: { ideal: ideal.frameRate },
     aspectRatio: { ideal: aspectRatio },
     advanced: [ { aspectRatio } ]
+  };
+}
+
+// A lower-cost retry for preview acquisition.  It deliberately uses the same authoritative
+// orientation decision as the first attempt; previously this retry was always 1280x720 and could
+// become the adopted first-call track after a portrait request failed.
+export function getFallbackCameraCaptureConstraints(): MediaTrackConstraints {
+  const portrait = getCameraCaptureOrientationPreference() === 'portrait';
+  const width = portrait ? 720 : 1280;
+  const height = portrait ? 1280 : 720;
+  const aspectRatio = width / height;
+
+  return {
+    width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 },
+    aspectRatio: { ideal: aspectRatio }, advanced: [ { aspectRatio } ]
   };
 }
 
@@ -241,6 +283,7 @@ export function getCameraCaptureDebugInfo(track: MediaStreamTrack | null | undef
   actualWidth: number | null;
   actualHeight: number | null;
   actualAspectRatio: number | null;
+  requestedOrientation: CameraCaptureOrientation;
 } {
   let settings: MediaTrackSettings | null = null;
 
@@ -258,6 +301,7 @@ export function getCameraCaptureDebugInfo(track: MediaStreamTrack | null | undef
     actualWidth: settings ? Number(settings.width) || 0 : null,
     actualHeight: settings ? Number(settings.height) || 0 : null,
     actualAspectRatio: settings ? Number(settings.aspectRatio) || null : null,
+    requestedOrientation: getCameraCaptureOrientationPreference(),
   };
 }
 
@@ -265,7 +309,7 @@ export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | 
   if (!track || typeof track.getSettings !== 'function') return;
   // Only phones have a strict orientation EXPECTATION worth verifying -- desktop/tablet already
   // correctly prefer landscape, and a landscape result there is success, not a mismatch.
-  if (getCameraDeviceCategory() !== 'phone') return;
+  if (getCameraDeviceCategory() !== 'phone' || getCameraCaptureOrientationPreference() !== 'portrait') return;
 
   let settings: MediaTrackSettings;
 

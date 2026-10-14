@@ -43,6 +43,7 @@ export function isGalleryDebugEnabled(): boolean {
 // since this is a temporary tool with exactly one consumer (GalleryOrientationDebugOverlay).
 export interface IGalleryDebugSnapshot {
   captureSettings: Record<string, unknown> | null;
+  localPreview: Record<string, unknown> | null;
   viewMode: Record<string, unknown> | null;
   gallerySelection: Record<string, unknown> | null;
   // Keyed by participant id ('local' or the remote's conference id) -- each card's own latest
@@ -53,6 +54,7 @@ export interface IGalleryDebugSnapshot {
 
 const snapshot: IGalleryDebugSnapshot = {
   captureSettings: null,
+  localPreview: null,
   viewMode: null,
   gallerySelection: null,
   receiverByParticipant: {},
@@ -76,6 +78,8 @@ export function getGalleryDebugSnapshot(): IGalleryDebugSnapshot {
 function setSnapshot(label: string, data: Record<string, unknown>): void {
   if (label === 'local capture settings') {
     snapshot.captureSettings = data;
+  } else if (label === 'local preview metadata') {
+    snapshot.localPreview = data;
   } else if (label === 'active view mode') {
     snapshot.viewMode = data;
   } else if (label === 'gallery layout selection') {

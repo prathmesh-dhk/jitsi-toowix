@@ -29,10 +29,27 @@ assert.match(
     /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{/,
     'the single shared camera constraint builder must live in networkQuality.ts'
 );
+// UPDATED: a later fix (mobile portrait capture/transmission report) found that always
+// hard-requesting portrait for a phone was itself wrong -- a phone held SIDEWAYS should request
+// landscape, not fight the way it's actually being held. getCameraCaptureOrientationPreference()
+// reads the real screen/orientation signal (falling back to portrait when unavailable, preserving
+// this test's original desktop/tablet-landscape, phone-portrait-by-default intent). The underlying
+// guarantee this test exists to protect -- desktop/tablet always request landscape, a phone's
+// request follows its actual orientation -- still holds; only the phone branch got smarter.
 assert.match(
     networkQuality,
-    /const aspectRatio = getCameraDeviceCategory\(\) === 'phone' \? 9 \/ 16 : 16 \/ 9;/,
-    'in-call video must explicitly request a landscape aspect ratio on desktop/tablet, matching the lobby preview -- and portrait on phone'
+    /const aspectRatio = getCameraCaptureOrientationPreference\(\) === 'portrait' \? 9 \/ 16 : 16 \/ 9;/,
+    'in-call video must explicitly request a landscape aspect ratio on desktop/tablet, matching the lobby preview -- and the real current orientation on phone'
+);
+assert.match(
+    networkQuality,
+    /export function getCameraCaptureOrientationPreference\(\): CameraCaptureOrientation \{/,
+    'desktop/tablet must still be hardcoded to landscape -- only a phone has a real orientation-dependent preference'
+);
+assert.match(
+    networkQuality,
+    /if \(getCameraDeviceCategory\(\) !== 'phone'\) return 'landscape';/,
+    'desktop/tablet must never consult screen/orientation APIs -- they always prefer landscape, unconditionally'
 );
 
 // All three places a video track is acquired during/after a call must pass the constraint, not
