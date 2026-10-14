@@ -11,3 +11,46 @@ bench/media/
 bench/results/
 bench/screenshots/
 bench/scratch/
+
+# Scratch audit/report docs -- this folder has never been tracked in this
+# repo's history (consistent with the root repo's own /docs/ convention).
+docs/
+
+# Generated gallery/video-boundary QA artifacts (screenshots, JSON reports,
+# resize traces) from ad-hoc dev-session test runs -- never commit.
+test-results/
+*-screenshots/
+*-e2e-report.json
+*-results.json
+*-resize-trace.json
+*-crop-results.json
+PHASE_3_GALLERY_TEST_REPORT.md
+
+# Ad-hoc dev-session test scripts (gallery/video-boundary QA work) -- not part
+# of the committed regression suite. Explicit filenames, not a broad glob, so
+# a future genuine addition to tests/ is never silently hidden by accident.
+tests/background-image-cache.test.cjs
+tests/camera-capture-orientation-verification.test.cjs
+tests/camera-orientation-receiver-wiring.test.cjs
+tests/camera-video-aspect-bucketing.test.cjs
+tests/flexible-fill-crop-browser.cjs
+tests/flexible-fill-crop-scoring.test.cjs
+tests/flexible-fill-gallery-browser.cjs
+tests/flexible-fill-gallery-geometry.test.cjs
+tests/flexible-fill-gallery-resize.cjs
+tests/flexible-fill-gallery-wiring.test.cjs
+tests/flexible-full-fill-layout.test.cjs
+tests/lazy-route-loading.test.cjs
+tests/meeting-expiry-vs-ended.test.cjs
+tests/meeting-rejoin-after-end.test.cjs
+tests/mixed-aspect-gallery-layout.test.cjs
+tests/mixed-aspect-gallery-wiring.test.cjs
+tests/mobile-aspect-aware-gallery-layout.test.cjs
+tests/mobile-gallery-portrait-e2e.cjs
+tests/noise-suppression-device-switch.test.cjs
+tests/pip-frame-rate-diagnostics.test.cjs
+tests/quality-setter-dedup.test.cjs
+tests/smart-video-boundary-browser.cjs
+tests/smart-video-boundary.test.cjs
+tests/video-orientation.test.cjs
+tests/virtual-background-hidden-tab-freeze.test.cjs

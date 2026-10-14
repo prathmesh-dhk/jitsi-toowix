@@ -684,3 +684,372 @@ export function useStableMeetingLayout(input: MeetingLayoutInput): MeetingLayout
 
   return next;
 }
+
+// --- Flexible full-fill gallery packing (TOOWIX_PHASE_1_2_FLEXIBLE_FULL_FILL_GALLERY_IMPLEMENTATION.md) ---
+// The engines above (uniform, mixed-aspect, mobile-aspect-aware) all treat a card's real/preferred
+// ratio as something to PRESERVE exactly, which necessarily leaves unfilled stage area whenever the
+// participant mix doesn't tile perfectly at that ratio (the "big empty bands" regression this
+// section fixes). This engine inverts the priority: ratio is only a PREFERENCE that nudges relative
+// tile proportions, while 100% of the usable stage (minus fixed gaps) is always tiled by construction.
+//
+// Algorithm -- weighted row/column tessellation: partition the N cards into R rows (same stable,
+// original-order partitioning as partitionIntoRows below), then:
+//   1. Each row's height is proportional to that row's total "tallness weight" (sum of 1/ratio over
+//      its cards), normalized so the rows' heights sum to EXACTLY the available height (not however
+//      much each row "wants"). A row containing portrait-preferring cards ends up taller; an all-
+//      landscape row ends up shorter -- but the stack always fills the stage vertically.
+//   2. Within each row, each card's width is proportional to that card's own ratio, normalized so
+//      the row's widths sum to EXACTLY the available width. A landscape-preferring card ends up
+//      wider than a portrait-preferring card in the same row -- but the row always fills the stage
+//      horizontally.
+// Because both normalizations force an exact sum, every valid candidate (any R) already achieves
+// ~100% coverage by construction (modulo the already-reserved fixed pixel gaps) -- there is no
+// "coverage" axis to search over. What actually differs between candidates is tile SHAPE: more rows
+// means more, squarer, smaller tiles; fewer rows means fewer, more extreme tiles. Candidate search
+// therefore scores shape quality (how small/extreme the worst tile is, how far the average tile
+// drifts from its own preferred ratio) rather than coverage.
+export interface FlexibleTileInput {
+  key: string;
+  // Real (bucketed) decoded video ratio, width / height -- a PREFERENCE, never enforced exactly.
+  preferredRatio: number;
+}
+
+export interface FlexibleTileFrame {
+  key: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface FlexibleFillLayout {
+  frames: FlexibleTileFrame[];
+  // Stable structural signature (row count + per-row card count) for hysteresis/FLIP animation --
+  // identical in shape to the other engines' own structure keys in this file.
+  topologyKey: string;
+  // Total card rectangle area / usable stage area (excluding only the fixed gaps between cards),
+  // calculated from the actual placed frames -- not assumed to be exactly 1 because of rounding.
+  coverageFraction: number;
+  // Per-key fraction of the source video's own image that a centered object-fit: cover crop cuts
+  // off (see calculateCroppedFraction) -- 0 means no crop, exposed so callers (dev diagnostics,
+  // tests) can measure actual crop severity rather than inferring it from card shape alone.
+  cropFractionByKey: Record<string, number>;
+  worstCropFraction: number;
+  meanCropFraction: number;
+}
+
+export interface FlexibleFillOptions {
+  mode: 'mobile' | 'desktop';
+  gap: number;
+}
+
+// Below this size in either dimension a tile is no longer usably readable (name badge, mute icon,
+// tap target) -- used only to SCORE candidates (steer the search away from tiny slivers), never to
+// reject a layout outright: unlike the other engines, this one must always return a full-coverage
+// result even on a very small/crowded stage (see TOOWIX_PHASE_1_2_FLEXIBLE_FULL_FILL_GALLERY_IMPLEMENTATION.md
+// section 1, "prioritize no overflow ... over impractically tiny 100%-packed cards").
+const FLEX_MIN_READABLE_DIM: Record<'mobile' | 'desktop', number> = { mobile: 64, desktop: 72 };
+// A resulting tile shape beyond this wide/tall is penalized heavily regardless of how well it
+// matches its own preferred ratio -- an unreadable sliver is unreadable even if "on-preference".
+const FLEX_EXTREME_RATIO = 4;
+// Preferred maximum columns in a single row, per mode -- a soft bias (small per-excess-column
+// penalty), not a hard limit: mobile favors 1-3 columns, desktop tolerates many more before this
+// kicks in, matching section 3's "preferences, not immutable column rules".
+const FLEX_PREFERRED_MAX_COLUMNS: Record<'mobile' | 'desktop', number> = { mobile: 3, desktop: 6 };
+// Same 8-12%-style stability margin as the other engines' hysteresis (COLUMN_SWITCH_GAIN,
+// MIXED_ROW_SWITCH_GAIN) -- a competing row count must be meaningfully better, not just
+// infinitesimally better, before the gallery disrupts the current topology.
+const FLEX_TOPOLOGY_SWITCH_GAIN = 0.1;
+
+function safeFlexRatio(ratio: number): number {
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : DEFAULT_CARD_RATIO;
+}
+
+// --- Source-aware crop measurement (TOOWIX_PHASE_3_1_VIDEO_INTEGRITY_SMART_CROPPING.md section 2B) ---
+// `object-fit: cover` preserves pixel PROPORTIONS (never distorts) but is not itself a cropping
+// budget -- a 9:16 source rendered in a 16:9 card is undistorted yet loses 68% of the original
+// image. These two pure functions are the exact formula the plan specifies, used both by the
+// solver's own scoring below and exported for direct unit testing.
+/**
+ * Fraction of the source image's shorter-relative-to-target dimension that remains visible under
+ * a centered `object-fit: cover` crop, given the source's own ratio and the rendered card's ratio.
+ * 1.0 means no crop (ratios match); approaches 0 as the ratios diverge. Safe for invalid input
+ * (returns 0, treated as "fully cropped / not measurable" by callers).
+ */
+export function visibleSourceFraction(sourceRatio: number, cardRatio: number): number {
+  if (!(sourceRatio > 0) || !(cardRatio > 0) || !Number.isFinite(sourceRatio) || !Number.isFinite(cardRatio)) return 0;
+
+  return Math.min(sourceRatio / cardRatio, cardRatio / sourceRatio);
+}
+
+/** 1 - visibleSourceFraction -- the fraction of the original source image a cover-cropped card cuts off. */
+export function calculateCroppedFraction(sourceRatio: number, cardRatio: number): number {
+  return 1 - visibleSourceFraction(sourceRatio, cardRatio);
+}
+
+// Crop budget thresholds (plan section 2B, "initial proposed thresholds -- tune with actual
+// screenshots"): at/below TARGET, no penalty; between TARGET and WARN, a mild penalty that scales
+// with how far past target; beyond WARN, a steep penalty, since this is "unacceptable as normal
+// slight crop" territory (the plan's own 9:16-into-16:9 example, ~68% crop).
+const FLEX_CROP_TARGET = 0.15;
+const FLEX_CROP_WARN = 0.25;
+
+function cropPenaltyFor(croppedFraction: number): number {
+  if (croppedFraction <= FLEX_CROP_TARGET) return 0;
+  if (croppedFraction <= FLEX_CROP_WARN) return (croppedFraction - FLEX_CROP_TARGET) * 20;
+
+  return (FLEX_CROP_WARN - FLEX_CROP_TARGET) * 20 + (croppedFraction - FLEX_CROP_WARN) * 400;
+}
+
+// Same stable, original-order partitioning as the mixed-aspect engine's partitionIntoRows: columns
+// = ceil(count / rows), every row that size except a shorter final row. Reused here (not imported,
+// to keep this section's dependency graph self-contained) under its own name for clarity.
+function partitionFlexRows<T>(cards: T[], rows: number): T[][] {
+  const columns = Math.ceil(cards.length / rows);
+  const partitions: T[][] = [];
+
+  for (let row = 0; row * columns < cards.length; row += 1) {
+    partitions.push(cards.slice(row * columns, Math.min(cards.length, (row + 1) * columns)));
+  }
+
+  return partitions;
+}
+
+interface FlexCandidate {
+  frames: FlexibleTileFrame[];
+  rowSizes: number[];
+  cost: number;
+  coverageFraction: number;
+  cropFractionByKey: Record<string, number>;
+  worstCropFraction: number;
+  meanCropFraction: number;
+}
+
+/**
+ * One candidate: cards partitioned into exactly `rowCount` rows, each row's height and each card's
+ * width solved by the two independent weighted-normalization passes described above. Always
+ * returns a usable result (never null/rejected) -- degenerate inputs (zero/negative stage, zero
+ * total weight) fall back to equal shares rather than failing, since this engine's whole contract
+ * is "always fully tile the stage", unlike the reject-if-too-small engines elsewhere in this file.
+ */
+function flexCandidateForRowCount(
+  tiles: FlexibleTileInput[], rowCount: number, width: number, height: number, gap: number, mode: 'mobile' | 'desktop',
+): FlexCandidate {
+  const rowGroups = partitionFlexRows(tiles, rowCount);
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const availableHeight = Math.max(0, safeHeight - gap * Math.max(0, rowGroups.length - 1));
+  const rowTallnessWeights = rowGroups.map((group) => (
+    group.reduce((sum, card) => sum + 1 / safeFlexRatio(card.preferredRatio), 0)
+  ));
+  const totalTallnessWeight = rowTallnessWeights.reduce((sum, w) => sum + w, 0);
+  const rowHeights = rowTallnessWeights.map((w) => (
+    totalTallnessWeight > 0
+      ? roundHalfPixel((availableHeight * w) / totalTallnessWeight)
+      : roundHalfPixel(availableHeight / rowGroups.length)
+  ));
+
+  const frames: FlexibleTileFrame[] = [];
+  const minReadable = FLEX_MIN_READABLE_DIM[mode];
+  let worstDim = Infinity;
+  let extremeCount = 0;
+  let totalCropPenalty = 0;
+  let worstCropFraction = 0;
+  let cropFractionSum = 0;
+  const cropFractionByKey: Record<string, number> = {};
+  let columnExcessSum = 0;
+  let top = 0;
+  let totalCardArea = 0;
+
+  rowGroups.forEach((group, rowIndex) => {
+    // A half-pixel floor (not 0) on both dimensions -- even a maximally degenerate stage (zero or
+    // negative width/height clamped above, or more rows/columns than the stage has room for) must
+    // still produce a POSITIVE frame for every input tile; a literal 0 would violate "width > 0,
+    // height > 0" and make object-fit/getBoundingClientRect math downstream divide by zero.
+    const rowHeight = Math.max(0.5, rowHeights[rowIndex]);
+    const availableWidth = Math.max(0, safeWidth - gap * Math.max(0, group.length - 1));
+    const widthWeights = group.map((card) => safeFlexRatio(card.preferredRatio));
+    const totalWidthWeight = widthWeights.reduce((sum, w) => sum + w, 0);
+    let left = 0;
+
+    columnExcessSum += Math.max(0, group.length - FLEX_PREFERRED_MAX_COLUMNS[mode]);
+
+    group.forEach((card, columnIndex) => {
+      const rawWidth = totalWidthWeight > 0
+        ? (availableWidth * widthWeights[columnIndex]) / totalWidthWeight
+        : availableWidth / group.length;
+      const cardWidth = Math.max(0.5, roundHalfPixel(rawWidth));
+
+      frames.push({ key: card.key, left: roundHalfPixel(left), top: roundHalfPixel(top), width: cardWidth, height: rowHeight });
+      totalCardArea += cardWidth * rowHeight;
+      worstDim = Math.min(worstDim, cardWidth, rowHeight);
+      if (cardWidth > 0 && rowHeight > 0) {
+        const resultRatio = cardWidth / rowHeight;
+
+        if (resultRatio > FLEX_EXTREME_RATIO || resultRatio < 1 / FLEX_EXTREME_RATIO) extremeCount += 1;
+
+        const cropFraction = calculateCroppedFraction(safeFlexRatio(card.preferredRatio), resultRatio);
+
+        cropFractionByKey[card.key] = cropFraction;
+        totalCropPenalty += cropPenaltyFor(cropFraction);
+        worstCropFraction = Math.max(worstCropFraction, cropFraction);
+        cropFractionSum += cropFraction;
+      } else {
+        extremeCount += 1;
+        cropFractionByKey[card.key] = 1;
+        worstCropFraction = Math.max(worstCropFraction, 1);
+        cropFractionSum += 1;
+      }
+      left += cardWidth + gap;
+    });
+    top += rowHeight + gap;
+  });
+
+  const tinyPenalty = Number.isFinite(worstDim) && worstDim < minReadable
+    ? (minReadable - Math.max(0, worstDim)) / minReadable
+    : 0;
+  const cardCount = Math.max(1, tiles.length);
+  // Ordering per the spec's scoring priorities (section 2B): tiny/extreme tiles are penalized the
+  // most heavily; then the WORST single card's crop (so one severely-cropped portrait participant
+  // is never sacrificed to save a couple of percent of stage area elsewhere); then total/average
+  // crop across all cards; then the soft column-count preference.
+  const cost = tinyPenalty * 1000 + (extremeCount / cardCount) * 500
+    + cropPenaltyFor(worstCropFraction) * 3 + (totalCropPenalty / cardCount) + columnExcessSum * 0.5;
+  const usableStageArea = Math.max(1, safeWidth * safeHeight);
+
+  return {
+    frames, rowSizes: rowGroups.map((g) => g.length), cost, coverageFraction: totalCardArea / usableStageArea,
+    cropFractionByKey, worstCropFraction, meanCropFraction: cropFractionSum / cardCount,
+  };
+}
+
+function toFlexibleFillLayout(candidate: FlexCandidate): FlexibleFillLayout {
+  return {
+    frames: candidate.frames,
+    topologyKey: `flex:${candidate.rowSizes.join(',')}`,
+    coverageFraction: candidate.coverageFraction,
+    cropFractionByKey: candidate.cropFractionByKey,
+    worstCropFraction: candidate.worstCropFraction,
+    meanCropFraction: candidate.meanCropFraction,
+  };
+}
+
+/**
+ * Searches every row count from 1 to N (same brute-force-but-cheap shape as every other search in
+ * this file) and returns both the lowest-cost candidate and the row count that produced it, so
+ * callers that need to hold/re-derive a specific row count (the hysteresis wrapper below) never
+ * have to parse it back out of a topologyKey string.
+ */
+// A stable sort by preferredRatio (ties broken by original index, never randomized) -- grouping
+// same-shaped cards into the same row/column can sharply reduce crop for an alternating mix (e.g.
+// landscape, portrait, landscape, portrait) on a narrow stage, where pairing each landscape card
+// with a portrait partner in the SAME row forces both away from their natural shape. Deterministic
+// (same input always sorts the same way) and does not reorder on irrelevant/noisy changes.
+function sortTilesByRatio(tiles: FlexibleTileInput[]): FlexibleTileInput[] {
+  return tiles
+    .map((tile, index) => ({ tile, index }))
+    .sort((a, b) => safeFlexRatio(a.tile.preferredRatio) - safeFlexRatio(b.tile.preferredRatio) || a.index - b.index)
+    .map(({ tile }) => tile);
+}
+
+// A flat cost added to the grouped-by-ratio candidate so original join/display order is kept
+// UNLESS reordering clearly, meaningfully reduces crop -- "unnecessary participant shuffle" is
+// explicitly one of the plan's own scoring penalties (section 2B); this keeps that bias without
+// ever forbidding a genuinely better arrangement for a mixed-orientation stage.
+const FLEX_REORDER_PENALTY = 3;
+
+/**
+ * The best candidate for ONE row count, trying both the original participant order and a
+ * grouped-by-ratio order, and keeping whichever scores lower (grouped order pays
+ * FLEX_REORDER_PENALTY so it only wins when the crop/shape improvement clearly outweighs the
+ * display-order disruption). Used by both the fresh search below and the hysteresis "held"
+ * recomputation, so a topology held across renders is evaluated the same way it was chosen.
+ */
+function bestCandidateForRowCount(
+  safeTiles: FlexibleTileInput[], rowCount: number, width: number, height: number, gap: number, mode: 'mobile' | 'desktop',
+): FlexCandidate {
+  const original = flexCandidateForRowCount(safeTiles, rowCount, width, height, gap, mode);
+
+  if (rowCount <= 1) return original; // a single row has no alternative grouping to try
+
+  const sortedTiles = sortTilesByRatio(safeTiles);
+  const alreadySorted = sortedTiles.every((tile, index) => tile.key === safeTiles[index].key);
+
+  if (alreadySorted) return original;
+
+  const grouped = flexCandidateForRowCount(sortedTiles, rowCount, width, height, gap, mode);
+  const groupedAdjustedCost = grouped.cost + FLEX_REORDER_PENALTY;
+
+  return groupedAdjustedCost < original.cost - 1e-9 ? { ...grouped, cost: groupedAdjustedCost } : original;
+}
+
+function searchFlexibleFillCandidates(
+  safeTiles: FlexibleTileInput[], width: number, height: number, gap: number, mode: 'mobile' | 'desktop',
+): { rowCount: number; candidate: FlexCandidate } {
+  let best: { rowCount: number; candidate: FlexCandidate } | null = null;
+
+  for (let rowCount = 1; rowCount <= safeTiles.length; rowCount += 1) {
+    const candidate = bestCandidateForRowCount(safeTiles, rowCount, width, height, gap, mode);
+
+    if (!best || candidate.cost < best.candidate.cost - 1e-9) best = { rowCount, candidate };
+  }
+
+  // safeTiles.length >= 1 always, so the loop above always runs at least once and `best` is
+  // always assigned -- this satisfies the type checker without masking a real bug.
+  return best as { rowCount: number; candidate: FlexCandidate };
+}
+
+/**
+ * Best flexible full-fill layout for this exact stage size, with no memory of any previous layout.
+ */
+export function calculateFlexibleFillLayout(
+  tiles: FlexibleTileInput[], width: number, height: number, options: FlexibleFillOptions,
+): FlexibleFillLayout {
+  const safeTiles = tiles.length > 0 ? tiles : [ { key: '__empty__', preferredRatio: DEFAULT_CARD_RATIO } ];
+  const gap = Math.max(0, options.gap);
+
+  return toFlexibleFillLayout(searchFlexibleFillCandidates(safeTiles, width, height, gap, options.mode).candidate);
+}
+
+/**
+ * Stable version: keeps the CURRENT row topology unless a competing one is cheap enough to be
+ * worth the disruption -- same hysteresis role chooseStableLayout/chooseStableMixedAspectLayout
+ * play for the other engines, just comparing this engine's own cost function instead of area.
+ * This engine never rejects a row count outright (every candidate is "valid"), so the held
+ * candidate is always comparable -- there is no "held no longer fits" fallback branch to handle.
+ */
+export function chooseStableFlexibleFillLayout(
+  tiles: FlexibleTileInput[], width: number, height: number, options: FlexibleFillOptions, currentRowCount: number | null,
+): FlexibleFillLayout {
+  const safeTiles = tiles.length > 0 ? tiles : [ { key: '__empty__', preferredRatio: DEFAULT_CARD_RATIO } ];
+  const gap = Math.max(0, options.gap);
+  const { rowCount: bestRowCount, candidate: best } = searchFlexibleFillCandidates(safeTiles, width, height, gap, options.mode);
+
+  if (!currentRowCount || currentRowCount === bestRowCount) return toFlexibleFillLayout(best);
+
+  const held = bestCandidateForRowCount(safeTiles, currentRowCount, width, height, gap, options.mode);
+  const relativeGain = held.cost > 0 ? (held.cost - best.cost) / held.cost : (best.cost < held.cost ? 1 : 0);
+
+  return relativeGain < FLEX_TOPOLOGY_SWITCH_GAIN ? toFlexibleFillLayout(held) : toFlexibleFillLayout(best);
+}
+
+/**
+ * React hook wrapping chooseStableFlexibleFillLayout with the previous row count remembered across
+ * renders, committed in a layout effect for the same StrictMode-safety reason as the other stable-
+ * layout hooks in this file. The hold is discarded when the participant count changes (join/leave
+ * always re-fits at once) but not on a pure ratio change for an existing participant.
+ */
+export function useStableFlexibleFillLayout(
+  tiles: FlexibleTileInput[], width: number, height: number, options: FlexibleFillOptions,
+): FlexibleFillLayout {
+  const committedRef = useRef<{ count: number; rowCount: number } | null>(null);
+  const committed = committedRef.current;
+  const heldRowCount = committed && committed.count === tiles.length ? committed.rowCount : null;
+  const next = chooseStableFlexibleFillLayout(tiles, width, height, options, heldRowCount);
+
+  useLayoutEffect(() => {
+    committedRef.current = { count: tiles.length, rowCount: next.topologyKey.split(':')[1]?.split(',').length ?? 1 };
+  });
+
+  return next;
+}

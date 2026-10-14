@@ -1,7 +1,8 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
+import { computeSmartVideoBoundary, type BoundaryMode } from '../lib/videoBoundary';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 
 export interface ParticipantCardTheme {
@@ -44,6 +45,29 @@ export interface MeetingParticipantCardProps {
   // card knows. Only ever called when adaptiveAspect is true. The card's OWN size is still fully
   // controlled by `style` from the caller; this never resizes itself.
   onAspectRatioChange?: (ratio: number | null) => void;
+  // Gallery View's flexible full-fill layout (TOOWIX_PHASE_1_2_FLEXIBLE_FULL_FILL_GALLERY_IMPLEMENTATION.md)
+  // sizes the outer card from a weighted row/column tessellation rather than the card's own real
+  // ratio -- the card's resulting box is therefore essentially never exactly the source's own
+  // ratio, so letterboxing ('contain') would leave visible blank bars inside the tile. 'flexible-cover'
+  // forces 'cover' regardless of orientation, same as the non-adaptive default, but is a DISTINCT flag
+  // from adaptiveAspect so a flexible-fill caller can keep reporting its real ratio upward (as a
+  // SOLVER PREFERENCE, via onAspectRatioChange/adaptiveAspect) while still always rendering 'cover'.
+  // Defaults to 'adaptive', which preserves the existing adaptiveAspect-driven cover/contain switch.
+  layoutFit?: 'adaptive' | 'flexible-cover';
+  // TOOWIX_SMART_VIDEO_SIDE_BOUNDARIES_IMPLEMENTATION_PLAN.md -- opt-in, Gallery View only. When
+  // 'smart-height' and this card's outer box (cardWidth/cardHeight, the caller's OWN measured
+  // frame -- never remeasured here) is excessively wide relative to the live source's real ratio,
+  // the <video> itself narrows to a centered inner viewport that protects the full source height
+  // (no top/bottom crop, no stretch) instead of being cropped wide by 'cover'. The outer card's own
+  // size/position is never touched by this -- only the video's own width within it. Defaults to
+  // 'none', so every existing non-gallery call site (and gallery cards that don't pass cardWidth/
+  // cardHeight) is unaffected.
+  videoBoundaryMode?: 'none' | 'smart-height';
+  // The caller's own already-measured outer card content dimensions (e.g. a flexible-fill/uniform-
+  // grid cell's frame.width/frame.height) -- required for 'smart-height' to do anything; this
+  // component never installs its own ResizeObserver to re-derive what the caller already knows.
+  cardWidth?: number;
+  cardHeight?: number;
 }
 
 /** Shared visual card used by gallery, pin and presentation participant layouts. */
@@ -51,6 +75,7 @@ export function MeetingParticipantCard({
   participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, theme, style,
   compact = false, mirrored = false, speaking = false, isPinned = false, onPin,
   onDoubleClick, onMute, onVideoElement, adaptiveAspect = false, onAspectRatioChange,
+  layoutFit = 'adaptive', videoBoundaryMode = 'none', cardWidth, cardHeight,
 }: MeetingParticipantCardProps) {
   const initial = (name.trim() || 'P').charAt(0).toUpperCase();
   const size = compact ? 44 : 72;
@@ -68,7 +93,30 @@ export function MeetingParticipantCard({
     adaptiveAspect ? participantId : undefined,
   );
   const hasLiveVideo = videoEnabled && !!stream;
-  const objectFit = adaptiveAspect ? adaptiveObjectFit : 'cover';
+  const objectFit = layoutFit === 'flexible-cover' ? 'cover' : (adaptiveAspect ? adaptiveObjectFit : 'cover');
+
+  // Smart inner video boundary (Gallery View only, opt-in -- see videoBoundaryMode's own doc
+  // comment). `ratio` above is the SAME real, bucketed decoded-video ratio the gallery already
+  // uses as its layout preference -- reused here, not re-derived, per the plan's own "don't
+  // duplicate orientation detection" instruction. Only computed while there's live video to
+  // measure; camera-off (or no cardWidth/cardHeight yet) always falls back to 'normal' mode at the
+  // card's own full width via computeSmartVideoBoundary's own safe-input handling.
+  const boundaryModeRef = useRef<BoundaryMode>('normal');
+  const boundary = videoBoundaryMode === 'smart-height' && hasLiveVideo
+    ? computeSmartVideoBoundary(cardWidth ?? 0, cardHeight ?? 0, ratio, boundaryModeRef.current)
+    : { mode: 'normal' as BoundaryMode, innerWidth: cardWidth ?? 0, leftInset: 0, rightInset: 0 };
+
+  // Committed in a layout effect, not written during render, so a discarded render (StrictMode
+  // double-invoke, concurrent retry) can't corrupt the held hysteresis state -- same pattern every
+  // other stable-topology hook in this codebase uses (see meetingLayout.ts).
+  useLayoutEffect(() => {
+    boundaryModeRef.current = boundary.mode;
+  });
+
+  const videoWidthStyle = boundary.mode === 'height-protected' && boundary.innerWidth > 0
+    ? `${boundary.innerWidth}px`
+    : '100%';
+  const videoObjectFit = boundary.mode === 'height-protected' ? 'contain' : objectFit;
 
   useEffect(() => {
     if (!adaptiveAspect) return;
@@ -113,7 +161,15 @@ export function MeetingParticipantCard({
           playsInline
           muted={participantId === 'local'}
           ref={attachVideo}
-          style={{ width: '100%', height: '100%', objectFit, transform: mirrored ? 'scaleX(-1)' : undefined }}
+          data-video-boundary-mode={videoBoundaryMode === 'smart-height' ? boundary.mode : undefined}
+          data-video-inner-width={videoBoundaryMode === 'smart-height' ? boundary.innerWidth.toFixed(2) : undefined}
+          data-video-left-inset={videoBoundaryMode === 'smart-height' ? boundary.leftInset.toFixed(2) : undefined}
+          data-video-right-inset={videoBoundaryMode === 'smart-height' ? boundary.rightInset.toFixed(2) : undefined}
+          // The outer card div is already `display: flex; justify-content: center`, so a narrower
+          // (height-protected) video centers itself automatically -- no extra wrapper/background
+          // element needed; the outer card's own backgroundColor (theme.tileBg, set above) already
+          // shows through on both sides.
+          style={{ width: videoWidthStyle, height: '100%', objectFit: videoObjectFit, transform: mirrored ? 'scaleX(-1)' : undefined }}
         />
       ) : (
         <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', backgroundColor: theme.tileBg }}>

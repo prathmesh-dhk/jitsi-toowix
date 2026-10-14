@@ -6,3 +6,6 @@ serviceAccountKey.json
 /uploads/
 /tests/
 /src/scripts/
+
+# Scratch audit/report docs -- never tracked in this repo's history.
+/docs/

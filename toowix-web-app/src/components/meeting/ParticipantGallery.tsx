@@ -10,11 +10,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { flushSync } from 'react-dom';
 import {
   calculateCellPositions,
-  calculateMobileAspectAwareLayout,
+  calculateCroppedFraction,
   MOBILE_GALLERY_TILES_PER_PAGE,
+  useStableFlexibleFillLayout,
   useStableMeetingLayout,
-  useStableMixedAspectLayout,
-  type MixedAspectCardInput,
+  type FlexibleTileInput,
 } from '../../lib/meetingLayout';
 import { animateGalleryCell, readVisualFrame } from '../../lib/galleryMotion';
 import { logGalleryDebug } from '../../lib/galleryOrientationDebug';
@@ -207,20 +207,7 @@ export function ParticipantGallery({
     setGalleryPageIndex((page) => Math.min(Math.max(dx < 0 ? page + 1 : page - 1, 0), galleryTotalPages - 1));
   }, [mobileGalleryPaged, galleryTotalPages]);
 
-  const galleryLayout = useStableMeetingLayout({
-    participantCount: galleryCellKeys.length,
-    // Measured from the stage, the exact area the cells are placed in. Zero until the first measurement.
-    width: Math.max(1, galleryStageSize.width),
-    height: Math.max(1, galleryStageSize.height),
-    mode: 'gallery',
-    sidePanelOpen: Boolean(activePanel),
-    gap: GALLERY_GAP,
-    forceColumns: mobileGalleryPaged ? 2 : undefined,
-  });
   const galleryMeasured = galleryStageSize.width > 0 && galleryStageSize.height > 0;
-  const galleryPositions = calculateCellPositions(
-    galleryCellKeys.length, galleryLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
-  );
 
   // Per-participant real video aspect ratio (bucketed, see videoOrientation.ts), reported upward
   // by each MeetingParticipantCard via onAspectRatioChange -- null means "no live video right
@@ -268,59 +255,60 @@ export function ParticipantGallery({
   // portrait/landscape ratio always wins -- cellRatios.get(key) is only null/absent when there is
   // no live video to measure).
   const cameraOffDefaultRatio = galleryCellKeys.length <= 3 ? 16 / 9 : 4 / 3;
-  const mixedAspectCards: MixedAspectCardInput[] = galleryCellKeys.map((key) => ({
+  // Each card's REAL (or count-aware camera-off fallback) ratio, fed into the flexible full-fill
+  // solver as a PREFERENCE only -- see calculateFlexibleFillLayout's own header comment. Screen
+  // shares always prefer 16:9 (their own tile type, never reports a ratio here).
+  const ratioPreferenceCards: FlexibleTileInput[] = galleryCellKeys.map((key) => ({
     key,
-    ratio: key.startsWith('share:') ? 16 / 9 : (cellRatios.get(key) ?? cameraOffDefaultRatio),
+    preferredRatio: key.startsWith('share:') ? 16 / 9 : (cellRatios.get(key) ?? cameraOffDefaultRatio),
   }));
-  const mixedLayout = useStableMixedAspectLayout(
-    mixedAspectCards, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
+  const preferredRatioByKey = new Map(ratioPreferenceCards.map((c) => [ c.key, c.preferredRatio ]));
+
+  // Desktop Gallery View: the flexible full-fill, crop-aware solver (TOOWIX_PHASE_1_2/3.1) --
+  // card shape follows each participant's real source ratio as a scored preference, cropping is
+  // measured and penalized, never a hard-equal grid. Always computed (even on mobile, where it's
+  // unused) because this is a real hook -- its previous-structure ref must persist across renders
+  // regardless of which branch below actually reads its output.
+  const flexLayout = useStableFlexibleFillLayout(
+    ratioPreferenceCards, galleryStageSize.width, galleryStageSize.height,
+    { mode: isMobileGallery ? 'mobile' : 'desktop', gap: GALLERY_GAP },
   );
-  const mixedCellFramesByKey = new Map(mixedLayout.cells.map((cell) => [ cell.key, cell ]));
+  const flexCellFramesByKey = new Map(flexLayout.frames.map((frame) => [ frame.key, frame ]));
 
-  // Mobile 4+ Gallery View: the fixed 2-column/8-per-page pagination itself (above) stays
-  // untouched, but each page's own cell GEOMETRY now comes from the aspect-aware packer instead of
-  // the old uniform crop-to-fill grid (TOOWIX_MOBILE_PORTRAIT_GALLERY_FIX_PLAN.md fixes 1-2): a
-  // real 9:16 portrait stream renders as a genuinely 9:16 outer card, not a square/landscape cell
-  // with the video merely letterboxed inside it. This is a plain pure-function call, not a hook --
-  // no hysteresis is needed here because the row PAIRING is derived only from this page's card
-  // count (ceil(n/2)), never from stage size, so there is no structural ambiguity to hold stable
-  // against the way there is for the general mixed-aspect engine's row-count search; only the
-  // continuous scale factor changes on resize, which is already smooth.
-  const mobileAspectLayout = calculateMobileAspectAwareLayout(
-    mixedAspectCards, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
-  );
-  const mobileAspectFramesByKey = new Map(mobileAspectLayout.cells.map((cell) => [ cell.key, cell ]));
-
-  // Exactly 4 participants (non-mobile-paginated) is a dedicated case: the justified-row mixed-
-  // aspect packer above treats a portrait participant as its own narrow column (or its own tall,
-  // unevenly-sized row), which reads as a lopsided, unstable grid rather than the classic
-  // "balanced 2x2" every 4-person video call is expected to look like. Instead, reuse the
-  // ORIGINAL, already-stable uniform engine (calculateMeetingLayout/calculateCellPositions) to
-  // give all 4 cells one shared, equal size -- it already auto-balances between 16:9 and 4:3 for
-  // whatever uses the stage best, it's never literally forcing 16:9. A portrait participant's
-  // video still shows in full (never cropped/distorted): MeetingParticipantCard's own
-  // adaptiveObjectFit switches to 'contain' for a portrait source regardless of the outer cell's
-  // own shape, so the video letterboxes neatly inside its equal-sized 2x2 cell instead of the cell
-  // itself being reshaped around it. This dedicated case is unaffected by the mobile aspect-aware
-  // packer above, which only ever applies while mobileGalleryPaged is true.
-  const useUniformFourGrid = !mobileGalleryPaged && galleryCellKeys.length === 4;
-  const cellFrames = galleryCellKeys.map((key, index) => {
-    if (mobileGalleryPaged) {
-      return mobileAspectFramesByKey.get(key)
-        ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
-    }
-    if (useUniformFourGrid) {
-      return { key, ...galleryPositions[index], width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
-    }
-
-    return mixedCellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: galleryLayout.cardWidth, height: galleryLayout.cardHeight };
+  // Mobile Gallery View: EQUAL-SIZE cards (the original, already-stable uniform grid engine --
+  // calculateMeetingLayout/calculateCellPositions, the same one this app used before the flexible
+  // full-fill work). Product decision: on a narrow phone screen, the flexible solver's per-card
+  // weighted shapes produced visibly uneven columns/rows (one card much wider than its neighbor,
+  // rows of mismatched height) that read as broken rather than intentional -- confirmed from real
+  // screenshots. A uniform grid with every cell the same size, video filling it via
+  // layoutFit="flexible-cover", reads as a normal, predictable gallery instead. `forceColumns: 2`
+  // is kept for the paginated 4+ case specifically (see calculateMeetingLayout's own comment: an
+  // unconstrained area-maximizing search can legitimately pick ONE full-width column on a narrow
+  // viewport, which is the single-column "stacking" bug this prevents); 1-3 participants keep the
+  // existing unconstrained auto-fit search.
+  const uniformLayout = useStableMeetingLayout({
+    participantCount: galleryCellKeys.length,
+    width: Math.max(1, galleryStageSize.width),
+    height: Math.max(1, galleryStageSize.height),
+    mode: 'gallery',
+    sidePanelOpen: Boolean(activePanel),
+    gap: GALLERY_GAP,
+    forceColumns: mobileGalleryPaged ? 2 : undefined,
   });
-  const cellFramesByKey = new Map(cellFrames.map((frame) => [ frame.key, frame ]));
-  const galleryStructureKey = mobileGalleryPaged
-    ? `mobile-aspect:${safeGalleryPageIndex}:${mobileAspectLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`
-    : useUniformFourGrid
-      ? `uniform4:${galleryLayout.columns}x${galleryLayout.rows}:${galleryLayout.ratio}`
-      : `mixed:${mixedLayout.rows}:${mixedAspectCards.map((c) => `${c.key}@${c.ratio.toFixed(3)}`).join(',')}`;
+  const uniformPositions = calculateCellPositions(
+    galleryCellKeys.length, uniformLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,
+  );
+  const uniformCellFramesByKey = new Map(galleryCellKeys.map((key, index) => (
+    [ key, { key, ...uniformPositions[index], width: uniformLayout.cardWidth, height: uniformLayout.cardHeight } ]
+  )));
+
+  const cellFramesByKey = isMobileGallery ? uniformCellFramesByKey : flexCellFramesByKey;
+  const cellFrames = galleryCellKeys.map((key) => (
+    cellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: 0, height: 0 }
+  ));
+  const galleryStructureKey = isMobileGallery
+    ? `mobile-uniform:${safeGalleryPageIndex}:${uniformLayout.columns}x${uniformLayout.rows}:${uniformLayout.ratio}`
+    : `desktop-flex:${flexLayout.topologyKey}:${ratioPreferenceCards.map((c) => `${c.key}@${c.preferredRatio.toFixed(3)}`).join(',')}`;
 
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- logs the exact ratio map the gallery
   // is working from and which layout path/engine was selected, only when that structure actually
@@ -330,15 +318,25 @@ export function ParticipantGallery({
   useEffect(() => {
     if (galleryStructureKey === debugLoggedStructureRef.current) return;
     debugLoggedStructureRef.current = galleryStructureKey;
+    // Crop stats computed from the ACTUALLY rendered frames (not flexLayout's own numbers, which
+    // reflect an engine that mobile doesn't use) so this diagnostic is accurate for both modes.
+    const renderedCropFractionByKey = Object.fromEntries(cellFrames.map((frame) => [
+      frame.key,
+      calculateCroppedFraction(preferredRatioByKey.get(frame.key) ?? 0, frame.width / Math.max(1, frame.height)),
+    ]));
+    const renderedCropFractions = Object.values(renderedCropFractionByKey);
+
     logGalleryDebug('gallery layout selection', {
-      viewMode: mobileGalleryPaged ? 'mobile-paginated-aspect-aware-grid' : useUniformFourGrid ? 'four-participant-uniform-2x2' : 'gallery-mixed-aspect',
+      viewMode: isMobileGallery ? 'mobile-uniform-grid' : 'desktop-flex-fill',
       cellRatios: Object.fromEntries(cellRatios),
       cameraOffDefaultRatio,
-      mixedAspectCards,
+      ratioPreferenceCards,
+      cropFractionByKey: renderedCropFractionByKey,
+      worstCropFraction: renderedCropFractions.length ? Math.max(...renderedCropFractions) : 0,
       finalCellFrames: cellFrames,
     });
-    // cellFrames/cellRatios/mixedAspectCards are freshly built every render; the dependency that
-    // actually matters is whether the STRUCTURE (key) changed, checked above.
+    // cellFrames/cellRatios/ratioPreferenceCards are freshly built every render; the dependency
+    // that actually matters is whether the STRUCTURE (key) changed, checked above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ galleryStructureKey ]);
 
@@ -419,8 +417,8 @@ export function ParticipantGallery({
     <div
       className="tw-grid"
       data-count={galleryCellKeys.length}
-      data-gallery-layout={`${galleryLayout.columns}x${galleryLayout.rows}`}
-      data-layout-mode={mobileGalleryPaged ? 'mobile-aspect-aware' : useUniformFourGrid ? 'uniform-four' : 'mixed-aspect'}
+      data-gallery-layout={isMobileGallery ? `${uniformLayout.columns}x${uniformLayout.rows}` : flexLayout.topologyKey}
+      data-layout-mode={isMobileGallery ? 'mobile-uniform-grid' : 'desktop-flex-fill'}
       style={{
         width: '100%',
         flex: 1,
@@ -446,14 +444,21 @@ export function ParticipantGallery({
       >
         {galleryMeasured && (() => {
           // Same order as galleryCellKeys. Each cell is a stable keyed wrapper; the card fills it.
+          // `node` is a function of the cell's own FRAME (not a plain JSX element) so the card can
+          // receive its own exact outer width/height as props -- needed for the smart video
+          // boundary feature (videoBoundaryMode="smart-height"), which must know the real card
+          // content size to decide whether the live video should narrow. The frame itself is only
+          // known later (cellFramesByKey, built from whichever layout engine -- uniform grid on
+          // mobile, flexible-fill on desktop -- is active), so card construction is deferred to the
+          // final render pass below instead of happening eagerly here.
           const cells = [
             ...allShares.map((share) => ({
               key: `share:${share.key}`,
-              node: <ScreenShareTile stream={share.stream} label={share.name} />,
+              node: () => <ScreenShareTile stream={share.stream} label={share.name} />,
             })),
             {
               key: 'local',
-              node: (
+              node: (frame: { width: number; height: number }) => (
                 <MeetingParticipantCard
                   participantId="local"
                   name={`${displayName || 'You'} (You)`}
@@ -468,6 +473,10 @@ export function ParticipantGallery({
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
                   adaptiveAspect
+                  layoutFit="flexible-cover"
+                  videoBoundaryMode="smart-height"
+                  cardWidth={frame.width}
+                  cardHeight={frame.height}
                   onAspectRatioChange={(ratio) => setCellRatio('local', ratio)}
                   isPinned={pinnedParticipantId === 'local'}
                   onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
@@ -480,7 +489,7 @@ export function ParticipantGallery({
 
               return {
               key: remoteKey,
-              node: (
+              node: (frame: { width: number; height: number }) => (
                 <MeetingParticipantCard
                   participantId={remote.id}
                   name={remote.name}
@@ -493,6 +502,10 @@ export function ParticipantGallery({
                   speaking={isSpeakingNow(remote.id)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect
+                  layoutFit="flexible-cover"
+                  videoBoundaryMode="smart-height"
+                  cardWidth={frame.width}
+                  cardHeight={frame.height}
                   onAspectRatioChange={(ratio) => setCellRatio(remoteKey, ratio)}
                   isPinned={pinnedParticipantId === remote.id}
                   onPin={() => {
@@ -529,6 +542,9 @@ export function ParticipantGallery({
                 data-gallery-cell={cell.key}
                 data-gallery-cell-key={cell.key}
                 data-video-ratio={(frame.width / Math.max(1, frame.height)).toFixed(4)}
+                data-crop-fraction={calculateCroppedFraction(
+                  preferredRatioByKey.get(cell.key) ?? 0, frame.width / Math.max(1, frame.height),
+                ).toFixed(4)}
                 style={{
                   position: 'absolute',
                   left: `${frame.left}px`,
@@ -538,7 +554,7 @@ export function ParticipantGallery({
                   transformOrigin: 'top left',
                 }}
               >
-                {cell.node}
+                {cell.node(frame)}
               </div>
             );
           });
