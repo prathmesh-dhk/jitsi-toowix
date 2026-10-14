@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation, attemptOrientationCorrection } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
@@ -275,7 +275,12 @@ export function useLibJitsiConference({
             } else {
               localVideoTrackRef.current = track;
               verifyCameraCaptureOrientation(track.getTrack?.());
-              logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh' });
+              // forEach's callback isn't async -- fire-and-forget the same bounded, single
+              // applyConstraints() retry the other acquisition paths use (see
+              // attemptOrientationCorrection's own comment), then log once it resolves.
+              void attemptOrientationCorrection(track.getTrack?.()).then((orientationCorrection) => {
+                logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh', orientationCorrection });
+              });
               if (localVideoElRef.current) {
                 track.attach(localVideoElRef.current);
               }

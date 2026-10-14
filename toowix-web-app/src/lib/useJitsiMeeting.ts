@@ -34,7 +34,8 @@ import {
   NETWORK_STATS_INTERVAL_MS,
   type NetworkState,
   verifyCameraCaptureOrientation,
-  getCameraCaptureDebugInfo
+  getCameraCaptureDebugInfo,
+  attemptOrientationCorrection
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
@@ -434,11 +435,14 @@ async function acquireLocalTracks(
   // acquired -- with one check, right before this result is handed back to the caller. See
   // verifyCameraCaptureOrientation's own comment: reporting only, never a retry/reacquire.
   verifyCameraCaptureOrientation(result.videoTrack?.getTrack?.());
+  // One bounded applyConstraints() retry on the same track when the camera delivered the wrong
+  // orientation despite a correct request -- see attemptOrientationCorrection's own comment.
+  const orientationCorrection = await attemptOrientationCorrection(result.videoTrack?.getTrack?.());
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
-  logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath });
+  logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection });
 
   return result;
 }
@@ -1571,6 +1575,8 @@ export function useJitsiMeeting({
         return;
       }
       verifyCameraCaptureOrientation(newTrack.getTrack?.());
+      const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
+      logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection });
       localVideoTrackRef.current = newTrack;
       setHasVideoTrack(true);
       setLocalCameraStream(trackToStream(newTrack));
@@ -1872,7 +1878,11 @@ export function useJitsiMeeting({
       if (!newTrack) {
         return { success: false };
       }
-      if (!isAudio) verifyCameraCaptureOrientation(newTrack.getTrack?.());
+      if (!isAudio) {
+        verifyCameraCaptureOrientation(newTrack.getTrack?.());
+        const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
+        logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection });
+      }
 
       const enqueuedAt = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
       const runTimed = (op: () => Promise<any>, label: string) => runSerializedRoomOperation(() => {

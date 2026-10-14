@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { attemptOrientationCorrection, getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
@@ -287,8 +287,14 @@ export function useMediaPreview(
         const newTrack = media.getVideoTracks()[0];
         if (!newTrack) throw new Error('No video track returned');
         verifyCameraCaptureOrientation(newTrack);
+        // One bounded, safe corrective attempt (same track, no new permission prompt, no
+        // teardown) when the camera delivered the wrong orientation despite the correct request
+        // -- see attemptOrientationCorrection's own comment for why this can genuinely help on
+        // devices whose camera driver only enumerates landscape-shaped presets.
+        const correction = await attemptOrientationCorrection(newTrack);
+
         logGalleryDebug('local capture settings', {
-          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh'
+          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh', orientationCorrection: correction
         });
 
         // Stop previous video track

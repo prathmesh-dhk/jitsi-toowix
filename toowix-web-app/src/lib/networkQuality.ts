@@ -330,6 +330,102 @@ export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | 
   }
 }
 
+// REAL, confirmed root cause (not a code bug): a phone can correctly REQUEST portrait
+// (requestedOrientation: 'portrait', ideal 1080x1920, aspectRatio ideal 0.5625) and still have its
+// camera driver deliver a landscape frame anyway (observed live: a real device requested portrait
+// and received 1728x972). Many Android camera HALs only enumerate a small set of FIXED,
+// landscape-shaped sensor presets and pick their nearest match by raw pixel AREA alone, never
+// considering a portrait-shaped candidate when the ideal numbers don't exactly match a known
+// preset -- so the ideal/advanced aspectRatio hint is silently ignored.
+//
+// This is the ONE safe, bounded corrective action the plan allows for that case: ask the SAME
+// already-open track (via applyConstraints -- no new getUserMedia call, no permission re-prompt,
+// no stream teardown/replacement) for the TRANSPOSE of what it just actually delivered, instead of
+// repeating the original ideal numbers that already failed. If the device's own camera stack picks
+// presets by area, the transposed numbers describe the exact same area/resolution class it already
+// proved it can deliver -- just asking it to consider the portrait-shaped orientation of that same
+// class, which a pure aspectRatio hint evidently failed to communicate.
+export function getCorrectiveOrientationConstraints(
+    actualWidth: number, actualHeight: number, wantPortrait: boolean,
+): MediaTrackConstraints | null {
+  if (!(actualWidth > 0) || !(actualHeight > 0)) return null;
+
+  const deliveredIsPortrait = actualHeight > actualWidth;
+
+  if (deliveredIsPortrait === wantPortrait) return null; // already matches -- nothing to correct
+
+  const width = actualHeight; // transpose: ask for the mirror of what was actually delivered
+  const height = actualWidth;
+  const aspectRatio = width / height;
+
+  return {
+    width: { ideal: width }, height: { ideal: height }, aspectRatio: { ideal: aspectRatio },
+    advanced: [ { aspectRatio } ],
+  };
+}
+
+export interface OrientationCorrectionResult {
+  attempted: boolean;
+  corrected: boolean;
+  before: { width: number; height: number } | null;
+  after: { width: number; height: number } | null;
+}
+
+// Attempts the correction above EXACTLY ONCE per call -- never loops, never re-prompts for camera
+// permission, never tears down or replaces the track. If applyConstraints throws, is unsupported,
+// or the result still doesn't match, the ORIGINAL working stream is left exactly as it was: a
+// camera that genuinely cannot deliver portrait keeps working, it just stays landscape, and that
+// outcome is reported (not hidden) via the returned result for the caller to log.
+export async function attemptOrientationCorrection(
+    track: MediaStreamTrack | null | undefined,
+): Promise<OrientationCorrectionResult> {
+  const notAttempted: OrientationCorrectionResult = { attempted: false, corrected: false, before: null, after: null };
+
+  if (!track || typeof track.getSettings !== 'function' || typeof track.applyConstraints !== 'function') {
+    return notAttempted;
+  }
+  if (getCameraDeviceCategory() !== 'phone') return notAttempted;
+
+  let settings: MediaTrackSettings;
+
+  try {
+    settings = track.getSettings();
+  } catch {
+    return notAttempted;
+  }
+  const width = Number(settings.width) || 0;
+  const height = Number(settings.height) || 0;
+
+  if (width <= 0 || height <= 0) return notAttempted;
+
+  const wantPortrait = getCameraCaptureOrientationPreference() === 'portrait';
+  const corrective = getCorrectiveOrientationConstraints(width, height, wantPortrait);
+
+  if (!corrective) return notAttempted; // already matches the preference -- nothing to correct
+
+  const before = { width, height };
+
+  try {
+    await track.applyConstraints(corrective);
+  } catch {
+    return { attempted: true, corrected: false, before, after: before };
+  }
+
+  let afterSettings: MediaTrackSettings;
+
+  try {
+    afterSettings = track.getSettings();
+  } catch {
+    return { attempted: true, corrected: false, before, after: null };
+  }
+  const afterWidth = Number(afterSettings.width) || 0;
+  const afterHeight = Number(afterSettings.height) || 0;
+  const after = { width: afterWidth, height: afterHeight };
+  const nowMatches = afterWidth > 0 && afterHeight > 0 && ((afterHeight > afterWidth) === wantPortrait);
+
+  return { attempted: true, corrected: nowMatches, before, after };
+}
+
 // Highest video height this client asks the bridge for, by call size. A one-to-one call can use
 // the whole (large) tile so it may go up to 4K when the sender's camera and the network allow it;
 // as the grid fills the tiles shrink so the request drops. Phones never ask for more than 720p
