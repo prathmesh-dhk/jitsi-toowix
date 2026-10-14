@@ -56,3 +56,4 @@ tests/video-orientation.test.cjs
 tests/virtual-background-hidden-tab-freeze.test.cjs
 tests/mobile-portrait-capture-constraints.test.cjs
 tests/mobile-portrait-effects.test.cjs
+tests/mobile-portrait-transmission-browser.cjs

@@ -37,6 +37,25 @@ export function isGalleryDebugEnabled(): boolean {
   }
 }
 
+// REAL BUG FOUND AND FIXED (not present in the original design, which assumed `?galleryDebug=1`
+// would still be in the URL by the time ANYTHING first called isGalleryDebugEnabled()):
+// MeetingRoomPage.tsx's own meeting-metadata effect strips the ENTIRE query string via
+// history.replaceState on mount (cleaning up an invite/conversation token), and that effect fires
+// before any gallery/debug-consuming component (ParticipantGallery, useJitsiMeeting's capture
+// logging, the on-screen overlay itself) has mounted -- so by the time any real call site first
+// read location.search, `?galleryDebug=1` was already gone, and the flag could only ever work for
+// a browser that ALREADY had `toowix_gallery_debug` saved in localStorage from some earlier,
+// luckier timing. A fresh phone/browser visiting `?galleryDebug=1` for the first time saw nothing,
+// every time, with no error -- reported as "I typed enter, it vanished, nothing showed."
+//
+// Fixed by reading (and, if present, persisting) the flag here, as a MODULE-LEVEL side effect --
+// this file is always statically imported (directly or transitively, by useJitsiMeeting.ts /
+// ParticipantGallery.tsx / MeetingParticipantCard.tsx, all needed to render any meeting route at
+// all) and ES module graphs are fully evaluated before the importing component's own code (let
+// alone its effects) ever runs. This captures the URL flag into localStorage on the very first
+// script evaluation of the page load, strictly before MeetingRoomPage's own effects can strip it.
+void isGalleryDebugEnabled();
+
 // On-screen snapshot store, for reading these same diagnostics on a phone where the console isn't
 // reachable without a USB-tethered remote-debugging session (chrome://inspect / Safari Web
 // Inspector). A plain mutable singleton + subscriber list -- deliberately not Context/Redux/etc,
