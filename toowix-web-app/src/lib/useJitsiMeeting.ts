@@ -37,6 +37,7 @@ import {
   getCameraCaptureDebugInfo,
   attemptOrientationCorrection
 } from './networkQuality';
+import { applyPortraitCropIfNeeded } from './portraitCropProcessor';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 export interface ISharedVideoState {
@@ -438,11 +439,20 @@ async function acquireLocalTracks(
   // One bounded applyConstraints() retry on the same track when the camera delivered the wrong
   // orientation despite a correct request -- see attemptOrientationCorrection's own comment.
   const orientationCorrection = await attemptOrientationCorrection(result.videoTrack?.getTrack?.());
+  // Last resort when the camera driver still delivers landscape despite a correct request AND the
+  // applyConstraints() retry above -- see portraitCropProcessor.ts's own comment for why this is
+  // necessary (confirmed live across 3 browser engines) and what it costs (a real crop).
+  const preCropTrack = result.videoTrack;
+
+  result.videoTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, result.videoTrack);
+  const portraitCropped = result.videoTrack !== preCropTrack;
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
-  logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection });
+  logGalleryDebug('local capture settings', {
+    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection, portraitCropped
+  });
 
   return result;
 }
@@ -1565,7 +1575,7 @@ export function useJitsiMeeting({
       if (!JitsiMeetJS) {
         return;
       }
-      const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
+      let newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
         cameraDeviceId: deviceIdsRef.current.videoDeviceId || undefined,
         constraints: { video: inCallVideoConstraints() }
@@ -1576,7 +1586,12 @@ export function useJitsiMeeting({
       }
       verifyCameraCaptureOrientation(newTrack.getTrack?.());
       const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
-      logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection });
+      const preCropTrack = newTrack;
+
+      newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
+      logGalleryDebug('local capture settings', {
+        ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection, portraitCropped: newTrack !== preCropTrack
+      });
       localVideoTrackRef.current = newTrack;
       setHasVideoTrack(true);
       setLocalCameraStream(trackToStream(newTrack));
@@ -1868,7 +1883,7 @@ export function useJitsiMeeting({
     const switchStart = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
 
     try {
-      const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
+      let newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ isAudio ? 'audio' : 'video' ],
         micDeviceId: isAudio ? deviceId : undefined,
         cameraDeviceId: isAudio ? undefined : deviceId,
@@ -1881,7 +1896,12 @@ export function useJitsiMeeting({
       if (!isAudio) {
         verifyCameraCaptureOrientation(newTrack.getTrack?.());
         const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
-        logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection });
+        const preCropTrack = newTrack;
+
+        newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
+        logGalleryDebug('local capture settings', {
+          ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection, portraitCropped: newTrack !== preCropTrack
+        });
       }
 
       const enqueuedAt = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;

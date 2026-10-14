@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation, attemptOrientationCorrection } from './networkQuality';
+import { applyPortraitCropIfNeeded } from './portraitCropProcessor';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
@@ -273,17 +274,40 @@ export function useLibJitsiConference({
             if (track.getType() === 'audio') {
               localAudioTrackRef.current = track;
             } else {
-              localVideoTrackRef.current = track;
               verifyCameraCaptureOrientation(track.getTrack?.());
-              // forEach's callback isn't async -- fire-and-forget the same bounded, single
-              // applyConstraints() retry the other acquisition paths use (see
-              // attemptOrientationCorrection's own comment), then log once it resolves.
-              void attemptOrientationCorrection(track.getTrack?.()).then((orientationCorrection) => {
-                logGalleryDebug('local capture settings', { ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh', orientationCorrection });
-              });
+              localVideoTrackRef.current = track;
               if (localVideoElRef.current) {
                 track.attach(localVideoElRef.current);
               }
+              // forEach's callback isn't async -- fire-and-forget the same bounded, single
+              // applyConstraints() retry (see attemptOrientationCorrection's own comment) and,
+              // if the camera driver still delivers landscape, the canvas-crop last resort (see
+              // portraitCropProcessor.ts). Re-attaches/re-publishes the DERIVED track once ready.
+              void (async () => {
+                const orientationCorrection = await attemptOrientationCorrection(track.getTrack?.());
+                const croppedTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, track);
+
+                if (croppedTrack !== track) {
+                  localVideoTrackRef.current = croppedTrack;
+                  if (localVideoElRef.current) {
+                    track.detach(localVideoElRef.current);
+                    croppedTrack.attach(localVideoElRef.current);
+                  }
+                  if (roomRef.current) {
+                    try {
+                      await roomRef.current.replaceTrack(track, croppedTrack);
+                    } catch {
+                      // best-effort -- if the room isn't ready to replace yet, the regular
+                      // "publish immediately or once the room is ready" logic below this forEach
+                      // still runs on the ORIGINAL track, which stays a valid (landscape) track.
+                    }
+                  }
+                }
+                logGalleryDebug('local capture settings', {
+                  ...getCameraCaptureDebugInfo(croppedTrack.getTrack?.()), path: 'meet-direct-fresh',
+                  orientationCorrection, portraitCropped: croppedTrack !== track,
+                });
+              })();
             }
 
             // If the room already exists (connection was fast), publish immediately;
