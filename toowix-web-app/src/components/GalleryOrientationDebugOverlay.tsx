@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import {
   getGalleryDebugSnapshot,
   isGalleryDebugEnabled,
@@ -30,8 +30,31 @@ function Row({ label, value }: { label: string; value: unknown }) {
 
 export function GalleryOrientationDebugOverlay() {
   const snapshot = useSyncExternalStore(subscribeGalleryDebugSnapshot, getGalleryDebugSnapshot);
+  // Collapsed by default on every mount -- on a phone this panel can grow tall enough (many
+  // participants, long JSON rows) to cover most of the actual gallery underneath it, which has
+  // been mistaken for "the video isn't rendering" when it's really just hidden behind this panel.
+  // Starts collapsed to a small tappable pill so the real UI is visible by default; tap it to
+  // expand when the diagnostics are actually needed.
+  const [ expanded, setExpanded ] = useState(false);
 
   if (!isGalleryDebugEnabled()) return null;
+
+  if (!expanded) {
+    return (
+      <div
+        onClick={() => setExpanded(true)}
+        style={{
+          position: 'fixed', top: '8px', left: '8px', zIndex: 99999,
+          background: 'rgba(10, 12, 16, 0.88)', color: '#E8EAED',
+          fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: '11px',
+          padding: '6px 10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.25)',
+          pointerEvents: 'auto', cursor: 'pointer',
+        }}
+      >
+        gallery-orientation-debug (tap to expand)
+      </div>
+    );
+  }
 
   return (
     <div
@@ -51,12 +74,17 @@ export function GalleryOrientationDebugOverlay() {
         padding: '8px 10px',
         borderRadius: '8px',
         border: '1px solid rgba(255,255,255,0.25)',
-        pointerEvents: 'none',
+        pointerEvents: 'auto',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
       }}
     >
-      <div style={{ fontWeight: 700, marginBottom: '4px' }}>gallery-orientation-debug</div>
+      <div
+        onClick={() => setExpanded(false)}
+        style={{ fontWeight: 700, marginBottom: '4px', cursor: 'pointer' }}
+      >
+        gallery-orientation-debug (tap to collapse)
+      </div>
 
       <div style={{ marginTop: '4px', opacity: 0.85 }}>-- capture (this device's own camera) --</div>
       {snapshot.captureSettings ? (
