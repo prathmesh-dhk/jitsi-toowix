@@ -9,7 +9,8 @@
 // code, after capture.
 //
 // This draws the real (landscape) camera frame into a <canvas> cropped to a centered, full-height
-// 9:16 slice, then publishes canvas.captureStream() instead of the raw camera track. This is a
+// portrait slice (see TARGET_RATIO below for the exact shape and the tradeoff behind it), then
+// publishes canvas.captureStream() instead of the raw camera track. This is a
 // REAL crop -- it loses the left/right edges of the frame, there is no way to invent portrait
 // field-of-view from pixels a landscape sensor never captured -- but it is the only lever left
 // that actually changes what bytes get encoded and sent, rather than just what the getUserMedia
@@ -28,10 +29,19 @@ export interface PortraitCropHandle {
   outputHeight: number;
 }
 
-// width / height -- matches the 9:16 ideal every phone capture already requests (see
-// getCameraCaptureIdeal in networkQuality.ts), so a successfully-cropped track looks like what the
-// capture was always SUPPOSED to deliver, not an arbitrary new shape.
-const TARGET_RATIO = 9 / 16;
+// width / height. NOT 9/16 -- that was this file's original value and it's what produced the
+// "zoomed in, tiny sliver of a frame" complaint this comment exists to explain. The math is
+// unavoidable: a real phone camera here delivers a landscape ~16:9 (1.78) frame no matter what
+// orientation was requested (see this file's top comment). Cropping that down to a TRUE 9:16
+// (0.5625) shape keeps only ~32% of the original width -- throwing away more than two thirds of
+// the frame, which is what reads as an extreme, tunnel-vision zoom into the face. There is no
+// value that is both "genuinely portrait-shaped" and "keeps most of the frame" -- those two goals
+// are in direct, geometric tension against a landscape source, so this is a deliberate choice of
+// where to sit on that tradeoff, not a bug to "fix away": 4/5 keeps ~45% of the width (vs 9/16's
+// ~32%), a real, visible improvement, while still reading as a taller-than-wide portrait card
+// rather than collapsing toward square. If a wider frame (less crop, less "portrait-looking") is
+// preferred over this, lower this value further is the one knob to turn.
+const TARGET_RATIO = 4 / 5;
 
 // Cheap, DOM-free preconditions only: a phone that wants portrait. Deliberately does NOT look at
 // nativeTrack.getSettings() here -- that was this function's original (and buggy) implementation,
@@ -50,7 +60,7 @@ export function wantsPortraitCapture(nativeTrack: MediaStreamTrack | null | unde
   return getCameraCaptureOrientationPreference() === 'portrait';
 }
 
-// Draws `nativeTrack`'s real frames into a canvas, cropped to the largest centered 9:16 slice the
+// Draws `nativeTrack`'s real frames into a canvas, cropped to the largest centered TARGET_RATIO slice the
 // source can produce (full source height, a centered horizontal slice of it), and returns a track
 // backed by that canvas. Returns null (never throws) when the source turns out to already be
 // portrait-or-square (nothing to crop) OR on any DOM/canvas failure -- callers fall back to the
