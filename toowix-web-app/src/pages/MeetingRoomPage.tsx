@@ -99,7 +99,6 @@ import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/pa
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
-import { PortraitCropNotice } from '../components/PortraitCropNotice';
 import { DocumentPipContent } from '../components/meeting/PictureInPicture';
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
@@ -4566,7 +4565,6 @@ export function MeetingRoomPage() {
 
         <RecordingToast recording={recording} recordingToast={recordingToast} />
         <GalleryOrientationDebugOverlay />
-        <PortraitCropNotice />
 
         {/* 1. SLIM TOP INFORMATION AREA (Left: Logo + Time + Room Code + Info / Right: Participant Pill) */}
         <div
@@ -4972,7 +4970,7 @@ export function MeetingRoomPage() {
                   mirrored
                   style={{ width: '100%', aspectRatio: '1 / 1' }}
                   onVideoElement={setInCallVideoNode}
-                  isPinned={pinnedParticipantId === 'local'}
+                  isPinned={manuallyPinnedRef.current && pinnedParticipantId === 'local'}
                   onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
                 />
                 {false && (
@@ -5096,7 +5094,7 @@ export function MeetingRoomPage() {
                     theme={rTheme}
                     compact
                     style={{ width: '100%', aspectRatio: '1 / 1' }}
-                    isPinned={pinnedParticipantId === remote.id}
+                    isPinned={manuallyPinnedRef.current && pinnedParticipantId === remote.id}
                     onPin={() => { setPinnedManually(pinnedParticipantId === remote.id ? null : remote.id); setTileViewEnabled(false); }}
                   />;
                   if (false) return (
@@ -5675,7 +5673,7 @@ export function MeetingRoomPage() {
                           theme={t}
                           compact
                           style={{ width: '100%', aspectRatio: '1 / 1' }}
-                          isPinned={pinnedParticipantId === p.id}
+                          isPinned={manuallyPinnedRef.current && pinnedParticipantId === p.id}
                           onPin={() => setPinnedManually(pinnedParticipantId === p.id ? null : p.id)}
                           onDoubleClick={() => setPinnedManually(p.id)}
                         />;

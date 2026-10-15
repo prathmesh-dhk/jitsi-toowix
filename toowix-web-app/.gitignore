@@ -57,5 +57,3 @@ tests/virtual-background-hidden-tab-freeze.test.cjs
 tests/mobile-portrait-capture-constraints.test.cjs
 tests/mobile-portrait-effects.test.cjs
 tests/mobile-portrait-transmission-browser.cjs
-tests/portrait-crop-processor.test.cjs
-tests/portrait-crop-notice.test.cjs

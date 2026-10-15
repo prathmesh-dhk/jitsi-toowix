@@ -280,12 +280,15 @@ export function ParticipantGallery({
   // full-fill work). Product decision: on a narrow phone screen, the flexible solver's per-card
   // weighted shapes produced visibly uneven columns/rows (one card much wider than its neighbor,
   // rows of mismatched height) that read as broken rather than intentional -- confirmed from real
-  // screenshots. A uniform grid with every cell the same size, video filling it via
-  // layoutFit="flexible-cover", reads as a normal, predictable gallery instead. `forceColumns: 2`
-  // is kept for the paginated 4+ case specifically (see calculateMeetingLayout's own comment: an
-  // unconstrained area-maximizing search can legitimately pick ONE full-width column on a narrow
-  // viewport, which is the single-column "stacking" bug this prevents); 1-3 participants keep the
-  // existing unconstrained auto-fit search.
+  // screenshots. A uniform grid with every cell the same size reads as a normal, predictable
+  // gallery instead. The VIDEO inside each cell uses layoutFit="contain" (see
+  // MeetingParticipantCard's own comment) -- mobile intentionally stopped trying to force/crop a
+  // phone's camera into any particular shape, so whatever the camera actually delivers is shown
+  // in full, letterboxed if needed, matching stock Jitsi Meet's own behavior rather than cropping
+  // to fill the cell. `forceColumns: 2` is kept for the paginated 4+ case specifically (see
+  // calculateMeetingLayout's own comment: an unconstrained area-maximizing search can legitimately
+  // pick ONE full-width column on a narrow viewport, which is the single-column "stacking" bug
+  // this prevents); 1-3 participants keep the existing unconstrained auto-fit search.
   const uniformLayout = useStableMeetingLayout({
     participantCount: galleryCellKeys.length,
     width: Math.max(1, galleryStageSize.width),
@@ -473,7 +476,7 @@ export function ParticipantGallery({
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
                   adaptiveAspect
-                  layoutFit="flexible-cover"
+                  layoutFit={isMobileGallery ? 'contain' : 'flexible-cover'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}
@@ -502,7 +505,7 @@ export function ParticipantGallery({
                   speaking={isSpeakingNow(remote.id)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect
-                  layoutFit="flexible-cover"
+                  layoutFit={isMobileGallery ? 'contain' : 'flexible-cover'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}

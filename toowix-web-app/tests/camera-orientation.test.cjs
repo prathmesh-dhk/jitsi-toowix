@@ -65,51 +65,52 @@ test('tablet: Android tablet (no "Mobile" token in UA) is "tablet", not "phone"'
   assert.equal(getCameraDeviceCategory(), 'tablet');
 });
 
-test('phone: iPhone UA is "phone" -- prefers portrait capture, not landscape', () => {
+// UPDATED: a live side-by-side test against stock Jitsi Meet's own web client (same device, same
+// browser) showed that swapping width/height and forcing an aspectRatio constraint made no
+// difference to what the camera actually delivered -- mobile portrait capture is now an
+// explicitly out-of-scope problem for this web client (a native app is the planned fix), and the
+// capture request is identical regardless of how the phone is held, matching stock Jitsi's own
+// plain resolution request (no orientation swap, no aspectRatio hint at all).
+test('phone: iPhone UA is "phone" -- requests the same landscape-shaped ideal as a tablet, no orientation swap', () => {
   const { getCameraDeviceCategory, getCameraCaptureIdeal } = load(IPHONE_SAFARI);
 
   assert.equal(getCameraDeviceCategory(), 'phone');
   const ideal = getCameraCaptureIdeal();
 
-  assert.ok(ideal.height > ideal.width, 'phone ideal must be portrait (height > width), matching how someone actually holds a phone for a call');
-  assert.equal(JSON.stringify(ideal), JSON.stringify({ frameRate: 30, height: 1920, width: 1080 }));
+  assert.ok(ideal.width > ideal.height, 'phone ideal is landscape-shaped (width > height), same as desktop/tablet');
+  assert.equal(JSON.stringify(ideal), JSON.stringify({ frameRate: 30, height: 1080, width: 1920 }));
 });
 
-test('phone: Android phone UA (has the "Mobile" token) is "phone", prefers portrait', () => {
+test('phone: Android phone UA (has the "Mobile" token) is "phone", same ideal regardless of orientation', () => {
   const { getCameraDeviceCategory, getCameraCaptureIdeal } = load(ANDROID_PHONE);
 
   assert.equal(getCameraDeviceCategory(), 'phone');
-  assert.ok(getCameraCaptureIdeal().height > getCameraCaptureIdeal().width);
+  assert.ok(getCameraCaptureIdeal().width > getCameraCaptureIdeal().height);
 });
 
-test('phone and tablet keep the SAME total pixel count as before this fix (only reoriented, never reduced)', () => {
+test('phone and tablet request the literal SAME ideal (not just the same pixel count) -- device category only, no orientation distinction', () => {
   const phoneIdeal = load(IPHONE_SAFARI).getCameraCaptureIdeal();
   const tabletIdeal = load(IPAD_SAFARI_LEGACY).getCameraCaptureIdeal();
 
-  assert.equal(phoneIdeal.width * phoneIdeal.height, 1080 * 1920);
-  assert.equal(tabletIdeal.width * tabletIdeal.height, 1920 * 1080);
+  assert.equal(phoneIdeal.width, tabletIdeal.width);
+  assert.equal(phoneIdeal.height, tabletIdeal.height);
 });
 
-test('constraints: desktop/tablet request a 16:9 aspect ratio, phone requests 9:16', () => {
+test('constraints: desktop, tablet and phone all request a plain resolution -- no aspectRatio or advanced field at all', () => {
   const desktop = load(DESKTOP_CHROME_MAC).getPreferredCameraCaptureConstraints();
   const tablet = load(IPAD_SAFARI_LEGACY).getPreferredCameraCaptureConstraints();
   const phone = load(IPHONE_SAFARI).getPreferredCameraCaptureConstraints();
 
-  assert.equal(desktop.aspectRatio.ideal, 16 / 9);
-  assert.equal(tablet.aspectRatio.ideal, 16 / 9);
-  assert.equal(phone.aspectRatio.ideal, 9 / 16);
+  for (const constraints of [ desktop, tablet, phone ]) {
+    assert.equal(constraints.aspectRatio, undefined);
+    assert.equal(constraints.advanced, undefined);
+  }
 });
 
-test('constraints: the aspectRatio preference is NEVER a bare/mandatory constraint -- only "ideal" and "advanced", so an unsupported resolution can never throw OverconstrainedError over it', () => {
+test('constraints: width/height/frameRate stay "ideal"-only, so an unsupported resolution can never throw OverconstrainedError over it', () => {
   const { getPreferredCameraCaptureConstraints } = load(DESKTOP_CHROME_MAC);
   const constraints = getPreferredCameraCaptureConstraints();
 
-  assert.equal(typeof constraints.aspectRatio, 'object', 'aspectRatio must be an object ({ ideal: ... }), never a bare number (which getUserMedia treats as a hard requirement)');
-  assert.ok('ideal' in constraints.aspectRatio);
-  assert.ok(Array.isArray(constraints.advanced), 'advanced must be an array -- the UA tries each entry and silently skips any it cannot satisfy, never failing the whole request');
-  assert.equal(constraints.advanced.length, 1);
-  // width/height/frameRate must likewise stay "ideal"-only -- a camera that only offers lower
-  // resolutions (an "unsupported" request) must still return SOME track, not OverconstrainedError.
   assert.ok('ideal' in constraints.width);
   assert.ok('ideal' in constraints.height);
   assert.ok('ideal' in constraints.frameRate);
@@ -117,15 +118,12 @@ test('constraints: the aspectRatio preference is NEVER a bare/mandatory constrai
   assert.equal(Object.keys(constraints.height).length, 1, 'height must carry no min/max/exact alongside ideal that could make the request fail');
 });
 
-test('constraints: the ideal width/height and the ideal/advanced aspectRatio always agree with each other (no internally-contradictory request)', () => {
+test('constraints: the SAME request is sent regardless of device category -- only the resolution tier (phone/tablet vs desktop) differs', () => {
   for (const nav of [ DESKTOP_CHROME_MAC, IPAD_SAFARI_LEGACY, IPHONE_SAFARI ]) {
     const { getPreferredCameraCaptureConstraints } = load(nav);
     const c = getPreferredCameraCaptureConstraints();
-    const widthOverHeight = c.width.ideal > c.height.ideal;
-    const aspectOverOne = c.aspectRatio.ideal > 1;
 
-    assert.equal(widthOverHeight, aspectOverOne, `width/height orientation must match the requested aspectRatio for UA "${nav.userAgent}"`);
-    assert.equal(c.advanced[0].aspectRatio, c.aspectRatio.ideal, 'the advanced fallback must request the SAME ratio as the ideal, not a second, possibly-different number');
+    assert.deepEqual(Object.keys(c).sort(), [ 'frameRate', 'height', 'width' ], `UA "${nav.userAgent}" must request only width/height/frameRate`);
   }
 });
 

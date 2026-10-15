@@ -29,27 +29,35 @@ assert.match(
     /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{/,
     'the single shared camera constraint builder must live in networkQuality.ts'
 );
-// UPDATED: a later fix (mobile portrait capture/transmission report) found that always
-// hard-requesting portrait for a phone was itself wrong -- a phone held SIDEWAYS should request
-// landscape, not fight the way it's actually being held. getCameraCaptureOrientationPreference()
-// reads the real screen/orientation signal (falling back to portrait when unavailable, preserving
-// this test's original desktop/tablet-landscape, phone-portrait-by-default intent). The underlying
-// guarantee this test exists to protect -- desktop/tablet always request landscape, a phone's
-// request follows its actual orientation -- still holds; only the phone branch got smarter.
+// UPDATED AGAIN: a live side-by-side test against stock Jitsi Meet's own web client (same
+// device, same browser) found that orientation-aware width/height swapping and an aspectRatio
+// constraint made no difference to what a phone's camera actually delivered -- mobile portrait
+// capture is now an explicitly out-of-scope problem for this web client (a native app is the
+// planned fix). getPreferredCameraCaptureConstraints() no longer branches on orientation at all,
+// for ANY device category -- the same plain resolution request goes out every time, matching
+// stock Jitsi's own request. getCameraCaptureOrientationPreference() still exists (used only for
+// the diagnostic console warning in verifyCameraCaptureOrientation), but no longer drives what
+// gets requested.
 assert.match(
     networkQuality,
-    /const aspectRatio = getCameraCaptureOrientationPreference\(\) === 'portrait' \? 9 \/ 16 : 16 \/ 9;/,
-    'in-call video must explicitly request a landscape aspect ratio on desktop/tablet, matching the lobby preview -- and the real current orientation on phone'
+    /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{\s*\n\s*const ideal = getCameraCaptureIdeal\(\);/,
+    'in-call video must delegate to getCameraCaptureIdeal() alone -- no separate orientation-based aspectRatio logic'
 );
+{
+  const start = networkQuality.indexOf('export function getPreferredCameraCaptureConstraints');
+  const end = networkQuality.indexOf('export function', start + 1);
+  const functionBody = networkQuality.slice(start, end === -1 ? undefined : end);
+
+  assert.doesNotMatch(
+      functionBody,
+      /aspectRatio|advanced/,
+      'getPreferredCameraCaptureConstraints must not add an aspectRatio or advanced field -- a plain resolution request only'
+  );
+}
 assert.match(
     networkQuality,
     /export function getCameraCaptureOrientationPreference\(\): CameraCaptureOrientation \{/,
-    'desktop/tablet must still be hardcoded to landscape -- only a phone has a real orientation-dependent preference'
-);
-assert.match(
-    networkQuality,
-    /if \(getCameraDeviceCategory\(\) !== 'phone'\) return 'landscape';/,
-    'desktop/tablet must never consult screen/orientation APIs -- they always prefer landscape, unconditionally'
+    'the orientation-preference function still exists for diagnostics (verifyCameraCaptureOrientation\'s warning), even though it no longer drives the capture request'
 );
 
 // All three places a video track is acquired during/after a call must pass the constraint, not
@@ -61,6 +69,6 @@ const videoAcquisitionSites = (source.match(/devices: \[ 'video' \]/g) || []).le
 const constraintUses = (source.match(/\{ video: inCallVideoConstraints\(\) \}/g) || []).length;
 
 assert.equal(videoAcquisitionSites, 3, 'test assumption check: expected exactly 3 call sites that can acquire a video track (initial join, ended-camera recovery, switchDevice) -- update this test if that count genuinely changed');
-assert.equal(constraintUses, videoAcquisitionSites, 'every call site that can acquire a video track must pass the landscape constraint, not just some of them');
+assert.equal(constraintUses, videoAcquisitionSites, 'every call site that can acquire a video track must pass the shared constraint builder, not just some of them');
 
-console.log('PASS in-call video acquisition explicitly requests landscape, matching the lobby preview, at every acquisition site');
+console.log('PASS in-call video acquisition uses the one shared, orientation-agnostic constraint builder, matching the lobby preview, at every acquisition site');

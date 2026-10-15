@@ -52,8 +52,13 @@ export interface MeetingParticipantCardProps {
   // forces 'cover' regardless of orientation, same as the non-adaptive default, but is a DISTINCT flag
   // from adaptiveAspect so a flexible-fill caller can keep reporting its real ratio upward (as a
   // SOLVER PREFERENCE, via onAspectRatioChange/adaptiveAspect) while still always rendering 'cover'.
+  // 'contain' unconditionally shows the WHOLE decoded frame, letterboxed if needed, never cropped
+  // -- used for the mobile gallery, which intentionally stopped trying to force/crop a phone's
+  // camera into a portrait shape (see networkQuality.ts's getCameraCaptureIdeal and
+  // portraitCropProcessor.ts's own removal): whatever shape the camera delivers is shown as-is,
+  // matching stock Jitsi Meet's own behavior, with zero cropping rather than a best-effort crop.
   // Defaults to 'adaptive', which preserves the existing adaptiveAspect-driven cover/contain switch.
-  layoutFit?: 'adaptive' | 'flexible-cover';
+  layoutFit?: 'adaptive' | 'flexible-cover' | 'contain';
   // TOOWIX_SMART_VIDEO_SIDE_BOUNDARIES_IMPLEMENTATION_PLAN.md -- opt-in, Gallery View only. When
   // 'smart-height' and this card's outer box (cardWidth/cardHeight, the caller's OWN measured
   // frame -- never remeasured here) is excessively wide relative to the live source's real ratio,
@@ -93,7 +98,11 @@ export function MeetingParticipantCard({
     adaptiveAspect ? participantId : undefined,
   );
   const hasLiveVideo = videoEnabled && !!stream;
-  const objectFit = layoutFit === 'flexible-cover' ? 'cover' : (adaptiveAspect ? adaptiveObjectFit : 'cover');
+  const objectFit = layoutFit === 'flexible-cover'
+    ? 'cover'
+    : layoutFit === 'contain'
+      ? 'contain'
+      : (adaptiveAspect ? adaptiveObjectFit : 'cover');
 
   // Smart inner video boundary (Gallery View only, opt-in -- see videoBoundaryMode's own doc
   // comment). `ratio` above is the SAME real, bucketed decoded-video ratio the gallery already

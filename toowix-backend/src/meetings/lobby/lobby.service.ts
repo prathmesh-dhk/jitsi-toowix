@@ -431,7 +431,22 @@ export async function endForEveryone(
 ): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
   if (!meeting) {
-    return { body: { error: 'Meeting not found' }, httpStatus: 404 };
+    // Ad-hoc rooms (instant-*/twx-*, e.g. the homepage's free instant meeting) never get a
+    // persisted Meeting document -- see admitToRoom/requestEntry's identical prefix check --
+    // so there's nothing here to look up or check ownership against. The "End for everyone"
+    // button is only ever shown client-side to Jitsi's own live moderator role for these rooms
+    // (admitToRoom's `moderator` flag is always false with no Meeting doc), so just honour the
+    // request instead of 404ing on every attempt to end one of these meetings.
+    if (!room.startsWith('instant-') && !room.startsWith('twx-')) {
+      return { body: { error: 'Meeting not found' }, httpStatus: 404 };
+    }
+    endedMeetingSlugs.set(room, reason);
+    invalidateLiveStatusCache(room);
+    publishLobbyEvent(room, {
+      type: 'LOBBY_ENDED',
+      payload: { message: 'This meeting was ended by the host', reason }
+    });
+    return { body: { success: true, message: 'Meeting ended for everyone', endedAt: new Date(), reason }, httpStatus: 200 };
   }
   if (!(await isHostUser(firebaseUid, meeting))) {
     return { body: { error: 'Only the meeting host can end the meeting for everyone' }, httpStatus: 403 };
@@ -672,6 +687,16 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
     // client runs every 3s -- see reactivateMeetingForConversation's own comment.
     if (params.fromConversation && meeting) {
       await reactivateMeetingForConversation(room);
+    } else {
+      // Real reported bug: rejoining an ad-hoc room (instant-*/twx-*, no persisted Meeting
+      // document) after a previous "end for everyone" let the join through here -- `ended`
+      // above is only ever computed from a Meeting document's endedAt, and there is none for
+      // these rooms -- but left the in-memory endedMeetingSlugs entry from that earlier end in
+      // place. The rejoining client's own live-status poll then read it a few seconds later and
+      // kicked the participant right back out. We're about to actually admit this join, so any
+      // stale "ended" opinion recorded for this room no longer applies.
+      endedMeetingSlugs.delete(room);
+      invalidateLiveStatusCache(room);
     }
     const identity = {
       id: user ? String(user._id) : crypto.randomUUID(),

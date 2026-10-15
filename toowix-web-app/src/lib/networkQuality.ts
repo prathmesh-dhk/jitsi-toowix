@@ -204,62 +204,42 @@ export function getCameraCaptureOrientationPreference(): CameraCaptureOrientatio
 // Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
 // so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
 // SENT is still capped by what the other participants ask the bridge for (see
-// getReceiveMaxHeightForCallSize) and by the bandwidth estimate. Phones and tablets stay at 1080p
-// (same total pixel count as before, just reoriented for a phone) to keep the encoder, battery
-// and heat in check.
+// getReceiveMaxHeightForCallSize) and by the bandwidth estimate.
+//
+// Deliberately NOT orientation-aware: an earlier version of this function swapped width/height
+// and added an `aspectRatio`/`advanced` constraint to try to force a phone into portrait capture.
+// A live side-by-side test against stock Jitsi Meet's own web client (same device, same browser)
+// showed it makes no difference to what the camera actually delivers -- and stock Jitsi's own
+// request is exactly this: a plain resolution ask, no orientation forcing, no aspectRatio hint at
+// all (confirmed by reading its actual deployed source). Whatever shape the camera delivers is
+// now just displayed as-is (see MeetingParticipantCard's objectFit handling); a phone's own
+// native app is the planned path for a genuinely forced portrait capture, not this web client.
 export function getCameraCaptureIdeal(): { frameRate: number; height: number; width: number } {
   const category = getCameraDeviceCategory();
 
-  if (category === 'phone') {
-    return getCameraCaptureOrientationPreference() === 'portrait'
-      ? { frameRate: 30, height: 1920, width: 1080 }
-      : { frameRate: 30, height: 1080, width: 1920 };
-  }
-
-  return category === 'tablet'
-    ? { frameRate: 30, height: 1080, width: 1920 }
-    : { frameRate: 30, height: 2160, width: 3840 };
+  return category === 'desktop'
+    ? { frameRate: 30, height: 2160, width: 3840 }
+    : { frameRate: 30, height: 1080, width: 1920 };
 }
 
-// A bare `aspectRatio: { ideal }` is only ONE input into the browser's overall constraint scoring
-// (width, height, frameRate and aspectRatio all get weighed together), so a driver that heavily
-// favors matching the requested width/height can still settle on the wrong-shaped mode despite
-// the aspectRatio preference losing that tug-of-war. `advanced` constraint sets are the part of
-// the getUserMedia spec built exactly for "try hard to satisfy this, but never fail the whole
-// request over it": the UA attempts each advanced set in order and silently skips any entry it
-// cannot satisfy, instead of throwing OverconstrainedError the way a bare non-ideal aspectRatio
-// would for a camera that genuinely cannot do the requested shape.
-//
 // The single shared constraint object every camera-capture call site (lobby preview, initial
 // join, rejoin/device-switch, ended-camera recovery, and the separate /meet-direct route) should
 // spread into its own getUserMedia/createLocalTracks call, alongside whatever deviceId constraint
-// that call site already has. Centralizing this is what the first-join/rejoin divergence above
-// was missing.
+// that call site already has.
 export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
   const ideal = getCameraCaptureIdeal();
-  const aspectRatio = getCameraCaptureOrientationPreference() === 'portrait' ? 9 / 16 : 16 / 9;
 
   return {
     width: { ideal: ideal.width },
     height: { ideal: ideal.height },
     frameRate: { ideal: ideal.frameRate },
-    aspectRatio: { ideal: aspectRatio },
-    advanced: [ { aspectRatio } ]
   };
 }
 
-// A lower-cost retry for preview acquisition.  It deliberately uses the same authoritative
-// orientation decision as the first attempt; previously this retry was always 1280x720 and could
-// become the adopted first-call track after a portrait request failed.
+// A lower-cost retry for preview acquisition.
 export function getFallbackCameraCaptureConstraints(): MediaTrackConstraints {
-  const portrait = getCameraCaptureOrientationPreference() === 'portrait';
-  const width = portrait ? 720 : 1280;
-  const height = portrait ? 1280 : 720;
-  const aspectRatio = width / height;
-
   return {
-    width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 },
-    aspectRatio: { ideal: aspectRatio }, advanced: [ { aspectRatio } ]
+    width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
   };
 }
 
@@ -324,135 +304,10 @@ export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | 
   if (width > 0 && height > 0 && width > height) {
     console.warn(
         '[Camera] This phone/browser delivered a LANDSCAPE camera stream ' +
-      `(${width}x${height}) despite requesting portrait capture -- the camera driver or browser ` +
-      'does not honor the portrait aspect-ratio preference on this device. Using the stream as-is.'
+      `(${width}x${height}) while the device is held in portrait -- the camera driver or browser ` +
+      'does not honor portrait capture on this device. Using the stream as-is (uncropped).'
     );
   }
-}
-
-// REAL, confirmed root cause (not a code bug): a phone can correctly REQUEST portrait
-// (requestedOrientation: 'portrait', ideal 1080x1920, aspectRatio ideal 0.5625) and still have its
-// camera driver deliver a landscape frame anyway (observed live: a real device requested portrait
-// and received 1728x972). Many Android camera HALs only enumerate a small set of FIXED,
-// landscape-shaped sensor presets and pick their nearest match by raw pixel AREA alone, never
-// considering a portrait-shaped candidate when the ideal numbers don't exactly match a known
-// preset -- so the ideal/advanced aspectRatio hint is silently ignored.
-//
-// This is the ONE safe, bounded corrective action the plan allows for that case: ask the SAME
-// already-open track (via applyConstraints -- no new getUserMedia call, no permission re-prompt,
-// no stream teardown/replacement) for the TRANSPOSE of what it just actually delivered, instead of
-// repeating the original ideal numbers that already failed. If the device's own camera stack picks
-// presets by area, the transposed numbers describe the exact same area/resolution class it already
-// proved it can deliver -- just asking it to consider the portrait-shaped orientation of that same
-// class, which a pure aspectRatio hint evidently failed to communicate.
-// Optional third argument: the SAME track's own declared capability ranges (MediaTrackCapabilities
-// -- Android Chrome exposes these via track.getCapabilities(); Safari/iOS and some other browsers
-// return an empty object or don't implement it at all, so this is a best-effort refinement, not a
-// requirement). When present, the naive transpose below is clamped into the camera's OWN declared
-// min/max width/height range instead of asked for blind -- a genuine "investigate what this camera
-// supports" step, rather than guessing and hoping the browser silently coerces an out-of-range ask
-// into something reasonable.
-export function getCorrectiveOrientationConstraints(
-    actualWidth: number, actualHeight: number, wantPortrait: boolean,
-    capabilities?: { width?: { min?: number; max?: number }; height?: { min?: number; max?: number } } | null,
-): MediaTrackConstraints | null {
-  if (!(actualWidth > 0) || !(actualHeight > 0)) return null;
-
-  const deliveredIsPortrait = actualHeight > actualWidth;
-
-  if (deliveredIsPortrait === wantPortrait) return null; // already matches -- nothing to correct
-
-  let width = actualHeight; // transpose: ask for the mirror of what was actually delivered
-  let height = actualWidth;
-
-  const widthCap = capabilities?.width;
-  const heightCap = capabilities?.height;
-
-  if (widthCap && typeof widthCap.min === 'number' && typeof widthCap.max === 'number') {
-    width = Math.min(Math.max(width, widthCap.min), widthCap.max);
-  }
-  if (heightCap && typeof heightCap.min === 'number' && typeof heightCap.max === 'number') {
-    height = Math.min(Math.max(height, heightCap.min), heightCap.max);
-  }
-
-  const aspectRatio = width / height;
-
-  return {
-    width: { ideal: width }, height: { ideal: height }, aspectRatio: { ideal: aspectRatio },
-    advanced: [ { aspectRatio } ],
-  };
-}
-
-export interface OrientationCorrectionResult {
-  attempted: boolean;
-  corrected: boolean;
-  before: { width: number; height: number } | null;
-  after: { width: number; height: number } | null;
-}
-
-// Attempts the correction above EXACTLY ONCE per call -- never loops, never re-prompts for camera
-// permission, never tears down or replaces the track. If applyConstraints throws, is unsupported,
-// or the result still doesn't match, the ORIGINAL working stream is left exactly as it was: a
-// camera that genuinely cannot deliver portrait keeps working, it just stays landscape, and that
-// outcome is reported (not hidden) via the returned result for the caller to log.
-export async function attemptOrientationCorrection(
-    track: MediaStreamTrack | null | undefined,
-): Promise<OrientationCorrectionResult> {
-  const notAttempted: OrientationCorrectionResult = { attempted: false, corrected: false, before: null, after: null };
-
-  if (!track || typeof track.getSettings !== 'function' || typeof track.applyConstraints !== 'function') {
-    return notAttempted;
-  }
-  if (getCameraDeviceCategory() !== 'phone') return notAttempted;
-
-  let settings: MediaTrackSettings;
-
-  try {
-    settings = track.getSettings();
-  } catch {
-    return notAttempted;
-  }
-  const width = Number(settings.width) || 0;
-  const height = Number(settings.height) || 0;
-
-  if (width <= 0 || height <= 0) return notAttempted;
-
-  const wantPortrait = getCameraCaptureOrientationPreference() === 'portrait';
-  // Best-effort only -- getCapabilities() is well-supported on Android Chrome/Brave but commonly
-  // empty or unimplemented on iOS Safari; getCorrectiveOrientationConstraints treats a missing
-  // range as "no clamp" and falls back to the plain transpose, so this is safe either way.
-  let capabilities: MediaTrackCapabilities | null = null;
-
-  try {
-    capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : null;
-  } catch {
-    capabilities = null;
-  }
-  const corrective = getCorrectiveOrientationConstraints(width, height, wantPortrait, capabilities);
-
-  if (!corrective) return notAttempted; // already matches the preference -- nothing to correct
-
-  const before = { width, height };
-
-  try {
-    await track.applyConstraints(corrective);
-  } catch {
-    return { attempted: true, corrected: false, before, after: before };
-  }
-
-  let afterSettings: MediaTrackSettings;
-
-  try {
-    afterSettings = track.getSettings();
-  } catch {
-    return { attempted: true, corrected: false, before, after: null };
-  }
-  const afterWidth = Number(afterSettings.width) || 0;
-  const afterHeight = Number(afterSettings.height) || 0;
-  const after = { width: afterWidth, height: afterHeight };
-  const nowMatches = afterWidth > 0 && afterHeight > 0 && ((afterHeight > afterWidth) === wantPortrait);
-
-  return { attempted: true, corrected: nowMatches, before, after };
 }
 
 // Highest video height this client asks the bridge for, by call size. A one-to-one call can use

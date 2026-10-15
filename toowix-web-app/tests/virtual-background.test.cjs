@@ -11,7 +11,7 @@ const ts = require('typescript');
 // segmenter's segmentForVideo() behaviour for MediaPipe-engine tests (maskWidth/maskHeight/
 // values/throwOnSegment/noMask); `v1Fallback` configures what _fallBackToV1's on-demand TFLite
 // load resolves/rejects with.
-function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaPipe = {}, v1Fallback = {}, onGiveUp = null } = {}) {
+function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaPipe = {}, v1Fallback = {}, onGiveUp = null, isMobileDevice: isMobileDeviceFlag = false } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/virtualBackground/JitsiStreamBackgroundEffect.ts'), 'utf8');
   // vm.runInNewContext runs this as a plain (non-module) script, where `import.meta` is a syntax
   // error regardless of guards around it -- Vite itself statically replaces import.meta.env.PROD
@@ -121,9 +121,37 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
 
   const exports = {};
 
+  // Phase 2 (Virtual Background & PiP Performance Audit): mocks src/lib/virtualBackground/
+  // backgroundImageCache.ts. A real cache hit resolves synchronously (as the real module's
+  // getCachedBackgroundImage does); anything else stays pending until a test explicitly calls
+  // s.resolveImageLoad(src)/s.rejectImageLoad(src), the same "control the async boundary by hand"
+  // pattern the MediaPipe segmenter mock above already uses for its own async-shaped calls.
+  const imageCache = new Map(); // src -> ready <img> mock
+  const pendingImageLoads = new Map(); // src -> { promise, resolve, reject }
+  let imageDecodeStarts = 0;
+
+  function makeReadyImageMock(src) {
+    const img = document.createElement('img');
+
+    img.src = src;
+
+    return img;
+  }
+
+  // Phase 4: the stall watchdog's setInterval is deliberately NOT a real recurring timer in this
+  // harness -- a real 4s-recurring interval per `setup()` call would leak across hundreds of test
+  // invocations in the same process and could keep `node --test` from ever exiting. Tests that
+  // need to exercise the watchdog's own logic call s.effect._checkForStall() directly instead
+  // (same "control the async/timed boundary by hand" pattern the image-cache mock above and the
+  // governor's fake-clock tests already use) -- nothing in this file relies on it actually firing
+  // on a real wall-clock schedule.
+  let fakeIntervalHandle = 1;
+
   vm.runInNewContext(code, {
-    exports, document, window, console: { warn: (...args) => warnings.push(args), info() {} },
+    exports, document, window, console: { warn: (...args) => warnings.push(args), debug() {}, info() {} },
     setTimeout, clearTimeout,
+    setInterval: () => fakeIntervalHandle++,
+    clearInterval: () => {},
     // The SAME Date reference as the host realm (not vm's own) -- so a test's `Date.now = () =>
     // fakeNow` monkeypatch on the host's Date actually affects code running inside this vm
     // context too. Without this, vm.runInNewContext's own separate Date class means the patch
@@ -132,7 +160,13 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     Date,
     require: (id) => {
       if (id === './mediaPipeSegmentation') {
-        return { getNextMediaPipeTimestamp: () => ++mediaPipeTimestampCounter, readMediaPipeSegSizeOverride: () => null };
+        return {
+          getNextMediaPipeTimestamp: () => ++mediaPipeTimestampCounter, readMediaPipeSegSizeOverride: () => null,
+          // Desktop by default, matching every pre-existing test's assumption (document.hidden
+          // also defaults to false here) -- the Phase 1 hidden-tab-freeze fix scopes the
+          // document.hidden check to mobile only, so this must be a real function, not undefined.
+          isMobileDevice: () => isMobileDeviceFlag
+        };
       }
       if (id === './backgroundDebugTools') {
         // Real math (needed if a test explicitly flips the flags below to exercise the debug
@@ -150,6 +184,47 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
             return { average: sum / sorted.length, max: sorted[sorted.length - 1], min: sorted[0], p95: sorted[p95Index] };
           },
           roundTo1Decimal: (value) => Math.round(value * 10) / 10
+        };
+      }
+      if (id === './backgroundImageCache') {
+        return {
+          getCachedBackgroundImage: (src) => imageCache.get(src) || null,
+          preloadBackgroundImage: (src) => {
+            if (!src) return Promise.reject(new Error('No background image source provided'));
+
+            const cached = imageCache.get(src);
+
+            if (cached) return Promise.resolve(cached);
+
+            const existing = pendingImageLoads.get(src);
+
+            if (existing) return existing.promise;
+
+            imageDecodeStarts++;
+            let resolveFn;
+            let rejectFn;
+            const promise = new Promise((resolve, reject) => {
+              resolveFn = resolve;
+              rejectFn = reject;
+            });
+
+            pendingImageLoads.set(src, {
+              promise,
+              resolve: () => {
+                const img = makeReadyImageMock(src);
+
+                imageCache.set(src, img);
+                pendingImageLoads.delete(src);
+                resolveFn(img);
+              },
+              reject: (error) => {
+                pendingImageLoads.delete(src);
+                rejectFn(error instanceof Error ? error : new Error(String(error)));
+              }
+            });
+
+            return promise;
+          }
         };
       }
 
@@ -172,8 +247,32 @@ function setup(filter = true, { width = 640, height = 360, engine = 'v1', mediaP
     setMaskDebug: (v) => { maskDebugFlag = v; },
     setOverlayDebug: (v) => { overlayDebugFlag = v; },
     // Fires the currently-pending requestVideoFrameCallback, simulating a new camera frame.
-    triggerVideoFrame: () => { if (rvfcCallback) rvfcCallback(); }
+    triggerVideoFrame: () => { if (rvfcCallback) rvfcCallback(); },
+    // Phase 2 background-image-cache mock controls (see the './backgroundImageCache' require()
+    // case above) -- let a test decide exactly when a pending "decode" finishes/fails, the same
+    // way the MediaPipe segmenter mock is configured up front rather than actually timing anything.
+    seedImageCache: (src) => { imageCache.set(src, makeReadyImageMock(src)); },
+    hasPendingImageLoad: (src) => pendingImageLoads.has(src),
+    resolveImageLoad: (src) => {
+      const pending = pendingImageLoads.get(src);
+
+      if (!pending) throw new Error(`No pending image load for ${src} -- did preloadBackgroundImage ever get called with this exact src?`);
+      pending.resolve();
+    },
+    rejectImageLoad: (src, message) => {
+      const pending = pendingImageLoads.get(src);
+
+      if (!pending) throw new Error(`No pending image load for ${src} -- did preloadBackgroundImage ever get called with this exact src?`);
+      pending.reject(new Error(message || 'simulated image load failure'));
+    },
+    getImageDecodeStarts: () => imageDecodeStarts
   };
+}
+
+// Flushes microtasks so a test can observe the result of a .then()/.catch() chain (e.g.
+// setVirtualBackground's preloadBackgroundImage(...).then(...)) without any real async timing.
+function flushMicrotasks() {
+  return new Promise((resolve) => { setTimeout(resolve, 0); });
 }
 
 test('resumes on foreground and camera unmute; removes listeners on stop without stopping camera', () => {
@@ -195,7 +294,7 @@ test('resumes on foreground and camera unmute; removes listeners on stop without
   assert.equal(s.video.srcObject, null);
 });
 
-test('does not segment suspended, muted, disabled, or ended camera frames', () => {
+test('does not segment muted, disabled, or ended camera frames (every platform)', () => {
   const s = setup();
   let frames = 0;
   s.effect.resizeSource = () => frames++;
@@ -204,9 +303,6 @@ test('does not segment suspended, muted, disabled, or ended camera frames', () =
   s.track.muted = true;
   s.effect._renderMask();
   s.track.muted = false;
-  s.document.hidden = true;
-  s.effect._renderMask();
-  s.document.hidden = false;
   s.track.enabled = false;
   s.effect._renderMask();
   s.track.enabled = true;
@@ -216,6 +312,44 @@ test('does not segment suspended, muted, disabled, or ended camera frames', () =
   s.track.readyState = 'live';
   s.effect._renderMask();
   assert.equal(frames, 1);
+});
+
+// Phase 1 fix (Virtual Background & PiP Performance Audit): the blanket `document.hidden` stop
+// condition froze segmentation/compositing on EVERY platform whenever the main/opener tab was
+// hidden -- but since that canvas's captureStream() feeds both PiP and the real outgoing WebRTC
+// video, this froze what other participants saw too, on desktop browsers where a hidden tab does
+// not actually stop the camera from delivering real new frames. The fix scopes the document.hidden
+// stop condition to isMobileDevice() only, preserving the original (real, documented) mobile OS
+// camera-suspension protection while letting desktop keep processing live frames in the
+// background.
+test('desktop: a hidden tab alone does NOT stop processing -- only a genuinely muted/disabled/ended track does', () => {
+  const s = setup(true, { isMobileDevice: false });
+  let frames = 0;
+
+  s.effect.resizeSource = () => frames++;
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.document.hidden = true;
+  s.effect._renderMask();
+  assert.equal(frames, 1, 'a hidden tab must not block processing on desktop -- freezing here would also freeze PiP and the outgoing WebRTC video for every other participant');
+  s.track.muted = true;
+  s.effect._renderMask();
+  assert.equal(frames, 1, 'a genuinely muted track must still stop processing on desktop, hidden tab or not');
+});
+
+test('mobile: a hidden tab still stops processing, preserving the original OS camera-suspension protection', () => {
+  const s = setup(true, { isMobileDevice: true });
+  let frames = 0;
+
+  s.effect.resizeSource = () => frames++;
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.document.hidden = true;
+  s.effect._renderMask();
+  assert.equal(frames, 0, 'mobile devices keep the original protection against real OS-level camera suspension while backgrounded');
+  s.document.hidden = false;
+  s.effect._renderMask();
+  assert.equal(frames, 1, 'once visible again, mobile processing resumes normally');
 });
 
 test('uses background-only blur fallback without Canvas2D.filter', () => {
@@ -892,15 +1026,146 @@ test('setVirtualBackground: updates config in place without touching engine/gove
   assert.equal(s.effect._perfFpsCap, 15);
 });
 
-test('setVirtualBackground: switching to an image background creates/updates _virtualImage; switching away clears its src', () => {
+// ---------------------------------------------------------------------------------------------
+// Phase 2 (Virtual Background & PiP Performance Audit, section 9): the one real cost left behind
+// by the Phase-2-predecessor (2026-09-30) in-place-reuse fix above -- switching TO a not-yet-
+// decoded image background used to flip _options.virtualBackground to IMAGE immediately, and
+// _renderMask()'s own readiness gate then skipped every frame until that specific image finished
+// loading. setVirtualBackground() now routes every image switch through the shared
+// backgroundImageCache module (mocked above) and never touches _options.virtualBackground/
+// _virtualImage until the replacement is ACTUALLY ready -- so the effect keeps rendering whatever
+// was active a moment ago the entire time a new image is loading.
+// ---------------------------------------------------------------------------------------------
+
+test('Phase 2: switching between two already-cached (preloaded) backgrounds applies instantly, no pending state', () => {
   const s = setup(true, { engine: 'v1' });
 
+  s.seedImageCache('/images/one.jpg');
+  s.seedImageCache('/images/two.jpg');
   s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'image', 'a cache hit must apply synchronously, not asynchronously');
   assert.equal(s.effect._virtualImage.src.endsWith('/images/one.jpg'), true);
   s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/two.jpg' });
   assert.equal(s.effect._virtualImage.src.endsWith('/images/two.jpg'), true);
+  assert.equal(s.getImageDecodeStarts(), 0, 'both images were pre-seeded as already decoded -- no real decode should ever have been started');
+});
+
+test('Phase 2: switching to an image that has not been decoded yet keeps the OLD background active (blur) until it resolves', async () => {
+  const s = setup(true, { engine: 'v1' });
+
   s.effect.setVirtualBackground({ backgroundType: 'blur', blurValue: 25 });
-  assert.equal(s.effect._virtualImage.hasAttribute('src'), false);
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  // Not resolved yet -- must still be rendering the blur that was active before this call, not a
+  // half-applied image config and not a frozen frame.
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'blur', 'must keep the PREVIOUS background config active while the new image decodes');
+  assert.equal(s.effect._options.virtualBackground.blurValue, 25);
+  assert.ok(s.hasPendingImageLoad('/images/one.jpg'));
+
+  s.resolveImageLoad('/images/one.jpg');
+  await flushMicrotasks();
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'image', 'once decoded, the config swaps to the new image');
+  assert.equal(s.effect._virtualImage.src.endsWith('/images/one.jpg'), true);
+});
+
+test('Phase 2: a pending image load does not stop frames from rendering in the meantime (old background keeps compositing)', () => {
+  const s = setup(true, { engine: 'v1' });
+  let frames = 0;
+
+  s.effect.resizeSource = () => frames++;
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  s.effect._renderMask();
+  assert.equal(frames, 1, 'a frame must still be produced (using whatever was active before) while the new image is mid-decode, not skipped');
+});
+
+test('Phase 2: rapid image A -> image B selection -- the newest selection wins, the stale A completion is discarded', async () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/a.jpg' });
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/b.jpg' });
+  s.resolveImageLoad('/images/a.jpg'); // the OLDER request finishes first (realistic: smaller/cached file)
+  await flushMicrotasks();
+  assert.notEqual(s.effect._virtualImageSrc, '/images/a.jpg', 'a superseded selection must never overwrite a newer one, even if it resolves first');
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'blur', 'B has not resolved yet -- the effect must still be on whatever was active before A/B were ever selected');
+
+  s.resolveImageLoad('/images/b.jpg');
+  await flushMicrotasks();
+  assert.equal(s.effect._virtualImage.src.endsWith('/images/b.jpg'), true);
+  assert.equal(s.effect._options.virtualBackground.virtualSource, '/images/b.jpg');
+});
+
+test('Phase 2: switching to blur WHILE an image is still loading discards that pending load cleanly', async () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  s.effect.setVirtualBackground({ backgroundType: 'blur', blurValue: 8 });
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'blur', 'blur must apply immediately -- it never needs to wait on anything');
+  s.resolveImageLoad('/images/one.jpg'); // the now-irrelevant image finishes decoding moments later
+  await flushMicrotasks();
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'blur', 'a late image completion must not pull the effect back onto an image the user already moved away from');
+});
+
+test('Phase 2: a failed image load does not break the active camera/meeting -- previous background stays active and a warning is logged', async () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.setVirtualBackground({ backgroundType: 'blur', blurValue: 25 });
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/broken.jpg' });
+  s.rejectImageLoad('/images/broken.jpg', 'simulated 404');
+  await flushMicrotasks();
+  assert.equal(s.effect._options.virtualBackground.backgroundType, 'blur', 'the background active before the failed switch must remain active');
+  assert.equal(s.effect._options.virtualBackground.blurValue, 25);
+  assert.equal(s.warnings.length, 1);
+  let frames = 0;
+
+  s.effect.resizeSource = () => frames++;
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.effect._renderMask();
+  assert.equal(frames, 1, 'the camera/effect must keep producing frames after a failed image load, not freeze or throw');
+});
+
+test('Phase 2: re-selecting the exact image that is already active and applied is a pure no-op (no re-decode)', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.seedImageCache('/images/one.jpg');
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  const imageRefBefore = s.effect._virtualImage;
+
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.equal(s.effect._virtualImage, imageRefBefore, 'must not swap to a different (even if equivalent) image object for a no-op re-selection');
+  assert.equal(s.getImageDecodeStarts(), 0, 'the already-active image must not be re-decoded just because it was selected again');
+});
+
+test('Phase 2: stopEffect while an image load is still pending does not throw and does not apply after cleanup', async () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.doesNotThrow(() => s.effect.stopEffect());
+  assert.doesNotThrow(() => s.resolveImageLoad('/images/one.jpg'), 'a load resolving after teardown must not throw even though the effect is already stopped');
+  await flushMicrotasks();
+});
+
+test('Phase 2: no unnecessary segmentation-engine recreation across an image switch (same engine/governor instance the whole time)', () => {
+  const s = setup(true, { engine: 'v1' });
+  const engineBefore = s.effect._engine;
+  const modelBefore = s.effect._model;
+
+  s.seedImageCache('/images/one.jpg');
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.equal(s.effect._engine, engineBefore);
+  assert.equal(s.effect._model, modelBefore, 'the same V1 model instance must still be in use -- no new effect/engine was created for this switch');
+});
+
+test('Phase 2: camera track is unchanged by an image switch -- no Jitsi replaceTrack/captureStream restart', () => {
+  const s = setup(true, { engine: 'v1' });
+  const sourceTrackBefore = s.effect._sourceTrack;
+  const outputCanvasBefore = s.effect._outputCanvasElement;
+
+  s.seedImageCache('/images/one.jpg');
+  s.effect.setVirtualBackground({ backgroundType: 'image', virtualSource: '/images/one.jpg' });
+  assert.equal(s.effect._sourceTrack, sourceTrackBefore);
+  assert.equal(s.effect._outputCanvasElement, outputCanvasBefore, 'the same output canvas (and therefore the same captureStream() track already handed to Jitsi/PiP) must keep being drawn into');
 });
 
 test('MediaPipe engine: a successful frame updates the mask and always closes it', () => {
@@ -1195,6 +1460,24 @@ test('window.__bgBench: rejects when no effect is active', async () => {
   await assert.rejects(() => s.window.__bgBench ? s.window.__bgBench(1) : Promise.reject(new Error('not registered')));
 });
 
+test('Phase 4: window.__bgFrameStatus reports frame-age/camera-input/stall-recovery diagnostics for the active effect, and an error object when none is active', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.effect._renderMask();
+  const status = s.window.__bgFrameStatus();
+
+  assert.equal(typeof status.frameAgeMs, 'number');
+  assert.equal(typeof status.cameraInputFrameCount, 'number');
+  assert.equal(typeof status.totalFrameCount, 'number');
+  assert.equal(status.stallWatchdogRecoveries, 0);
+
+  s.effect.stopEffect();
+  assert.ok(s.window.__bgFrameStatus().error, 'must report an error object (not throw) once no effect is active, same shape as __bgBench\'s own rejection');
+});
+
 test('runBenchmark: collects per-frame samples for the requested duration and returns min/average/p95/max plus fps', async () => {
   const s = setup(true, { engine: 'v1' });
 
@@ -1300,6 +1583,190 @@ test('Phase 2c: getTotalFrameCount is monotonic and does not reset across runBen
   // monotonic counter -- it only ever goes up.
   s.effect._renderMask();
   assert.equal(s.effect.getTotalFrameCount(), before + 3);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase 3 (Virtual Background & PiP Performance Audit, section 3's own instrumentation gaps +
+// section 6's canvas-compositing audit): adds the missing camera-input-vs-segmentation FPS split
+// and frame-age/staleness measurement, and removes three confirmed (by reading the code, not by
+// live profiling) redundant per-frame costs -- a MediaStreamTrack.getSettings() call made twice
+// every frame for a fallback value that is, in practice, never actually used once the camera is
+// live; a fresh canvas.getContext('2d') call every frame for a canvas that already has one; and a
+// full mask-sized typed-array allocation every MediaPipe frame where a reused scratch buffer works
+// identically. None of these change what gets drawn -- see 'Phase 2b SAFETY: the normal draw path
+// is byte-for-byte identical' above, which still passes unchanged after these edits.
+// ---------------------------------------------------------------------------------------------
+
+test('Phase 3: getCameraInputFrameCount counts every triggered video frame, even ones the governor-cadence gate skips', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+
+  const inputBefore = s.effect.getCameraInputFrameCount();
+  const renderedBefore = s.effect.getTotalFrameCount();
+
+  // Two frame callbacks fired back-to-back, real wall-clock time apart by far less than the
+  // governor's own cadence gate (tens of ms at the bottom tier) -- the second one must still be
+  // COUNTED as a real camera frame even though _nextTickDelayMs() causes _renderMask() itself to
+  // skip actually rendering it.
+  s.triggerVideoFrame();
+  s.triggerVideoFrame();
+
+  assert.equal(s.effect.getCameraInputFrameCount(), inputBefore + 2, 'every genuinely new camera frame must be counted, regardless of the governor');
+  assert.ok(s.effect.getTotalFrameCount() < renderedBefore + 2, 'the second frame must actually have been skipped by the cadence gate for this test to be meaningful');
+});
+
+test('Phase 3: getFrameAgeMs is 0 before any successful render, and a small non-negative number right after one', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  assert.equal(s.effect.getFrameAgeMs(), 0, 'nothing has ever been successfully composited yet');
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.effect._renderMask();
+  const age = s.effect.getFrameAgeMs();
+
+  assert.ok(age >= 0 && age < 1000, `expected a small age right after rendering, got ${age}ms`);
+});
+
+test('Phase 3: getFrameAgeMs does NOT advance on a frame that failed segmentation (output canvas genuinely did not get newer)', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { throwOnSegment: true } });
+
+  s.effect._renderMask();
+  assert.equal(s.effect.getFrameAgeMs(), 0, 'a failed-segmentation frame must not count as a successful render -- see _renderMask\'s own skip-compositing-on-failure comment');
+});
+
+test('Phase 3: _lastOverlayMetrics exposes the new cameraInputFps/segmentationFps/frameAgeMs diagnostics (audit section 11 gap)', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu' });
+
+  s.setOverlayDebug(true);
+  s.effect._renderMask();
+  assert.ok(s.effect._lastOverlayMetrics);
+  assert.equal(typeof s.effect._lastOverlayMetrics.cameraInputFps, 'number');
+  assert.equal(typeof s.effect._lastOverlayMetrics.segmentationFps, 'number');
+  assert.equal(typeof s.effect._lastOverlayMetrics.frameAgeMs, 'number');
+});
+
+test('Phase 3: runPostProcessing/_captureSourceFrame do not call track.getSettings() when the video element already reports real dimensions', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  let getSettingsCalls = 0;
+  const realGetSettings = s.track.getSettings.bind(s.track);
+
+  s.track.getSettings = (...args) => { getSettingsCalls++; return realGetSettings(...args); };
+  s.effect._renderMask();
+  s.effect._renderMask();
+  assert.equal(getSettingsCalls, 0, 'the mock video element always reports real videoWidth/videoHeight (like a live camera), so getSettings() is pure fallback and must never be reached on this path');
+});
+
+test('Phase 3: runPostProcessing falls back to track.getSettings() when the video element has no dimensions yet', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  // startEffect() already set .width/.height (the actual <video> element attributes, read FIRST
+  // by runPostProcessing via sourceFrame.width/height) to the real native size -- all four
+  // dimension sources must be cleared to actually force the getSettings() fallback.
+  s.video.videoWidth = 0;
+  s.video.videoHeight = 0;
+  s.video.width = 0;
+  s.video.height = 0;
+  let getSettingsCalls = 0;
+  const realGetSettings = s.track.getSettings.bind(s.track);
+
+  s.track.getSettings = (...args) => { getSettingsCalls++; return realGetSettings(...args); };
+  // Call directly (bypassing the normal readyState>=2 gate this scenario couldn't reach through
+  // _renderMask in practice) to prove the fallback itself still works correctly when needed.
+  s.effect.runPostProcessing();
+  assert.ok(getSettingsCalls >= 1, 'the fallback must still actually run when there is no other source of the camera dimensions');
+});
+
+test('Phase 3: the blur-branch canvas context is cached (same object) across frames, not re-fetched via getContext every time', () => {
+  const s = setup(true, { engine: 'v1' }); // default background is blur (see setup's own constructor call)
+
+  s.effect.runPostProcessing();
+  const ctxAfterFirst = s.effect._blurCanvasCtx;
+
+  assert.ok(ctxAfterFirst, 'must have cached a context after the first blur-path render');
+  s.effect.runPostProcessing();
+  assert.equal(s.effect._blurCanvasCtx, ctxAfterFirst, 'the SAME context object must still be in use on a later frame');
+});
+
+test('Phase 3: _fillSpatialHoles reuses its scratch buffer across frames of the same mask size (no new allocation)', () => {
+  const s = setup(true, { engine: 'mediapipe-cpu', mediaPipe: { maskWidth: 4, maskHeight: 3 } });
+
+  s.effect._renderMask();
+  const scratchAfterFirst = s.effect._fillSpatialHolesScratch;
+
+  assert.ok(scratchAfterFirst, 'a scratch buffer must exist after the first MediaPipe frame (which calls _fillSpatialHoles via _blendMaskValues)');
+  s.effect._renderMask();
+  assert.equal(s.effect._fillSpatialHolesScratch, scratchAfterFirst, 'the SAME Uint8ClampedArray must be reused for a frame at the same mask size, not reallocated');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase 4 (Virtual Background & PiP Performance Audit): the stall watchdog -- an independent
+// timer that detects the requestVideoFrameCallback loop silently failing to reschedule itself (a
+// rare but real edge case this codebase had no way to notice before), using the Phase 3
+// _cameraInputFrameCount counter as its signal. The real setInterval/clearInterval are mocked as
+// harmless no-ops in this harness (see the './backgroundImageCache'-adjacent comment above the vm
+// context construction) -- these tests call s.effect._checkForStall() directly instead of waiting
+// on a real 4-second timer, the same "control the timed boundary by hand" approach already used
+// for the governor's fake-clock tests and the image-cache mock's manual resolve/reject.
+// ---------------------------------------------------------------------------------------------
+
+test('Phase 4: stall watchdog re-registers the frame loop when no new camera frame arrived since the last check', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  // Establish a baseline at the CURRENT camera input count (as _startStallWatchdog does at
+  // startEffect time), then simulate a full watchdog interval passing with NO new camera frames.
+  s.effect._watchdogLastCameraInputFrameCount = s.effect.getCameraInputFrameCount();
+  const handleBefore = s.effect._rvfcHandle;
+
+  assert.equal(s.effect._watchdogRecoveryCount, 0);
+  s.effect._checkForStall();
+  assert.equal(s.effect._watchdogRecoveryCount, 1, 'a stall (no camera input progress) must be detected and a recovery attempted');
+  assert.notEqual(s.effect._rvfcHandle, handleBefore, 'the frame callback must actually have been re-registered (a new handle), not just silently left alone');
+});
+
+test('Phase 4: stall watchdog does nothing when camera frames ARE still arriving', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect.resizeSource = () => {};
+  s.effect.runInference = () => {};
+  s.effect.runPostProcessing = () => {};
+  s.effect._watchdogLastCameraInputFrameCount = s.effect.getCameraInputFrameCount();
+  s.triggerVideoFrame(); // a real new camera frame arrives before the next watchdog check
+  const handleBefore = s.effect._rvfcHandle;
+
+  s.effect._checkForStall();
+  assert.equal(s.effect._watchdogRecoveryCount, 0, 'no recovery should be attempted -- the loop is demonstrably still working');
+  assert.equal(s.effect._rvfcHandle, handleBefore, 'the frame callback must not be needlessly re-registered when nothing is actually wrong');
+});
+
+test('Phase 4: stall watchdog is inert once the effect has given up or been stopped', () => {
+  const s = setup(true, { engine: 'v1' });
+
+  s.effect._watchdogLastCameraInputFrameCount = s.effect.getCameraInputFrameCount();
+  s.effect.stopEffect();
+  assert.doesNotThrow(() => s.effect._checkForStall());
+  assert.equal(s.effect._watchdogRecoveryCount, 0, 'a deliberately stopped effect is not a stall -- the watchdog must not try to resurrect it');
+});
+
+test('Phase 4: _startStallWatchdog is idempotent across repeated startEffect() calls on the same instance (no leaked intervals)', () => {
+  const s = setup(true, { engine: 'v1' });
+  const handleAfterFirstStart = s.effect._watchdogIntervalHandle;
+
+  assert.ok(handleAfterFirstStart !== null);
+  // A device switch mid-call re-runs startEffect() on this SAME instance (see useJitsiMeeting.ts's
+  // applyVirtualBackgroundToTrack) -- must not leave the previous interval running underneath a
+  // second one.
+  s.effect.startEffect({ getVideoTracks: () => [ s.track ] });
+  assert.ok(s.effect._watchdogIntervalHandle !== null, 'a fresh interval must exist after the second startEffect() call');
 });
 
 test('MediaPipe is fed the model-native fixed 256x144 canvas, not a raw camera frame', () => {

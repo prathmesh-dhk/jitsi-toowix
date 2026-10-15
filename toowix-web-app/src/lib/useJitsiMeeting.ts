@@ -35,11 +35,7 @@ import {
   type NetworkState,
   verifyCameraCaptureOrientation,
   getCameraCaptureDebugInfo,
-  attemptOrientationCorrection,
-  getCameraDeviceCategory
 } from './networkQuality';
-import { applyPortraitCropIfNeeded } from './portraitCropProcessor';
-import { reportPortraitCropped } from './portraitCropNotice';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 export interface ISharedVideoState {
@@ -421,32 +417,11 @@ async function acquireLocalTracks(
 
   if (!result.videoTrack) {
     try {
-      // REAL FOUND CAUSE (not a hardware limitation after all -- see the live side-by-side test
-      // against stock Jitsi Meet's own web client on the same device, which gets correct portrait
-      // with NO explicit deviceId): lib-jitsi-meet's own camera-constraint builder only sets
-      // facingMode (the higher-level "front/back camera" selector that goes through the OS's
-      // logical-camera abstraction, which is what applies correct sensor-rotation handling on
-      // multi-lens Android phones) when NO deviceId is given at all --
-      // `t.cameraDeviceId ? {deviceId:{exact}} : isMobile && {facingMode}`. Every call site here
-      // was resolving and passing an EXPLICIT deviceId unconditionally (via
-      // resolveExplicitDeviceId's own enumerate-and-pick-first fallback), even when the person
-      // never chose a specific camera -- which silently skipped the facingMode path every time and
-      // requested the camera's raw/physical device id instead, bypassing whatever rotation
-      // processing that higher-level abstraction normally provides. Resolving an explicit deviceId
-      // is still needed to fix the ORIGINAL black-camera-on-first-join bug (see
-      // resolveExplicitDeviceId's own comment -- multiple camera-like devices, a bad default pick)
-      // -- but only on DESKTOP, where that bug was actually observed (virtual cams, multiple
-      // webcams). A phone with no explicit selection gets facingMode instead, matching stock
-      // Jitsi's own default request and restoring the rotation handling it depends on.
-      const isPhoneDefaultCamera = getCameraDeviceCategory() === 'phone' && !videoDeviceId;
-      const explicitVideoId = isPhoneDefaultCamera
-        ? undefined
-        : await resolveExplicitDeviceId('videoinput', videoDeviceId);
+      const explicitVideoId = await resolveExplicitDeviceId('videoinput', videoDeviceId);
 
       result.videoTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
         cameraDeviceId: explicitVideoId,
-        facingMode: isPhoneDefaultCamera ? 'user' : undefined,
         constraints: { video: inCallVideoConstraints() }
       });
       if (result.videoTrack) videoPath = 'fresh-in-call';
@@ -456,28 +431,18 @@ async function acquireLocalTracks(
   }
 
   // Covers every path above -- adopted from the lobby's already-open stream, or freshly
-  // acquired -- with one check, right before this result is handed back to the caller. See
-  // verifyCameraCaptureOrientation's own comment: reporting only, never a retry/reacquire.
+  // acquired -- with one check, right before this result is handed back to the caller. Reporting
+  // only -- never a retry/reacquire/crop. Mobile camera orientation now intentionally follows
+  // stock Jitsi Meet's own approach: request a normal capture and display whatever the camera
+  // delivers, uncropped (see MeetingParticipantCard's objectFit handling) -- a phone's own native
+  // app is the planned path for a genuinely forced-portrait capture, not this web client.
   verifyCameraCaptureOrientation(result.videoTrack?.getTrack?.());
-  // One bounded applyConstraints() retry on the same track when the camera delivered the wrong
-  // orientation despite a correct request -- see attemptOrientationCorrection's own comment.
-  const orientationCorrection = await attemptOrientationCorrection(result.videoTrack?.getTrack?.());
-  // Last resort when the camera driver still delivers landscape despite a correct request AND the
-  // applyConstraints() retry above -- see portraitCropProcessor.ts's own comment for why this is
-  // necessary (confirmed live across 3 browser engines) and what it costs (a real crop).
-  const preCropTrack = result.videoTrack;
-
-  result.videoTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, result.videoTrack);
-  const portraitCropped = result.videoTrack !== preCropTrack;
-
-  reportPortraitCropped(portraitCropped);
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
   logGalleryDebug('local capture settings', {
-    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, orientationCorrection, portraitCropped,
-    portraitCropInfo: (result.videoTrack as any)?.__portraitCropInfo ?? null,
+    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath,
   });
 
   return result;
@@ -1601,7 +1566,7 @@ export function useJitsiMeeting({
       if (!JitsiMeetJS) {
         return;
       }
-      let newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
+      const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ 'video' ],
         cameraDeviceId: deviceIdsRef.current.videoDeviceId || undefined,
         constraints: { video: inCallVideoConstraints() }
@@ -1611,14 +1576,8 @@ export function useJitsiMeeting({
         return;
       }
       verifyCameraCaptureOrientation(newTrack.getTrack?.());
-      const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
-      const preCropTrack = newTrack;
-
-      newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
-      reportPortraitCropped(newTrack !== preCropTrack);
       logGalleryDebug('local capture settings', {
-        ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection,
-        portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
+        ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry',
       });
       localVideoTrackRef.current = newTrack;
       setHasVideoTrack(true);
@@ -1911,7 +1870,7 @@ export function useJitsiMeeting({
     const switchStart = deviceSwitchDiagnosticsEnabled ? performance.now() : 0;
 
     try {
-      let newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
+      const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
         devices: [ isAudio ? 'audio' : 'video' ],
         micDeviceId: isAudio ? deviceId : undefined,
         cameraDeviceId: isAudio ? undefined : deviceId,
@@ -1923,14 +1882,8 @@ export function useJitsiMeeting({
       }
       if (!isAudio) {
         verifyCameraCaptureOrientation(newTrack.getTrack?.());
-        const orientationCorrection = await attemptOrientationCorrection(newTrack.getTrack?.());
-        const preCropTrack = newTrack;
-
-        newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
-        reportPortraitCropped(newTrack !== preCropTrack);
         logGalleryDebug('local capture settings', {
-          ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection,
-          portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
+          ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch',
         });
       }
 

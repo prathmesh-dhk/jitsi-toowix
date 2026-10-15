@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { attemptOrientationCorrection, getCameraCaptureDebugInfo, getCameraDeviceCategory, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
@@ -246,15 +246,9 @@ export function useMediaPreview(
     const startVideo = async () => {
       try {
         let media: MediaStream;
-        // See the matching comment in useJitsiMeeting.ts's acquireLocalTracks -- a phone with no
-        // explicit device selection gets an explicit facingMode hint (the higher-level "front/back
-        // camera" selector), not just left to the browser's own unhinted default-device pick. This
-        // call goes straight to the native getUserMedia (not through lib-jitsi-meet, which only
-        // adds facingMode itself for its OWN createLocalTracks calls), so without this the lobby
-        // preview never got that hint at all even though the in-call acquisition now does.
         const constraints: MediaTrackConstraints = videoId
           ? { deviceId: { ideal: videoId } }
-          : (getCameraDeviceCategory() === 'phone' ? { facingMode: { ideal: 'user' } } : {});
+          : {};
 
         // Highest quality first, then progressively safer requests. A camera or driver that
         // rejects the high request (or a stricter frame-rate) must never end up with no camera
@@ -293,14 +287,9 @@ export function useMediaPreview(
         const newTrack = media.getVideoTracks()[0];
         if (!newTrack) throw new Error('No video track returned');
         verifyCameraCaptureOrientation(newTrack);
-        // One bounded, safe corrective attempt (same track, no new permission prompt, no
-        // teardown) when the camera delivered the wrong orientation despite the correct request
-        // -- see attemptOrientationCorrection's own comment for why this can genuinely help on
-        // devices whose camera driver only enumerates landscape-shaped presets.
-        const correction = await attemptOrientationCorrection(newTrack);
 
         logGalleryDebug('local capture settings', {
-          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh', orientationCorrection: correction
+          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh'
         });
 
         // Stop previous video track
