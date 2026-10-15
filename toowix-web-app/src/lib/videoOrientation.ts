@@ -58,7 +58,7 @@ export function bindCameraVideoOrientationListener(
 // EXISTING ref logic for the same element, e.g. `ref={(el) => { existingRef(el); bind(el); }}` --
 // this hook only tracks orientation, it never sets srcObject or calls play() itself, and never
 // touches the surrounding card/container's own size.
-export function useCameraVideoOrientation(): {
+export function useCameraVideoOrientation(debugLabel?: string): {
   objectFit: CameraVideoObjectFit;
   bind: (node: HTMLVideoElement | null) => void;
 } {
@@ -77,10 +77,19 @@ export function useCameraVideoOrientation(): {
     }
     if (boundRef.current?.node === node) return; // already bound to this exact element
 
-    const unsubscribe = bindCameraVideoOrientationListener(node, setObjectFit);
+    const update = (fit: CameraVideoObjectFit) => {
+      if (debugLabel && node.videoWidth > 0 && node.videoHeight > 0) {
+        logGalleryDebug('local in-call preview metadata', {
+          participant: debugLabel, videoWidth: node.videoWidth, videoHeight: node.videoHeight,
+          ratio: node.videoWidth / node.videoHeight, objectFit: fit,
+        });
+      }
+      setObjectFit(fit);
+    };
+    const unsubscribe = bindCameraVideoOrientationListener(node, update);
 
     boundRef.current = { node, unsubscribe };
-  }, []);
+  }, [ debugLabel ]);
 
   return { objectFit, bind };
 }

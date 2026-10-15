@@ -201,6 +201,13 @@ export function getCameraCaptureOrientationPreference(): CameraCaptureOrientatio
   return 'portrait';
 }
 
+export function getCameraOrientationDebugState(): { orientationType: string | null; preference: CameraCaptureOrientation } {
+  let orientationType: string | null = null;
+  try { orientationType = String((screen as any)?.orientation?.type || '') || null; } catch { /* unavailable */ }
+
+  return { orientationType, preference: getCameraCaptureOrientationPreference() };
+}
+
 // Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
 // so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
 // SENT is still capped by what the other participants ask the bridge for (see
@@ -324,6 +331,38 @@ export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | 
       `(${width}x${height}) while the device is held in portrait -- the camera driver or browser ` +
       'does not honor portrait capture on this device. Using the stream as-is (uncropped).'
     );
+  }
+}
+
+// Some mobile camera stacks expose a landscape default immediately after permission, then accept
+// portrait once the first frame has made the device's real orientation available.  Do one
+// capability-checked, ideal-only applyConstraints attempt after that first frame.  This neither
+// replaces the Jitsi track nor re-prompts the user, and callers must invoke it at most once per
+// native track.  A missing capability API is deliberately treated as "not verified".
+export async function reconcileInitialPortraitCapture(track: MediaStreamTrack | null | undefined): Promise<boolean> {
+  if (!track || getCameraDeviceCategory() !== 'phone' || getCameraCaptureOrientationPreference() !== 'portrait'
+      || typeof track.applyConstraints !== 'function' || typeof (track as any).getCapabilities !== 'function') return false;
+  let settings: MediaTrackSettings;
+  let capabilities: any;
+  try {
+    settings = track.getSettings();
+    capabilities = (track as any).getCapabilities();
+  } catch { return false; }
+  if (!(Number(settings.width) > Number(settings.height))) return false;
+
+  const requested = getPreferredCameraCaptureConstraints();
+  const ratio = Number((requested.aspectRatio as any)?.ideal);
+  const aspect = capabilities?.aspectRatio;
+  const width = capabilities?.width;
+  const height = capabilities?.height;
+  if (!aspect || !width || !height || !(aspect.min <= ratio && ratio <= aspect.max)
+      || !(width.min <= 720 && width.max >= 720) || !(height.min <= 1280 && height.max >= 1280)) return false;
+
+  try {
+    await track.applyConstraints(requested);
+    return true;
+  } catch {
+    return false;
   }
 }
 

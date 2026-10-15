@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
@@ -56,6 +56,7 @@ export function useMediaPreview(
   const audioContextRef = useRef<AudioContext | null>(null);
   const animFrameRef = useRef<number>(0);
   const lastLevelUpdateRef = useRef<number>(0);
+  const portraitRecoveryAttemptedRef = useRef<MediaStreamTrack | null>(null);
 
   // 1. Device enumeration
   useEffect(() => {
@@ -263,10 +264,12 @@ export function useMediaPreview(
         ];
         let lastError: any = null;
 
+        let successfulRequest: MediaTrackConstraints | boolean | undefined;
         for (const attempt of attempts) {
           try {
             media = await navigator.mediaDevices.getUserMedia(attempt);
             lastError = null;
+            successfulRequest = attempt.video;
             break;
           } catch (err: any) {
             lastError = err;
@@ -289,7 +292,8 @@ export function useMediaPreview(
         verifyCameraCaptureOrientation(newTrack);
 
         logGalleryDebug('local capture settings', {
-          ...getCameraCaptureDebugInfo(newTrack), path: 'lobby-fresh'
+          ...getCameraCaptureDebugInfo(newTrack), ...getCameraOrientationDebugState(),
+          path: 'lobby-fresh', requestedAtAcquisition: successfulRequest
         });
 
         // Stop previous video track
@@ -359,7 +363,17 @@ export function useMediaPreview(
     if (joined || !videoElement) return;
     const report = () => {
       if (videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-        logGalleryDebug('local preview metadata', { path: 'lobby-preview', videoWidth: videoElement.videoWidth, videoHeight: videoElement.videoHeight, ratio: videoElement.videoWidth / videoElement.videoHeight });
+        const track = videoTrackRef.current;
+        logGalleryDebug('local preview metadata', { path: 'lobby-preview', videoWidth: videoElement.videoWidth, videoHeight: videoElement.videoHeight, ratio: videoElement.videoWidth / videoElement.videoHeight, ...getCameraOrientationDebugState(), ...getCameraCaptureDebugInfo(track) });
+        if (track && portraitRecoveryAttemptedRef.current !== track) {
+          portraitRecoveryAttemptedRef.current = track;
+          void reconcileInitialPortraitCapture(track).then((applied) => {
+            logGalleryDebug('portrait initial reconciliation', {
+              path: 'lobby-preview', applied, ...getCameraOrientationDebugState(), ...getCameraCaptureDebugInfo(track),
+              videoWidth: videoElement.videoWidth, videoHeight: videoElement.videoHeight,
+            });
+          });
+        }
       }
     };
     videoElement.addEventListener('loadedmetadata', report);
@@ -367,6 +381,20 @@ export function useMediaPreview(
     report();
     return () => { videoElement.removeEventListener('loadedmetadata', report); videoElement.removeEventListener('resize', report); };
   }, [joined, video]);
+
+  // These events are diagnostic only: they prove whether rotation changed native capture
+  // settings/decoded dimensions. They never request media or replace a Jitsi track.
+  useEffect(() => {
+    const report = () => logGalleryDebug('camera orientation event', {
+      path: 'lobby-preview', ...getCameraOrientationDebugState(),
+      ...getCameraCaptureDebugInfo(videoTrackRef.current),
+      videoWidth: preview.current?.videoWidth || 0, videoHeight: preview.current?.videoHeight || 0,
+    });
+    window.addEventListener('orientationchange', report);
+    window.addEventListener('resize', report);
+    (screen as any)?.orientation?.addEventListener?.('change', report);
+    return () => { window.removeEventListener('orientationchange', report); window.removeEventListener('resize', report); (screen as any)?.orientation?.removeEventListener?.('change', report); };
+  }, []);
 
   // Full cleanup on unmount or when joining. NOTE: stream.current (and its tracks) is
   // deliberately left alone here when joined -- MeetingRoomPage hands this exact live

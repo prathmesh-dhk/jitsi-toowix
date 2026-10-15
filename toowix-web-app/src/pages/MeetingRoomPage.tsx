@@ -3298,7 +3298,7 @@ export function MeetingRoomPage() {
   // prejoin self-preview widget, each get their own orientation tracker. Composed into each
   // existing ref callback below (`ref={(el) => { existingRef(el); xBind(el); }}`) -- this never
   // replaces srcObject/play() logic, only adds orientation tracking alongside it.
-  const localVideoOrientation = useCameraVideoOrientation();
+  const localVideoOrientation = useCameraVideoOrientation('local-outgoing-preview');
   const pinnedRemoteVideoOrientation = useCameraVideoOrientation();
   const previewVideoOrientation = useCameraVideoOrientation();
 

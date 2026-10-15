@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
@@ -39,6 +39,33 @@ interface IUseLibJitsiConferenceOptions {
 }
 
 let scriptLoadPromise: Promise<void> | null = null;
+const reconciledDirectTracks = new WeakSet<object>();
+
+// /meet-direct has no lobby hook, so attach the same first-decoded-frame observation and one-shot
+// reconciliation directly to its local element. This is not an orientation-change handler and
+// does not replace the published Jitsi track.
+function observeDirectLocalVideo(track: any, video: HTMLVideoElement): void {
+  let attempted = false;
+  const report = () => {
+    if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    const nativeTrack = track.getTrack?.();
+    logGalleryDebug('local preview metadata', {
+      path: 'meet-direct-preview', videoWidth: video.videoWidth, videoHeight: video.videoHeight,
+      ratio: video.videoWidth / video.videoHeight, ...getCameraOrientationDebugState(), ...getCameraCaptureDebugInfo(nativeTrack),
+    });
+    if (!attempted && nativeTrack && !reconciledDirectTracks.has(nativeTrack)) {
+      attempted = true;
+      reconciledDirectTracks.add(nativeTrack);
+      void reconcileInitialPortraitCapture(nativeTrack).then((applied) => logGalleryDebug('portrait initial reconciliation', {
+        path: 'meet-direct-preview', applied, videoWidth: video.videoWidth, videoHeight: video.videoHeight,
+        ...getCameraOrientationDebugState(), ...getCameraCaptureDebugInfo(nativeTrack),
+      }));
+    }
+  };
+  video.addEventListener('loadedmetadata', report);
+  video.addEventListener('resize', report);
+  report();
+}
 
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -259,9 +286,10 @@ export function useLibJitsiConference({
           // some cameras. This is the same shared constraint builder the main route's lobby
           // preview and in-call acquisition both use now, so this separate /meet-direct route
           // can't drift out of sync with that fix.
+          const videoConstraints = getPreferredCameraCaptureConstraints();
           const tracks = await JitsiMeetJS.createLocalTracks({
             devices: [ 'audio', 'video' ],
-            constraints: { video: getPreferredCameraCaptureConstraints() }
+            constraints: { video: videoConstraints }
           });
 
           if (disposedRef.current) {
@@ -277,9 +305,10 @@ export function useLibJitsiConference({
               localVideoTrackRef.current = track;
               if (localVideoElRef.current) {
                 track.attach(localVideoElRef.current);
+                observeDirectLocalVideo(track, localVideoElRef.current);
               }
               logGalleryDebug('local capture settings', {
-                ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh',
+                ...getCameraCaptureDebugInfo(track.getTrack?.()), path: 'meet-direct-fresh', requestedAtAcquisition: videoConstraints,
               });
             }
 
@@ -373,6 +402,7 @@ export function useLibJitsiConference({
     localVideoElRef.current = el;
     if (el && localVideoTrackRef.current) {
       localVideoTrackRef.current.attach(el);
+      observeDirectLocalVideo(localVideoTrackRef.current, el);
     }
   }, []);
 
