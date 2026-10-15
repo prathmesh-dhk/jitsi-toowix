@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { attemptOrientationCorrection, getCameraCaptureDebugInfo, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
+import { attemptOrientationCorrection, getCameraCaptureDebugInfo, getCameraDeviceCategory, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
@@ -246,9 +246,15 @@ export function useMediaPreview(
     const startVideo = async () => {
       try {
         let media: MediaStream;
+        // See the matching comment in useJitsiMeeting.ts's acquireLocalTracks -- a phone with no
+        // explicit device selection gets an explicit facingMode hint (the higher-level "front/back
+        // camera" selector), not just left to the browser's own unhinted default-device pick. This
+        // call goes straight to the native getUserMedia (not through lib-jitsi-meet, which only
+        // adds facingMode itself for its OWN createLocalTracks calls), so without this the lobby
+        // preview never got that hint at all even though the in-call acquisition now does.
         const constraints: MediaTrackConstraints = videoId
           ? { deviceId: { ideal: videoId } }
-          : {};
+          : (getCameraDeviceCategory() === 'phone' ? { facingMode: { ideal: 'user' } } : {});
 
         // Highest quality first, then progressively safer requests. A camera or driver that
         // rejects the high request (or a stricter frame-rate) must never end up with no camera
