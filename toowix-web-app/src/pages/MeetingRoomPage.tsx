@@ -2353,6 +2353,14 @@ export function MeetingRoomPage() {
         // and asking the browser for a fresh one, so real hardware never sees a
         // stop-then-immediately-reacquire race for the same camera/mic.
         setInWaitingRoom(false);
+        // Real reported bug: a pin left over from an earlier call in this same browser tab (e.g.
+        // leaving and joining a different meeting without a full page reload) could point at a
+        // participant id that doesn't exist in this new call, landing the fresh join straight into
+        // the single-tile stage view showing just the local participant with a stale pin icon,
+        // instead of the normal grid. Every fresh join starts with a clean pin/tile-view state.
+        setPinnedParticipantId(null);
+        manuallyPinnedRef.current = false;
+        setTileViewEnabled(true);
         setHasJoined(true);
       } else if (data.status === 'WAITING') {
         // Placed into waiting lobby
@@ -2421,6 +2429,10 @@ export function MeetingRoomPage() {
           // Same as the direct-admission path above -- leave the prejoin stream alone, it gets
           // adopted by useJitsiMeeting.
           setInWaitingRoom(false);
+          // Same stale-pin-state reset as the direct-admission path above.
+          setPinnedParticipantId(null);
+          manuallyPinnedRef.current = false;
+          setTileViewEnabled(true);
           setHasJoined(true);
         } else if (eventData?.type === 'LOBBY_STATUS' && eventData.payload?.status === 'DENIED') {
           setWaitingDenied(true);
@@ -4971,7 +4983,16 @@ export function MeetingRoomPage() {
                   style={{ width: '100%', aspectRatio: '1 / 1' }}
                   onVideoElement={setInCallVideoNode}
                   isPinned={manuallyPinnedRef.current && pinnedParticipantId === 'local'}
-                  onPin={() => { setPinnedManually(pinnedParticipantId === 'local' ? null : 'local'); setTileViewEnabled(false); }}
+                  onPin={() => {
+                    const wasPinned = pinnedParticipantId === 'local';
+
+                    setPinnedManually(wasPinned ? null : 'local');
+                    // Unpinning must return directly to tile/grid view, not leave the single-tile
+                    // stage view stuck on screen with nothing manually pinned (real reported bug --
+                    // this previously always forced tileViewEnabled to false regardless of whether
+                    // this click was a pin or an unpin).
+                    setTileViewEnabled(wasPinned);
+                  }}
                 />
                 {false && (
                 <div
@@ -5095,7 +5116,12 @@ export function MeetingRoomPage() {
                     compact
                     style={{ width: '100%', aspectRatio: '1 / 1' }}
                     isPinned={manuallyPinnedRef.current && pinnedParticipantId === remote.id}
-                    onPin={() => { setPinnedManually(pinnedParticipantId === remote.id ? null : remote.id); setTileViewEnabled(false); }}
+                    onPin={() => {
+                      const wasPinned = pinnedParticipantId === remote.id;
+
+                      setPinnedManually(wasPinned ? null : remote.id);
+                      setTileViewEnabled(wasPinned);
+                    }}
                   />;
                   if (false) return (
                     <div
@@ -5418,6 +5444,10 @@ export function MeetingRoomPage() {
                           onClick={(event) => {
                             event.stopPropagation();
                             setPinnedManually(null);
+                            // Real reported bug: unpinning here left tileViewEnabled false, so the
+                            // single-tile stage stayed on screen (showing whoever's left solo, with
+                            // a leftover pin icon) instead of returning to the grid.
+                            setTileViewEnabled(true);
                           }}
                           title="Unpin participant"
                           style={{
