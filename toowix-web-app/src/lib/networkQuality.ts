@@ -204,42 +204,59 @@ export function getCameraCaptureOrientationPreference(): CameraCaptureOrientatio
 // Camera capture request. "ideal" makes the browser pick the closest mode the camera really has,
 // so a 720p webcam stays at 720p, a 1080p one gets 1080p and a 4K one gets 4K. What is actually
 // SENT is still capped by what the other participants ask the bridge for (see
-// getReceiveMaxHeightForCallSize) and by the bandwidth estimate.
-//
-// Deliberately NOT orientation-aware: an earlier version of this function swapped width/height
-// and added an `aspectRatio`/`advanced` constraint to try to force a phone into portrait capture.
-// A live side-by-side test against stock Jitsi Meet's own web client (same device, same browser)
-// showed it makes no difference to what the camera actually delivers -- and stock Jitsi's own
-// request is exactly this: a plain resolution ask, no orientation forcing, no aspectRatio hint at
-// all (confirmed by reading its actual deployed source). Whatever shape the camera delivers is
-// now just displayed as-is (see MeetingParticipantCard's objectFit handling); a phone's own
-// native app is the planned path for a genuinely forced portrait capture, not this web client.
+// getReceiveMaxHeightForCallSize) and by the bandwidth estimate. Desktop/tablet always request
+// landscape. A phone requests portrait, matching how someone actually holds it for a call --
+// explicit product decision (reinstated after a brief "match stock Jitsi exactly" experiment):
+// a live side-by-side test confirmed the capture-side ask alone doesn't GUARANTEE real portrait
+// pixels on every device (some camera drivers deliver landscape regardless of what's requested),
+// but it's still the right thing to ask for, and costs nothing when ignored -- the display side
+// (MeetingParticipantCard's objectFit, see layoutFit="contain"/"adaptive") shows whatever shape
+// actually arrives without cropping either way, so a driver that ignores this never produces the
+// "zoomed/cropped" look a forced CROP fallback used to cause; it just stays landscape, uncropped.
 export function getCameraCaptureIdeal(): { frameRate: number; height: number; width: number } {
   const category = getCameraDeviceCategory();
 
-  return category === 'desktop'
-    ? { frameRate: 30, height: 2160, width: 3840 }
-    : { frameRate: 30, height: 1080, width: 1920 };
+  if (category === 'phone') {
+    return getCameraCaptureOrientationPreference() === 'portrait'
+      ? { frameRate: 30, height: 1920, width: 1080 }
+      : { frameRate: 30, height: 1080, width: 1920 };
+  }
+
+  return category === 'tablet'
+    ? { frameRate: 30, height: 1080, width: 1920 }
+    : { frameRate: 30, height: 2160, width: 3840 };
 }
 
 // The single shared constraint object every camera-capture call site (lobby preview, initial
 // join, rejoin/device-switch, ended-camera recovery, and the separate /meet-direct route) should
 // spread into its own getUserMedia/createLocalTracks call, alongside whatever deviceId constraint
-// that call site already has.
+// that call site already has. `advanced` is the part of the getUserMedia spec built exactly for
+// "try hard to satisfy this, but never fail the whole request over it" -- the UA attempts it and
+// silently skips it if it can't be satisfied, instead of throwing OverconstrainedError the way a
+// bare non-ideal aspectRatio would for a camera that genuinely cannot do the requested shape.
 export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
   const ideal = getCameraCaptureIdeal();
+  const aspectRatio = getCameraCaptureOrientationPreference() === 'portrait' ? 9 / 16 : 16 / 9;
 
   return {
     width: { ideal: ideal.width },
     height: { ideal: ideal.height },
     frameRate: { ideal: ideal.frameRate },
+    aspectRatio: { ideal: aspectRatio },
+    advanced: [ { aspectRatio } ],
   };
 }
 
-// A lower-cost retry for preview acquisition.
+// A lower-cost retry for preview acquisition -- same orientation preference as the first attempt.
 export function getFallbackCameraCaptureConstraints(): MediaTrackConstraints {
+  const portrait = getCameraCaptureOrientationPreference() === 'portrait';
+  const width = portrait ? 720 : 1280;
+  const height = portrait ? 1280 : 720;
+  const aspectRatio = width / height;
+
   return {
-    width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
+    width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 },
+    aspectRatio: { ideal: aspectRatio }, advanced: [ { aspectRatio } ],
   };
 }
 

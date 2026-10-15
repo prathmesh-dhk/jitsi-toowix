@@ -29,35 +29,24 @@ assert.match(
     /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{/,
     'the single shared camera constraint builder must live in networkQuality.ts'
 );
-// UPDATED AGAIN: a live side-by-side test against stock Jitsi Meet's own web client (same
-// device, same browser) found that orientation-aware width/height swapping and an aspectRatio
-// constraint made no difference to what a phone's camera actually delivered -- mobile portrait
-// capture is now an explicitly out-of-scope problem for this web client (a native app is the
-// planned fix). getPreferredCameraCaptureConstraints() no longer branches on orientation at all,
-// for ANY device category -- the same plain resolution request goes out every time, matching
-// stock Jitsi's own request. getCameraCaptureOrientationPreference() still exists (used only for
-// the diagnostic console warning in verifyCameraCaptureOrientation), but no longer drives what
-// gets requested.
+// UPDATED AGAIN: reinstated after an explicit product decision (see networkQuality.ts's own
+// comment on getCameraCaptureIdeal) -- a phone requests portrait capture, matching how someone
+// actually holds it. The capture-side ask alone can't guarantee real portrait pixels on every
+// device, but it costs nothing when ignored, and the display side never crops either way.
 assert.match(
     networkQuality,
-    /export function getPreferredCameraCaptureConstraints\(\): MediaTrackConstraints \{\s*\n\s*const ideal = getCameraCaptureIdeal\(\);/,
-    'in-call video must delegate to getCameraCaptureIdeal() alone -- no separate orientation-based aspectRatio logic'
+    /const aspectRatio = getCameraCaptureOrientationPreference\(\) === 'portrait' \? 9 \/ 16 : 16 \/ 9;/,
+    'in-call video must explicitly request a landscape aspect ratio on desktop/tablet, matching the lobby preview -- and portrait on phone'
 );
-{
-  const start = networkQuality.indexOf('export function getPreferredCameraCaptureConstraints');
-  const end = networkQuality.indexOf('export function', start + 1);
-  const functionBody = networkQuality.slice(start, end === -1 ? undefined : end);
-
-  assert.doesNotMatch(
-      functionBody,
-      /aspectRatio|advanced/,
-      'getPreferredCameraCaptureConstraints must not add an aspectRatio or advanced field -- a plain resolution request only'
-  );
-}
 assert.match(
     networkQuality,
     /export function getCameraCaptureOrientationPreference\(\): CameraCaptureOrientation \{/,
-    'the orientation-preference function still exists for diagnostics (verifyCameraCaptureOrientation\'s warning), even though it no longer drives the capture request'
+    'desktop/tablet must still be hardcoded to landscape -- only a phone has a real orientation-dependent preference'
+);
+assert.match(
+    networkQuality,
+    /if \(getCameraDeviceCategory\(\) !== 'phone'\) return 'landscape';/,
+    'desktop/tablet must never consult screen/orientation APIs -- they always prefer landscape, unconditionally'
 );
 
 // All three places a video track is acquired during/after a call must pass the constraint, not
@@ -71,4 +60,4 @@ const constraintUses = (source.match(/\{ video: inCallVideoConstraints\(\) \}/g)
 assert.equal(videoAcquisitionSites, 3, 'test assumption check: expected exactly 3 call sites that can acquire a video track (initial join, ended-camera recovery, switchDevice) -- update this test if that count genuinely changed');
 assert.equal(constraintUses, videoAcquisitionSites, 'every call site that can acquire a video track must pass the shared constraint builder, not just some of them');
 
-console.log('PASS in-call video acquisition uses the one shared, orientation-agnostic constraint builder, matching the lobby preview, at every acquisition site');
+console.log('PASS in-call video acquisition uses the one shared, orientation-aware constraint builder, matching the lobby preview, at every acquisition site');

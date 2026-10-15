@@ -48,15 +48,14 @@ export interface MeetingParticipantCardProps {
   // Gallery View's flexible full-fill layout (TOOWIX_PHASE_1_2_FLEXIBLE_FULL_FILL_GALLERY_IMPLEMENTATION.md)
   // sizes the outer card from a weighted row/column tessellation rather than the card's own real
   // ratio -- the card's resulting box is therefore essentially never exactly the source's own
-  // ratio, so letterboxing ('contain') would leave visible blank bars inside the tile. 'flexible-cover'
-  // forces 'cover' regardless of orientation, same as the non-adaptive default, but is a DISTINCT flag
-  // from adaptiveAspect so a flexible-fill caller can keep reporting its real ratio upward (as a
-  // SOLVER PREFERENCE, via onAspectRatioChange/adaptiveAspect) while still always rendering 'cover'.
-  // 'contain' unconditionally shows the WHOLE decoded frame, letterboxed if needed, never cropped
-  // -- used for the mobile gallery, which intentionally stopped trying to force/crop a phone's
-  // camera into a portrait shape (see networkQuality.ts's getCameraCaptureIdeal and
-  // portraitCropProcessor.ts's own removal): whatever shape the camera delivers is shown as-is,
-  // matching stock Jitsi Meet's own behavior, with zero cropping rather than a best-effort crop.
+  // ratio. Real reported bug: 'flexible-cover' (always force 'cover', regardless of the real
+  // source orientation) cropped a portrait source's left/right edges whenever its card wasn't
+  // narrow enough to need Smart Video Boundary's own protection -- the desktop gallery now uses
+  // 'adaptive' instead (same as the non-adaptive-aspect default elsewhere): 'cover' for a
+  // landscape source (fills the cell, same as before), 'contain' for a portrait one (shows the
+  // whole frame, letterboxed if needed, never cropped). 'contain' unconditionally shows the WHOLE
+  // decoded frame regardless of orientation -- used for the mobile gallery, which never crops a
+  // phone's own camera into any shape (see ParticipantGallery.tsx's own isMobileGallery check).
   // Defaults to 'adaptive', which preserves the existing adaptiveAspect-driven cover/contain switch.
   layoutFit?: 'adaptive' | 'flexible-cover' | 'contain';
   // TOOWIX_SMART_VIDEO_SIDE_BOUNDARIES_IMPLEMENTATION_PLAN.md -- opt-in, Gallery View only. When

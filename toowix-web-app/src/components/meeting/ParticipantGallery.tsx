@@ -476,7 +476,7 @@ export function ParticipantGallery({
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
                   adaptiveAspect
-                  layoutFit={isMobileGallery ? 'contain' : 'flexible-cover'}
+                  layoutFit={isMobileGallery ? 'contain' : 'adaptive'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}
@@ -505,7 +505,7 @@ export function ParticipantGallery({
                   speaking={isSpeakingNow(remote.id)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect
-                  layoutFit={isMobileGallery ? 'contain' : 'flexible-cover'}
+                  layoutFit={isMobileGallery ? 'contain' : 'adaptive'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}
