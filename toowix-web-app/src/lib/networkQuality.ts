@@ -345,8 +345,16 @@ export function verifyCameraCaptureOrientation(track: MediaStreamTrack | null | 
 // presets by area, the transposed numbers describe the exact same area/resolution class it already
 // proved it can deliver -- just asking it to consider the portrait-shaped orientation of that same
 // class, which a pure aspectRatio hint evidently failed to communicate.
+// Optional third argument: the SAME track's own declared capability ranges (MediaTrackCapabilities
+// -- Android Chrome exposes these via track.getCapabilities(); Safari/iOS and some other browsers
+// return an empty object or don't implement it at all, so this is a best-effort refinement, not a
+// requirement). When present, the naive transpose below is clamped into the camera's OWN declared
+// min/max width/height range instead of asked for blind -- a genuine "investigate what this camera
+// supports" step, rather than guessing and hoping the browser silently coerces an out-of-range ask
+// into something reasonable.
 export function getCorrectiveOrientationConstraints(
     actualWidth: number, actualHeight: number, wantPortrait: boolean,
+    capabilities?: { width?: { min?: number; max?: number }; height?: { min?: number; max?: number } } | null,
 ): MediaTrackConstraints | null {
   if (!(actualWidth > 0) || !(actualHeight > 0)) return null;
 
@@ -354,8 +362,19 @@ export function getCorrectiveOrientationConstraints(
 
   if (deliveredIsPortrait === wantPortrait) return null; // already matches -- nothing to correct
 
-  const width = actualHeight; // transpose: ask for the mirror of what was actually delivered
-  const height = actualWidth;
+  let width = actualHeight; // transpose: ask for the mirror of what was actually delivered
+  let height = actualWidth;
+
+  const widthCap = capabilities?.width;
+  const heightCap = capabilities?.height;
+
+  if (widthCap && typeof widthCap.min === 'number' && typeof widthCap.max === 'number') {
+    width = Math.min(Math.max(width, widthCap.min), widthCap.max);
+  }
+  if (heightCap && typeof heightCap.min === 'number' && typeof heightCap.max === 'number') {
+    height = Math.min(Math.max(height, heightCap.min), heightCap.max);
+  }
+
   const aspectRatio = width / height;
 
   return {
@@ -399,7 +418,17 @@ export async function attemptOrientationCorrection(
   if (width <= 0 || height <= 0) return notAttempted;
 
   const wantPortrait = getCameraCaptureOrientationPreference() === 'portrait';
-  const corrective = getCorrectiveOrientationConstraints(width, height, wantPortrait);
+  // Best-effort only -- getCapabilities() is well-supported on Android Chrome/Brave but commonly
+  // empty or unimplemented on iOS Safari; getCorrectiveOrientationConstraints treats a missing
+  // range as "no clamp" and falls back to the plain transpose, so this is safe either way.
+  let capabilities: MediaTrackCapabilities | null = null;
+
+  try {
+    capabilities = typeof track.getCapabilities === 'function' ? track.getCapabilities() : null;
+  } catch {
+    capabilities = null;
+  }
+  const corrective = getCorrectiveOrientationConstraints(width, height, wantPortrait, capabilities);
 
   if (!corrective) return notAttempted; // already matches the preference -- nothing to correct
 

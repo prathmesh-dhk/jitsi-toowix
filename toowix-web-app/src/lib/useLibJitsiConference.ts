@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getPreferredCameraCaptureConstraints, verifyCameraCaptureOrientation, attemptOrientationCorrection } from './networkQuality';
 import { applyPortraitCropIfNeeded } from './portraitCropProcessor';
+import { reportPortraitCropped } from './portraitCropNotice';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
@@ -303,6 +304,7 @@ export function useLibJitsiConference({
                     }
                   }
                 }
+                reportPortraitCropped(croppedTrack !== track);
                 logGalleryDebug('local capture settings', {
                   ...getCameraCaptureDebugInfo(croppedTrack.getTrack?.()), path: 'meet-direct-fresh',
                   orientationCorrection, portraitCropped: croppedTrack !== track,

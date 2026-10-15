@@ -32,6 +32,16 @@ export interface BoundaryResult {
 const ENTER_HEIGHT_PROTECTED_RATIO = 1.3;
 const EXIT_HEIGHT_PROTECTED_RATIO = 1.2;
 
+// Floor on how far bounded mode will narrow the video, as a fraction of the card's own width.
+// Real report: an extreme-ratio source (e.g. the portrait-crop fallback in
+// portraitCropProcessor.ts, or any genuinely narrow portrait camera) landing in a much wider card
+// made innerWidth collapse toward the exact source ratio -- a thin vertical strip with most of the
+// card showing empty background on both sides. Priority (2) ("never crop top/bottom in bounded
+// mode") still holds below this floor: 'contain' at the floored width simply shows a little
+// letterbox space above/below the video instead of narrowing further -- never a second crop, just
+// slightly less aggressive narrowing once it's already gone this far.
+const MIN_INNER_WIDTH_FRACTION = 0.6;
+
 /**
  * Pure, synchronous, O(1) -- no DOM, no React, safe to call every render. `previousMode` is the
  * mode this same card was in last time (hysteresis state the caller owns, e.g. in a ref); pass
@@ -77,7 +87,8 @@ export function computeSmartVideoBoundary(
   // the SAME ratio as the source, so object-fit: contain shows the whole frame with no letterbox
   // bars and no crop -- not an approximation.
   const videoContentWidth = safeCardHeight * safeSourceRatio;
-  const innerWidth = Math.min(safeCardWidth, videoContentWidth);
+  const minInnerWidth = safeCardWidth * MIN_INNER_WIDTH_FRACTION;
+  const innerWidth = Math.min(safeCardWidth, Math.max(videoContentWidth, minInnerWidth));
   const sideInset = Math.max(0, (safeCardWidth - innerWidth) / 2);
 
   return { mode: 'height-protected', innerWidth, leftInset: sideInset, rightInset: sideInset };

@@ -99,6 +99,7 @@ import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/pa
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
+import { PortraitCropNotice } from '../components/PortraitCropNotice';
 import { DocumentPipContent } from '../components/meeting/PictureInPicture';
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
@@ -4565,6 +4566,7 @@ export function MeetingRoomPage() {
 
         <RecordingToast recording={recording} recordingToast={recordingToast} />
         <GalleryOrientationDebugOverlay />
+        <PortraitCropNotice />
 
         {/* 1. SLIM TOP INFORMATION AREA (Left: Logo + Time + Room Code + Info / Right: Participant Pill) */}
         <div

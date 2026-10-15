@@ -38,6 +38,7 @@ import {
   attemptOrientationCorrection
 } from './networkQuality';
 import { applyPortraitCropIfNeeded } from './portraitCropProcessor';
+import { reportPortraitCropped } from './portraitCropNotice';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
 export interface ISharedVideoState {
@@ -446,6 +447,8 @@ async function acquireLocalTracks(
 
   result.videoTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, result.videoTrack);
   const portraitCropped = result.videoTrack !== preCropTrack;
+
+  reportPortraitCropped(portraitCropped);
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
@@ -1590,6 +1593,7 @@ export function useJitsiMeeting({
       const preCropTrack = newTrack;
 
       newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
+      reportPortraitCropped(newTrack !== preCropTrack);
       logGalleryDebug('local capture settings', {
         ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'camera-retry', orientationCorrection,
         portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
@@ -1901,6 +1905,7 @@ export function useJitsiMeeting({
         const preCropTrack = newTrack;
 
         newTrack = await applyPortraitCropIfNeeded(JitsiMeetJS, newTrack);
+        reportPortraitCropped(newTrack !== preCropTrack);
         logGalleryDebug('local capture settings', {
           ...getCameraCaptureDebugInfo(newTrack.getTrack?.()), path: 'device-switch', orientationCorrection,
           portraitCropped: newTrack !== preCropTrack, portraitCropInfo: (newTrack as any)?.__portraitCropInfo ?? null,
