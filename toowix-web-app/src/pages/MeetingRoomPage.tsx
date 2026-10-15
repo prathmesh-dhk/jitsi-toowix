@@ -2134,8 +2134,18 @@ export function MeetingRoomPage() {
     if (window.location.search && !isFromConversation) window.history.replaceState(window.history.state, '', window.location.pathname);
     let active = true;
     setMeetingInfo(null);
+    meetingInfoRef.current = null;
     setAdmissionError('');
     // Existence checks must not wait for Firebase's auth restoration on a slow mobile link.
+    // Real reported delay: meetingInfo used to be set ONLY from the second, authenticated fetch
+    // below, which is gated behind `await auth.authStateReady()` -- Firebase restoring its local
+    // auth state, which can genuinely take a few hundred ms or more on a slow connection. The
+    // page sat blank/loading that whole time even though this FIRST, unauthenticated probe (which
+    // already has to run immediately, to fast-detect an ended/expired meeting) returns the exact
+    // same meeting document for everyone, guest or signed-in -- auth only adds organizerId-
+    // dependent extras (host password waiver, etc.), which the second fetch still applies when it
+    // resolves. Populating meetingInfo from THIS response too means the lobby screen shows real
+    // data as soon as the fast, auth-independent request completes, not after Firebase as well.
     const probeController = new AbortController();
     void fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}${isFromConversation ? '?fromConversation=1' : ''}`, {
       signal: probeController.signal,
@@ -2143,6 +2153,10 @@ export function MeetingRoomPage() {
       const data = await response.json();
 
       if (!active || isFromConversation) return;
+      if (response.ok && data.meeting && !meetingInfoRef.current) {
+        setMeetingInfo(data.meeting);
+        meetingInfoRef.current = data.meeting;
+      }
       const endedDestination = resolvePrejoinEndedDestination(data.meeting);
 
       if (endedDestination) {
@@ -2683,14 +2697,23 @@ export function MeetingRoomPage() {
     if (!response.ok) throw new Error(data.error || 'Could not end the meeting for everyone.');
   };
 
-  const handleEndMeetingForEveryone = async () => {
+  // Real reported delay: this used to AWAIT the full backend round-trip (auth header refresh +
+  // the POST + parsing its response) before calling leaveMeeting() -- the host's own screen sat
+  // on the confirmation modal/call UI for however long that network round-trip took, when
+  // leaving is something this client can do entirely on its own regardless of what the backend
+  // says. leaveMeeting() now fires immediately (optimistic, same pattern a plain "Leave call"
+  // click already uses); the backend call -- which is what actually ends it for everyone ELSE --
+  // still runs, just in the background. It survives the navigate() below: ordinary fetch() calls
+  // are tied to the page/tab, not this component's lifecycle, and a client-side route change
+  // doesn't reload the document. A failure here can no longer show a UI error (the host has
+  // already navigated away by the time a response could arrive) -- logged instead.
+  const handleEndMeetingForEveryone = () => {
     setShowEndMeetingModal(false);
-    try {
-      await endMeetingForEveryoneOnBackend('HOST_ENDED');
-      leaveMeeting('You ended the meeting for everyone.');
-    } catch (error) {
-      setCallError(error instanceof Error ? error.message : 'Could not end the meeting for everyone.');
-    }
+    leaveMeeting('You ended the meeting for everyone.');
+    endMeetingForEveryoneOnBackend('HOST_ENDED').catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('[MeetingRoomPage] end-for-everyone request failed after the host already left:', error);
+    });
   };
 
   // Single, idempotent decision point for every "the call is over for a reason that ISN'T me
