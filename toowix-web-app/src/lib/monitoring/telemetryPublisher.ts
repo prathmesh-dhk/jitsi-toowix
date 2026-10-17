@@ -68,7 +68,7 @@ export function startTelemetryPublisher(options: PublisherOptions): () => void {
 
       await fetch(options.endpoint, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${options.token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.token}` },
         body: JSON.stringify({
           meetingId: options.meetingId,
           participantId: options.participantId,

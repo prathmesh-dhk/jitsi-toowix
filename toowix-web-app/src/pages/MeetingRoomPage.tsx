@@ -2,7 +2,7 @@ import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { ensureLibJitsiMeetLoaded, useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
-import { getTelemetrySession } from '../lib/monitoring/telemetrySession';
+import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
@@ -3203,24 +3203,21 @@ export function MeetingRoomPage() {
   }, [hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin]);
 
   // Start only after lib-jitsi-meet has joined: getPeerConnections reads its already-managed
-  // JVB peer connection and the publisher merely observes getStats() on it.
+  // JVB peer connection and the publisher merely observes getStats() on it. It posts directly
+  // to the configured monitoring ingest API using its dedicated ingest token; no Toowix backend
+  // JWT/session request is made from the meeting path.
   useEffect(() => {
-    const endpoint = import.meta.env.VITE_MONITORING_TELEMETRY_URL;
-    if (!jitsiMeeting.joined || !endpoint) return;
-    let cancelled = false;
-    let stop: (() => void) | undefined;
-    void getTelemetrySession(roomId).then((session) => {
-      if (cancelled || !session) return;
-      stop = startTelemetryPublisher({
-        endpoint,
-        token: session.token,
-        meetingId: roomId,
-        participantId: session.participantId,
-        displayName: session.displayName || displayName,
-        getPeerConnections: jitsiMeeting.getPeerConnections,
-      });
-    }).catch(() => undefined);
-    return () => { cancelled = true; stop?.(); };
+    const telemetry = getTelemetryPublisherConfig(roomId);
+    if (!jitsiMeeting.joined || !telemetry) return;
+
+    return startTelemetryPublisher({
+      endpoint: telemetry.endpoint,
+      token: telemetry.token,
+      meetingId: roomId,
+      participantId: telemetry.participantId,
+      displayName,
+      getPeerConnections: jitsiMeeting.getPeerConnections,
+    });
   }, [jitsiMeeting.joined, roomId, displayName]);
 
   // "Meeting started" cue -- fires once, the moment I actually connect to the conference (not
