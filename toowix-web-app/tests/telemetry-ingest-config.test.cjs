@@ -10,8 +10,8 @@ const directRoom = fs.readFileSync(path.join(root, 'src', 'pages', 'DirectMeetin
 
 assert.match(config, /VITE_MONITORING_TELEMETRY_URL/, 'telemetry endpoint must be a build-time setting');
 assert.match(config, /VITE_TELEMETRY_INGEST_TOKEN/, 'telemetry must use the dedicated ingest token');
-assert.match(publisher, /Authorization: `Bearer \$\{options\.token\}`/, 'ingest requests must use bearer authentication');
-assert.match(publisher, /'Content-Type': 'application\/json'/, 'ingest requests must declare JSON content');
+assert.match(publisher, /authorization: `Bearer \$\{options\.token\}`/i, 'ingest requests must use bearer authentication');
+assert.match(publisher, /['"]content-type['"]:\s*['"]application\/json['"]/i, 'ingest requests must declare JSON content');
 assert.match(publisher, /intervalMs \?\? 3000/, 'telemetry must sample at a three-second cadence by default');
 assert.match(meetingRoom, /getTelemetryPublisherConfig/, 'main meeting page must use direct ingest configuration');
 assert.match(directRoom, /getTelemetryPublisherConfig/, 'direct meeting page must use direct ingest configuration');
