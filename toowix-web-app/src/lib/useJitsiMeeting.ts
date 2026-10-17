@@ -2513,6 +2513,10 @@ export function useJitsiMeeting({
     setVideoQuality,
     shareAudioActive,
     toggleShareAudio,
+    getPeerConnections: () => {
+      const peerConnection = roomRef.current?.getActivePeerConnection?.()?.peerconnection;
+      return peerConnection instanceof RTCPeerConnection ? [peerConnection] : [];
+    },
     room: roomRef
   };
 }

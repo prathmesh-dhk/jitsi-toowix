@@ -44,6 +44,7 @@ import {
   streamLobbyHandler,
   streamSignalsHandler,
 } from '../meetings/lobby/lobby.realtime';
+import { createTelemetrySessionHandler } from '../meetings/monitoring/telemetrySession.controller';
 
 const router = Router();
 
@@ -53,6 +54,7 @@ router.get('/room/:roomSlug', optionalAccount, roomAdmission); // public, no aut
 router.post('/room/:roomSlug/attendance/join', attendance); // public, no auth
 router.post('/room/:roomSlug/attendance/leave', attendance); // public, no auth
 router.post('/room/:roomSlug/admission', meetingAccessRateLimiter, optionalAccount, roomAdmission);
+router.post('/room/:roomSlug/monitoring/telemetry-session', verifyFirebaseToken, createTelemetrySessionHandler);
 
 // Real-time WebRTC Signaling routes
 router.post('/room/:roomSlug/signal', optionalAccount, postSignalHandler);

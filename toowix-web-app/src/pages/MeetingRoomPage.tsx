@@ -1,6 +1,8 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { ensureLibJitsiMeetLoaded, useJitsiMeeting } from '../lib/useJitsiMeeting';
+import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
+import { getTelemetrySession } from '../lib/monitoring/telemetrySession';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
@@ -3199,6 +3201,27 @@ export function MeetingRoomPage() {
       recordAttendanceJoin();
     }
   }, [hasJoined, jwtToken, jitsiMeeting.joined, recordAttendanceJoin]);
+
+  // Start only after lib-jitsi-meet has joined: getPeerConnections reads its already-managed
+  // JVB peer connection and the publisher merely observes getStats() on it.
+  useEffect(() => {
+    const endpoint = import.meta.env.VITE_MONITORING_TELEMETRY_URL;
+    if (!jitsiMeeting.joined || !endpoint) return;
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    void getTelemetrySession(roomId).then((session) => {
+      if (cancelled || !session) return;
+      stop = startTelemetryPublisher({
+        endpoint,
+        token: session.token,
+        meetingId: roomId,
+        participantId: session.participantId,
+        displayName: session.displayName || displayName,
+        getPeerConnections: jitsiMeeting.getPeerConnections,
+      });
+    }).catch(() => undefined);
+    return () => { cancelled = true; stop?.(); };
+  }, [jitsiMeeting.joined, roomId, displayName]);
 
   // "Meeting started" cue -- fires once, the moment I actually connect to the conference (not
   // on every render/reconnect flicker; meetingStartedSoundFiredRef guards that).

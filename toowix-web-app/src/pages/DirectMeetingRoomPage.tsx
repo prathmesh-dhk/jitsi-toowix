@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useLibJitsiConference } from '../lib/useLibJitsiConference';
+import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
+import { getTelemetrySession } from '../lib/monitoring/telemetrySession';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
 
@@ -179,7 +181,8 @@ export function DirectMeetingRoomPage() {
     remoteParticipants,
     toggleAudio,
     toggleVideo,
-    setLocalVideoElement
+    setLocalVideoElement,
+    getPeerConnections,
   } = useLibJitsiConference({
     jitsiDomain: JITSI_DOMAIN,
     roomName: roomId,
@@ -187,6 +190,25 @@ export function DirectMeetingRoomPage() {
     displayName,
     enabled: hasJoined && Boolean(jwt)
   });
+
+  useEffect(() => {
+    const endpoint = import.meta.env.VITE_MONITORING_TELEMETRY_URL;
+    if (!joined || !endpoint) return;
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    void getTelemetrySession(roomId).then((session) => {
+      if (cancelled || !session) return;
+      stop = startTelemetryPublisher({
+        endpoint,
+        token: session.token,
+        meetingId: roomId,
+        participantId: session.participantId,
+        displayName: session.displayName || displayName,
+        getPeerConnections,
+      });
+    }).catch(() => undefined);
+    return () => { cancelled = true; stop?.(); };
+  }, [joined, roomId, displayName, getPeerConnections]);
 
   if (!hasJoined) {
     return (

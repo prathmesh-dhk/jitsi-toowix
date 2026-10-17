@@ -415,6 +415,10 @@ export function useLibJitsiConference({
     remoteParticipants,
     toggleAudio,
     toggleVideo,
-    setLocalVideoElement
+    setLocalVideoElement,
+    getPeerConnections: () => {
+      const peerConnection = roomRef.current?.getActivePeerConnection?.()?.peerconnection;
+      return peerConnection instanceof RTCPeerConnection ? [peerConnection] : [];
+    },
   };
 }
