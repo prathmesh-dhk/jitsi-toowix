@@ -16,5 +16,8 @@ assert.match(conferenceEvents, /participantSessionId === localSessionIdRef\.curr
 assert.match(source, /setLocalParticipantProperty\?\.\('deviceSessionId', localSessionIdRef\.current\)/, 'must broadcast this session\'s id before joining so remote/late-arriving self events can be matched against it');
 assert.match(conferenceEvents, /TRACK_ADDED[\s\S]*?isLocalParticipantEvent\(participantId, trackParticipant\)/, 'self tracks must not enter the remote roster (now in useConferenceEvents.ts)');
 assert.match(conferenceEvents, /USER_JOINED[\s\S]*?isLocalParticipantEvent\(id, participant\)/, 'self presence must not create a remote participant tile (now in useConferenceEvents.ts)');
+assert.match(conferenceEvents, /PARTICIPANT_PROPERTY_CHANGED/, 'must reconcile delayed Jitsi presence properties after USER_JOINED');
+assert.match(conferenceEvents, /reconcileParticipantSession/, 'a delayed device session id must remove the stale reconnect presence');
+assert.match(conferenceEvents, /deviceSessionId === localSessionIdRef\.current/, 'a prior presence from this browser tab must never remain in the remote roster');
 
 console.log('PASS self participant and duplicate conference guards');

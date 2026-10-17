@@ -88,6 +88,71 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
 
   const isLocalParticipantEvent = makeIsLocalParticipantEvent(room, localConferenceIdRef, localSessionIdRef);
 
+  // Presence is deliberately asynchronous. In particular, after a browser reload Jitsi can
+  // announce USER_JOINED before it delivers the custom deviceSessionId property. Do not let the
+  // short gap create a second tile for the same browser tab: reconcile both the initial join and
+  // the later PARTICIPANT_PROPERTY_CHANGED event against the stable session id.
+  const removeRemoteParticipant = (id: string) => {
+    clearSpeaking(id);
+    delete remoteNamesRef.current[id];
+    delete remoteAvatarsRef.current[id];
+    delete remoteSessionIdsRef.current[id];
+    delete remoteDesktopTracksRef.current[id];
+    recomputeRemoteScreenShare();
+    setRemoteParticipants((prev) => {
+      if (!(id in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+
+      delete next[id];
+
+      return next;
+    });
+    setConnectionStats((prev) => {
+      if (!(id in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+
+      delete next[id];
+
+      return next;
+    });
+  };
+
+  const reconcileParticipantSession = (id: string, participant: any, sessionId?: unknown) => {
+    const deviceSessionId = typeof sessionId === 'string'
+      ? sessionId
+      : typeof participant?.getProperty?.('deviceSessionId') === 'string'
+        ? participant.getProperty('deviceSessionId')
+        : null;
+
+    if (!deviceSessionId) {
+      return null;
+    }
+
+    // This is this browser tab's prior presence, waiting for the server-side disconnect timeout.
+    // It is never a separate attendee and must not render as a remote card.
+    if (deviceSessionId === localSessionIdRef.current) {
+      removeRemoteParticipant(id);
+
+      return deviceSessionId;
+    }
+
+    // A different client has reloaded. Keep its newest Jitsi id and remove only its stale
+    // presence. We intentionally key this by device-session id, never display name or JWT user
+    // id, because two real tabs/devices using one account are separate attendees.
+    const staleIds = Object.entries(remoteSessionIdsRef.current)
+      .filter(([participantId, knownSessionId]) => participantId !== id && knownSessionId === deviceSessionId)
+      .map(([participantId]) => participantId);
+
+    staleIds.forEach(removeRemoteParticipant);
+    remoteSessionIdsRef.current[id] = deviceSessionId;
+
+    return deviceSessionId;
+  };
+
   room.on(JitsiMeetJS.events.conference.TRACK_ADDED, (track: any) => {
     if (track.isLocal()) {
       return;
@@ -221,9 +286,10 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     }
 
     const name = participant.getDisplayName() || 'Participant';
-    const deviceSessionId = typeof participant.getProperty?.('deviceSessionId') === 'string'
-      ? participant.getProperty('deviceSessionId')
-      : null;
+    const deviceSessionId = reconcileParticipantSession(id, participant);
+    if (deviceSessionId === localSessionIdRef.current) {
+      return;
+    }
     // The JWT's context.user.avatar (see generateJitsiToken on the backend) is
     // propagated to every other participant as this "identity" -- it's the real
     // mechanism for remote avatars, not something lib-jitsi-meet exposes as a plain
@@ -234,43 +300,44 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     remoteNamesRef.current[id] = name;
     remoteAvatarsRef.current[id] = avatarUrl;
 
-    // Jitsi assigns a new participant id after a full browser reload, while the old presence can
-    // remain until its connection times out. The per-tab device session id is intentionally kept
-    // in sessionStorage by useJitsiMeeting, so matching it is an exact reconnect match. Do not
-    // use a display-name match here: two real people can share a name and must never be merged.
-    const staleIds = deviceSessionId
-      ? Object.entries(remoteSessionIdsRef.current)
-        .filter(([participantId, sessionId]) => participantId !== id && sessionId === deviceSessionId)
-        .map(([participantId]) => participantId)
-      : [];
-
-    for (const staleId of staleIds) {
-      delete remoteNamesRef.current[staleId];
-      delete remoteAvatarsRef.current[staleId];
-      delete remoteSessionIdsRef.current[staleId];
-      delete remoteDesktopTracksRef.current[staleId];
-      clearSpeaking(staleId);
-    }
-    if (staleIds.length > 0) {
-      setRemoteParticipants((prev) => {
-        const next = { ...prev };
-        staleIds.forEach((staleId) => delete next[staleId]);
-        return next;
-      });
-      setConnectionStats((prev) => {
-        const next = { ...prev };
-        staleIds.forEach((staleId) => delete next[staleId]);
-        return next;
-      });
-    }
-    if (deviceSessionId) remoteSessionIdsRef.current[id] = deviceSessionId;
-
     patchParticipant(id, {
       deviceSessionId,
       name,
       avatarUrl,
       isModerator: participant.getRole?.() === 'moderator'
     });
+  });
+
+  room.on(JitsiMeetJS.events.conference.PARTICIPANT_PROPERTY_CHANGED, (
+    participantOrId: any,
+    propertyName: string,
+    _oldValue: unknown,
+    newValue: unknown
+  ) => {
+    // lib-jitsi-meet exposes the logical property name in current versions, while some older
+    // builds expose the XMPP-prefixed form. Accept both without treating unrelated properties as
+    // roster changes.
+    if (propertyName !== 'deviceSessionId' && propertyName !== 'jitsi_participant_deviceSessionId') {
+      return;
+    }
+
+    const participantId = typeof participantOrId === 'string'
+      ? participantOrId
+      : participantOrId?.getId?.();
+    if (!participantId) {
+      return;
+    }
+    const participant = typeof participantOrId === 'string'
+      ? room.getParticipantById(participantId)
+      : participantOrId;
+    const deviceSessionId = reconcileParticipantSession(participantId, participant, newValue);
+
+    if (deviceSessionId === localSessionIdRef.current) {
+      return;
+    }
+    if (deviceSessionId) {
+      patchParticipant(participantId, { deviceSessionId });
+    }
   });
 
   // A moderator promotion is applied by Jicofo/MUC and broadcast to every client.
