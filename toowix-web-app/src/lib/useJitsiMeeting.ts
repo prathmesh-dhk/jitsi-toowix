@@ -390,8 +390,22 @@ async function acquireLocalTracks(
   }
   if (liveVideo) {
     try {
+      // CONFIRMED BUG (traced into lib-jitsi-meet.min.js's actual JitsiLocalTrack constructor,
+      // not assumed): for mediaType 'video' + videoType 'camera', the library builds its own
+      // _constraints from the adopted track's getConstraints() if that reports both height and
+      // width; otherwise it falls back to the track's LIVE getHeight()/getWidth(). If those
+      // aren't valid numbers yet (common right at adoption time, before the browser has fully
+      // populated the track's settings), it falls back AGAIN to reading constraints.height.ideal/
+      // constraints.width.ideal off the `constraints` field of the object passed into
+      // createLocalTracksFromMediaStreams -- which this call never set, so that read was always
+      // `undefined.height`, throwing and sending every single adoption (any device, not just
+      // mobile) down the fresh-acquisition fallback path. Passing the same shared constraint
+      // builder every other camera-acquisition call site already uses closes the gap: the
+      // library always has a valid ideal height/width to fall back to, and it also means the
+      // library's own internal resolution bookkeeping reflects the real portrait/landscape
+      // preference instead of whatever the live (possibly not-yet-settled) track dimensions are.
       const [ adopted ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
-        { stream: new MediaStream([ liveVideo ]), mediaType: 'video', videoType: 'camera' }
+        { stream: new MediaStream([ liveVideo ]), mediaType: 'video', videoType: 'camera', constraints: getPreferredCameraCaptureConstraints() }
       ]);
 
       result.videoTrack = adopted ?? null;
@@ -1753,6 +1767,31 @@ export function useJitsiMeeting({
           void stopScreenShareInternal(desktopTrack);
         }
       });
+
+      // CONFIRMED BUG (traced into lib-jitsi-meet.min.js's actual JitsiTrack base class, not
+      // assumed): LOCAL_TRACK_STOPPED above is only emitted via _addMediaStreamInactiveHandler,
+      // which on Chrome/Chromium (every browser that isn't Firefox or WebKit) wires itself to
+      // `this.stream.oninactive`, NOT the native track's own 'ended' event. MediaStream.oninactive
+      // is a known-unreliable signal in Chromium specifically for a getDisplayMedia() stream
+      // stopped via the BROWSER'S OWN native "Stop sharing" bar (as opposed to a script calling
+      // track.stop()) -- it frequently never fires. When it doesn't, LOCAL_TRACK_STOPPED never
+      // fires either, stopScreenShareInternal never runs, and the presenter's own UI stays stuck
+      // showing the last frame of what is now a dead track -- a real reported freeze that only
+      // happens via the browser bar (our own in-app "Stop presenting" button never depends on
+      // this event; it calls stopScreenShareInternal directly). A direct listener on the native
+      // track's own 'ended' event is NOT subject to the same oninactive flakiness and is what
+      // every other getDisplayMedia-based app uses as the reliable signal. Safe to add alongside
+      // LOCAL_TRACK_STOPPED: stopScreenShareInternal's in-flight guard absorbs whichever of the
+      // two fires second as a no-op.
+      try {
+        const nativeDesktopTrackForEndedListener = desktopTrack.getTrack?.();
+
+        nativeDesktopTrackForEndedListener?.addEventListener?.('ended', () => {
+          if (localDesktopTrackRef.current === desktopTrack) {
+            void stopScreenShareInternal(desktopTrack);
+          }
+        });
+      } catch { /* best-effort backstop; LOCAL_TRACK_STOPPED and the app's own button still cover the common paths */ }
 
       // Desktop is published as its own separate JVB source, alongside (never instead of) the
       // camera track -- this is how real Jitsi is designed to work (camera and desktop have

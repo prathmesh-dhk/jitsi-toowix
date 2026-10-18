@@ -111,6 +111,10 @@ const SPEAKER_RAIL_VISIBLE_COUNT = 6;
 // shuffling the entire list.
 const SPEAKER_RAIL_PROMOTION_REMOTE_INDEX = SPEAKER_RAIL_VISIBLE_COUNT - 2;
 const SPEAKER_RAIL_PROMOTION_DELAY_MS = 1600;
+// See remoteFirstSeenAtRef's own comment -- how long after a remote participant first appears
+// their own DOMINANT_SPEAKER_CHANGED report is distrusted as the bridge's join-time default
+// rather than real speech.
+const REMOTE_JOIN_AUTO_PIN_GRACE_MS = 4000;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -407,6 +411,16 @@ export function MeetingRoomPage() {
     manuallyPinnedRef.current = id !== null;
     setPinnedParticipantId(id);
   }, []);
+  // Real reported bug: a participant joining the call would immediately become the pinned/solo
+  // stage view, with no one having spoken yet. Root cause -- JVB's dominant-speaker algorithm can
+  // report a just-joined participant as the dominant speaker before any real audio energy exists
+  // for them (there is no "nobody is speaking" state it can report instead), and the auto-follow
+  // effect below trusted that signal unconditionally. Tracked here (first time each remote id
+  // appears), and used as a grace period below: a DOMINANT_SPEAKER_CHANGED naming someone who
+  // joined less than REMOTE_JOIN_AUTO_PIN_GRACE_MS ago is treated as this startup artifact, not
+  // real speech, and does not move the stage. A real speaker who keeps talking past the grace
+  // window still gets auto-focused normally the next time the bridge re-reports them.
+  const remoteFirstSeenAtRef = useRef<Record<string, number>>({});
   // Browsers intentionally prohibit custom dialogs during refresh/close. Returning a value from
   // beforeunload is the supported mechanism: the browser shows its native Leave/Cancel prompt.
   // This listener is captured before lib-jitsi-meet's unload listener and blocks later handlers.
@@ -3038,6 +3052,17 @@ export function MeetingRoomPage() {
     if (manuallyPinnedRef.current) return;
     const isLocal = jitsiMeeting.dominantSpeakerId === jitsiMeeting.localParticipantId;
 
+    // See remoteFirstSeenAtRef's own comment: a remote participant reported dominant within the
+    // first REMOTE_JOIN_AUTO_PIN_GRACE_MS of joining is (almost always) the bridge's join-time
+    // default, not real speech -- ignore it so joining never yanks the stage onto the new person.
+    if (!isLocal) {
+      const firstSeenAt = remoteFirstSeenAtRef.current[jitsiMeeting.dominantSpeakerId];
+
+      if (firstSeenAt && Date.now() - firstSeenAt < REMOTE_JOIN_AUTO_PIN_GRACE_MS) {
+        return;
+      }
+    }
+
     setPinnedParticipantId(isLocal ? 'local' : jitsiMeeting.dominantSpeakerId);
   }, [jitsiMeeting.dominantSpeakerId, jitsiMeeting.localParticipantId]);
 
@@ -3140,6 +3165,18 @@ export function MeetingRoomPage() {
   // already expects (id, name, muted, video, raisedHand[, stream/audioStream for tiles]).
   useEffect(() => {
     const list = Object.values(jitsiMeeting.remoteParticipants);
+    const now = Date.now();
+
+    for (const r of list) {
+      if (!(r.id in remoteFirstSeenAtRef.current)) {
+        remoteFirstSeenAtRef.current[r.id] = now;
+      }
+    }
+    for (const id of Object.keys(remoteFirstSeenAtRef.current)) {
+      if (!list.some((r) => r.id === id)) {
+        delete remoteFirstSeenAtRef.current[id];
+      }
+    }
     setRemoteParticipants((prev) =>
       list.map((r) => {
         const existing = prev.find((p) => p.id === r.id);

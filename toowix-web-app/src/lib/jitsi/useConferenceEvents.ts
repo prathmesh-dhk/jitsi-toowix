@@ -88,12 +88,28 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
 
   const isLocalParticipantEvent = makeIsLocalParticipantEvent(room, localConferenceIdRef, localSessionIdRef);
 
+  // Real reported bug: a participant joining the call showed the speaking-ring outline on their
+  // own tile for ~2.5s despite never having spoken. Root cause -- JVB's dominant-speaker
+  // algorithm can report a just-joined participant as dominant before any real audio energy
+  // exists for them, and the DOMINANT_SPEAKER_CHANGED handler below unconditionally lit the
+  // speaking ring for whoever it named. Tracked here (first time each remote id is seen via
+  // USER_JOINED) and used as a grace period in that handler: a dominant-speaker report naming
+  // someone who joined less than DOMINANT_SPEAKER_JOIN_GRACE_MS ago is treated as this startup
+  // artifact, not real speech, and does not light the ring. A real speaker who keeps talking past
+  // the grace window still lights it normally the next time the bridge re-reports them. Mirrors
+  // (but is independent of) MeetingRoomPage.tsx's own remoteFirstSeenAtRef, which guards the
+  // separate auto-pin side effect of the same false signal -- this hook has no access to that
+  // component-level ref, so it keeps its own.
+  const remoteFirstSeenAt: Record<string, number> = {};
+  const DOMINANT_SPEAKER_JOIN_GRACE_MS = 4000;
+
   // Presence is deliberately asynchronous. In particular, after a browser reload Jitsi can
   // announce USER_JOINED before it delivers the custom deviceSessionId property. Do not let the
   // short gap create a second tile for the same browser tab: reconcile both the initial join and
   // the later PARTICIPANT_PROPERTY_CHANGED event against the stable session id.
   const removeRemoteParticipant = (id: string) => {
     clearSpeaking(id);
+    delete remoteFirstSeenAt[id];
     delete remoteNamesRef.current[id];
     delete remoteAvatarsRef.current[id];
     delete remoteSessionIdsRef.current[id];
@@ -290,6 +306,9 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     if (deviceSessionId === localSessionIdRef.current) {
       return;
     }
+    if (!(id in remoteFirstSeenAt)) {
+      remoteFirstSeenAt[id] = Date.now();
+    }
     // The JWT's context.user.avatar (see generateJitsiToken on the backend) is
     // propagated to every other participant as this "identity" -- it's the real
     // mechanism for remote avatars, not something lib-jitsi-meet exposes as a plain
@@ -420,6 +439,17 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       return;
     }
     setDominantSpeakerId(id);
+    // See remoteFirstSeenAt's own comment -- a just-joined participant can be reported dominant
+    // before they've made any real sound. Still records setDominantSpeakerId above unconditionally
+    // (MeetingRoomPage.tsx's own grace period already guards the auto-pin side effect of that),
+    // but the speaking-ring/muted-correction side effects below are skipped entirely for this
+    // report so the ring never lights up on somebody who hasn't actually spoken.
+    const firstSeenAt = remoteFirstSeenAt[id];
+    const withinJoinGracePeriod = Boolean(firstSeenAt) && Date.now() - firstSeenAt < DOMINANT_SPEAKER_JOIN_GRACE_MS;
+
+    if (withinJoinGracePeriod) {
+      return;
+    }
     // Fallback cue when per-track audio levels aren't delivered: hold ~2.5s.
     setSpeakingLevel(id, 1);
     setSpeakingLevel(id, 0, 2500);

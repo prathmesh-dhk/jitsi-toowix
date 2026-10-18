@@ -29,7 +29,19 @@ function publishLevel(id: string, level: number) {
   }
 }
 
-export function setSpeakingLevel(id: string, level: number, holdMs = 500) {
+// Real reported bug: the speaking ring flickered off and back on during completely normal
+// speech -- it dropped during any gap between words/sentences longer than the previous 500ms
+// default, which ordinary speech cadence (a breath, a pause before the next sentence) regularly
+// exceeds. Neither call site that feeds this (the local mic's own 10x/second RMS level monitor in
+// mediaHelpers.ts, nor the remote per-track TRACK_AUDIO_LEVEL_CHANGED listener in
+// useConferenceEvents.ts) passes an explicit holdMs, so both were silently relying on this
+// default -- raising it here fixes the ring for local AND remote participants without touching
+// either call site. 1200ms is the same "active speaking turn" hangover window other meeting UIs
+// use (long enough to smooth over a natural pause mid-sentence, still short enough to clear
+// promptly once someone genuinely stops talking) -- distinct from DOMINANT_SPEAKER_CHANGED's own
+// explicit 2500ms fallback hold (useConferenceEvents.ts), which exists for a different reason
+// (covering a gap with no audio-level data at all, not smoothing normal speech).
+export function setSpeakingLevel(id: string, level: number, holdMs = 1200) {
   publishLevel(id, level);
   if (level > 0.04) {
     const timer = holdTimers.get(id);
