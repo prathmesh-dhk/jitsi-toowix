@@ -193,7 +193,14 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       patchParticipant(participantId, { audioStream: trackToStream(track), muted: track.isMuted() });
       try {
         track.addEventListener(JitsiMeetJS.events.track.TRACK_AUDIO_LEVEL_CHANGED, (level: number) => {
-          setSpeakingLevel(participantId, track.isMuted() ? 0 : level);
+          // See the matching comment in mediaHelpers.ts's startLocalLevelMonitor -- a muted
+          // track's ring must clear instantly, not merely count down through the hold timer
+          // (setSpeakingLevel(id, 0) only starts that countdown, it doesn't clear immediately).
+          if (track.isMuted()) {
+            clearSpeaking(participantId);
+          } else {
+            setSpeakingLevel(participantId, level);
+          }
           // Someone whose audio is actually coming through is not muted -- correct a
           // stale "muted" flag instead of showing a muted mic on a talking person.
           if (level > 0.06) {

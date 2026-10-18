@@ -2,7 +2,7 @@
 // close over any of that hook's own state/refs -- every input is an explicit parameter -- so they
 // were the lowest-risk piece to extract first (Track 3, Phase 2, item 1). Moved verbatim; no
 // behavior change.
-import { setSpeakingLevel } from '../speakingStore';
+import { clearSpeaking, setSpeakingLevel } from '../speakingStore';
 
 export function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -57,7 +57,7 @@ let localLevelMonitor: { stop: () => void } | null = null;
 export function stopLocalLevelMonitor() {
   localLevelMonitor?.stop();
   localLevelMonitor = null;
-  setSpeakingLevel('local', 0);
+  clearSpeaking('local');
 }
 
 // Reads the live microphone level ten times a second for the green fill in the mic button and the
@@ -80,7 +80,12 @@ export function startLocalLevelMonitor(track: any) {
     source.connect(analyser);
     const timer = window.setInterval(() => {
       if (track.isMuted?.()) {
-        setSpeakingLevel('local', 0);
+        // Real reported bug: the speaking ring could still show while the mic was off and there
+        // was background noise. setSpeakingLevel(id, 0) still goes through the hold timer (it
+        // only starts counting down to clear, doesn't clear immediately) -- correct for a brief
+        // natural pause mid-sentence, but wrong here: a muted track can never actually be
+        // speaking, there is no "pause" to protect against, so this must clear instantly.
+        clearSpeaking('local');
 
         return;
       }
@@ -108,7 +113,12 @@ export function attachLocalSpeaking(track: any) {
   startLocalLevelMonitor(track);
   try {
     track?.addEventListener?.('track.audioLevelsChanged', (level: number) => {
-      setSpeakingLevel('local', track.isMuted?.() ? 0 : level);
+      if (track.isMuted?.()) {
+        clearSpeaking('local'); // see the matching comment in startLocalLevelMonitor above
+
+        return;
+      }
+      setSpeakingLevel('local', level);
     });
   } catch { /* audio levels unavailable */ }
 }
