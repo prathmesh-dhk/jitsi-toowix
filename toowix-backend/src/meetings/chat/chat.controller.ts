@@ -113,6 +113,22 @@ export async function uploadChatAudioHandler(req: any, res: Response): Promise<v
 }
 
 /**
+ * POST /api/meetings/room/:roomSlug/chat/file
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB).
+ */
+export async function uploadChatFileHandler(req: any, res: Response): Promise<void> {
+  try {
+    const room = String(req.params.roomSlug).toLowerCase();
+    const dataUri = typeof req.body.dataUri === 'string' ? req.body.dataUri : '';
+    const fileName = typeof req.body.fileName === 'string' ? req.body.fileName : 'file';
+    const result = await chatService.uploadFile(room, dataUri, fileName);
+    res.status(result.httpStatus).json(result.body);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message || 'Failed to upload file' });
+  }
+}
+
+/**
  * POST /api/meetings/room/:roomSlug/conversation/invite
  * Adds a member by email to this conversation and sends the E11_CONVERSATION_INVITE email.
  */

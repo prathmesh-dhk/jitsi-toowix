@@ -7,6 +7,7 @@ import { connectDatabase, disconnectDatabase, pingDatabase } from './db/connecti
 import { getAvatarUploadRoot } from './uploads/avatarStorage';
 import { getChatImageUploadRoot } from './uploads/chatImageStorage';
 import { getChatAudioUploadRoot } from './uploads/chatAudioStorage';
+import { getChatFileUploadRoot } from './uploads/chatFileStorage';
 
 dotenv.config();
 
@@ -89,6 +90,14 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
 app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot()));
 app.use('/api/uploads/chat-audios', express.static(getChatAudioUploadRoot()));
+// Content-Disposition: attachment makes the browser download these rather than try to render
+// them inline (a PDF or image would otherwise just open in a new tab) -- reliable regardless of
+// whether the frontend's own <a download> attribute is honored for a cross-origin URL. The
+// filename itself already comes from the URL path (chatFileStorage.ts stores each upload under
+// its own real original filename), so this only needs to flip the disposition, not restate it.
+app.use('/api/uploads/chat-files', express.static(getChatFileUploadRoot(), {
+  setHeaders: (res) => res.setHeader('Content-Disposition', 'attachment'),
+}));
 
 // API Root Placeholder
 app.get('/', (_req: Request, res: Response) => {

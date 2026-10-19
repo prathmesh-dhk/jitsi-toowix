@@ -55,7 +55,7 @@ import {
   Code2,
   Volume2,
 } from 'lucide-react';
-import { fetchChatHistory, resolveChatImageUrl } from '../lib/chatApi';
+import { fetchChatHistory, resolveChatImageUrl, resolveChatFileUrl } from '../lib/chatApi';
 import { ChatPanel } from '../components/meeting/ChatPanel';
 import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } from '../components/meeting/RecordingControls';
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
@@ -579,7 +579,7 @@ export function MeetingRoomPage() {
   const handleIncomingSignalRef = useRef<((sig: any) => void) | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [quickAccessEnabled, setQuickAccessEnabled] = useState(true);
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; senderId?: string; time: string; text: string; imageUrl?: string; uploading?: boolean }>>([
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; senderId?: string; time: string; text: string; imageUrl?: string; fileUrl?: string; fileName?: string; fileSize?: number; uploading?: boolean }>>([
     { id: '1', sender: 'Toowix System', time: 'Just now', text: 'Welcome to the meeting! Messages sent here are visible to all participants.' }
   ]);
   const chatHistoryLoadedRef = useRef(false);
@@ -602,6 +602,9 @@ export function MeetingRoomPage() {
           time: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
           text: m.text || '',
           imageUrl: m.imageUrl || undefined,
+          fileUrl: m.fileUrl ? resolveChatFileUrl(m.fileUrl) : undefined,
+          fileName: m.fileName || undefined,
+          fileSize: m.fileSize || undefined,
           edited: Boolean(m.edited),
         })));
       })
@@ -3914,7 +3917,10 @@ export function MeetingRoomPage() {
         // rare chance both this and a working datachannel send arrive.
         const text = typeof payload?.text === 'string' ? payload.text : '';
         const imageUrl = typeof payload?.imageUrl === 'string' ? resolveChatImageUrl(payload.imageUrl) : undefined;
-        if (!text && !imageUrl) return;
+        const fileUrl = typeof payload?.fileUrl === 'string' ? resolveChatFileUrl(payload.fileUrl) : undefined;
+        const fileName = typeof payload?.fileName === 'string' ? payload.fileName : undefined;
+        const fileSize = typeof payload?.fileSize === 'number' ? payload.fileSize : undefined;
+        if (!text && !imageUrl && !fileUrl) return;
         // payload.id is the message's own stable id, generated client-side by the sender (see
         // ChatPanel.tsx's generateMessageId) and shared with the persisted copy -- it's what a
         // later CHAT_MESSAGE_EDITED signal for THIS message will reference, so it must be used
@@ -3931,12 +3937,15 @@ export function MeetingRoomPage() {
             time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             text,
             imageUrl,
+            fileUrl,
+            fileName,
+            fileSize,
           },
         ]);
         playChatMessageTone();
         if (activePanelRef.current !== 'chat') {
           setUnreadChat((n) => n + 1);
-          setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text: text || 'Sent an image' } ]);
+          setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text: text || (fileUrl ? `Sent ${fileName || 'a file'}` : 'Sent an image') } ]);
           setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== chatId)), 5000);
         }
       } else if (type === 'CHAT_MESSAGE_EDITED') {

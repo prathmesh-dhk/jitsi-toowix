@@ -72,6 +72,14 @@ export interface IMeeting {
     imageUrl?: string | null;
     audioUrl?: string | null;
     audioDuration?: number | null;
+    // Generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB -- see
+    // chatFileStorage.ts) -- distinct from imageUrl/audioUrl, which keep their own dedicated
+    // inline-preview paths. Rendered client-side as a download card (name + size + a Download
+    // button), not an inline preview.
+    fileUrl?: string | null;
+    fileName?: string | null;
+    fileSize?: number | null;
+    fileType?: string | null;
     mentions?: string[];
     createdAt: Date;
     // Set once a sender edits their own message's text after sending (see chat.service.ts's
@@ -235,6 +243,10 @@ const MeetingSchema = new Schema<IMeetingDocument>(
         imageUrl: { type: String, default: null },
         audioUrl: { type: String, default: null },
         audioDuration: { type: Number, default: null },
+        fileUrl: { type: String, default: null },
+        fileName: { type: String, default: null },
+        fileSize: { type: Number, default: null },
+        fileType: { type: String, default: null },
         mentions: { type: [String], default: [] },
         createdAt: { type: Date, default: Date.now },
         edited: { type: Boolean, default: false },

@@ -19,6 +19,7 @@ import {
   getChatHistoryHandler,
   uploadChatImageHandler,
   uploadChatAudioHandler,
+  uploadChatFileHandler,
   markChatReadHandler,
   inviteConversationMemberHandler,
   getConversationMembersHandler,
@@ -84,6 +85,7 @@ router.patch('/room/:roomSlug/chat/:messageId', optionalAccount, editChatMessage
 router.get('/room/:roomSlug/chat', verifyFirebaseToken, getChatHistoryHandler);
 router.post('/room/:roomSlug/chat/image', optionalAccount, uploadChatImageHandler);
 router.post('/room/:roomSlug/chat/audio', optionalAccount, uploadChatAudioHandler);
+router.post('/room/:roomSlug/chat/file', optionalAccount, uploadChatFileHandler);
 router.post('/room/:roomSlug/chat/read', verifyFirebaseToken, markChatReadHandler);
 router.post('/room/:roomSlug/conversation/invite', optionalAccount, inviteConversationMemberHandler);
 router.get('/room/:roomSlug/conversation/members', optionalAccount, getConversationMembersHandler);

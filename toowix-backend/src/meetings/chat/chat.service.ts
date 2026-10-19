@@ -4,6 +4,7 @@ import { User } from '../../models/User';
 import { mayManageResource } from '../../middleware/ownership';
 import { persistChatImage } from '../../uploads/chatImageStorage';
 import { persistChatAudio } from '../../uploads/chatAudioStorage';
+import { persistChatFile } from '../../uploads/chatFileStorage';
 import { notifyCompany, notifyUser } from '../../notifications/notification.service';
 import { sendEmailAsync } from '../../email/sender';
 import { emailConfig } from '../../config/email';
@@ -37,6 +38,14 @@ interface ISaveMessageParams {
   // right message here too. Falls back to a server-generated id for an older client that
   // predates this (or never sends one), which simply can't be edited later.
   clientMessageId?: string;
+  // Generic file attachment (ZIP, PDF, DOCX, video, or any other type -- see chatFileStorage.ts;
+  // DISTINCT from imageUrl/audioUrl, which keep their own existing dedicated inline-preview
+  // paths). fileUrl alone (set by uploadFile below, same pattern uploadImage/uploadAudio use) is
+  // what the chat UI renders as a download card.
+  fileUrl?: string;
+  fileName?: string;
+  fileSize?: number;
+  fileType?: string;
 }
 
 /** Best-effort persistence for one chat message (text, image, voice message, and @mentions). */
@@ -53,10 +62,14 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
   const imageUrl = typeof params.imageUrl === 'string' ? params.imageUrl.slice(0, 2000) : null;
   const audioUrl = typeof params.audioUrl === 'string' ? params.audioUrl.slice(0, 2000) : null;
   const audioDuration = typeof params.audioDuration === 'number' ? params.audioDuration : null;
+  const fileUrl = typeof params.fileUrl === 'string' ? params.fileUrl.slice(0, 2000) : null;
+  const fileName = typeof params.fileName === 'string' ? params.fileName.slice(0, 200) : null;
+  const fileSize = typeof params.fileSize === 'number' ? params.fileSize : null;
+  const fileType = typeof params.fileType === 'string' ? params.fileType.slice(0, 120) : null;
   const mentions = Array.isArray(params.mentions) ? params.mentions.map((m: any) => String(m).slice(0, 100)) : [];
 
-  if (!text && !imageUrl && !audioUrl) {
-    return { body: { error: 'A message needs text, an image, or a voice message' }, httpStatus: 400 };
+  if (!text && !imageUrl && !audioUrl && !fileUrl) {
+    return { body: { error: 'A message needs text, an image, a voice message, or a file' }, httpStatus: 400 };
   }
 
   const clientMessageId = typeof params.clientMessageId === 'string' ? params.clientMessageId.slice(0, 160) : '';
@@ -68,6 +81,10 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
     imageUrl,
     audioUrl,
     audioDuration,
+    fileUrl,
+    fileName,
+    fileSize,
+    fileType,
     mentions,
     createdAt: new Date(),
   };
@@ -86,6 +103,13 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
           sharedBy: senderName,
           sharedAt: message.createdAt.toISOString(),
         } ] } } : {}),
+        ...(fileUrl ? { sharedFiles: { $each: [ {
+          name: fileName || `${senderName}-file-${Date.now()}`,
+          url: fileUrl,
+          size: fileSize ? `${Math.ceil(fileSize / 1024)} KB` : '',
+          sharedBy: senderName,
+          sharedAt: message.createdAt.toISOString(),
+        } ] } } : {}),
       },
     }
   );
@@ -94,7 +118,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
   // about a new saved message and give the notification a stable deep link to that exact item.
   // The authenticated sender is excluded, so sending a message never notifies yourself.
   const senderUser = params.firebaseUid ? await User.findOne({ firebaseUid: params.firebaseUid }).select('_id') : null;
-  let notifDesc = `${senderName}: ${text || (audioUrl ? `Sent a voice message (${Math.round(audioDuration || 0)}s)` : 'Sent an image')}`;
+  let notifDesc = `${senderName}: ${text || (audioUrl ? `Sent a voice message (${Math.round(audioDuration || 0)}s)` : fileUrl ? `Sent a file (${fileName || 'attachment'})` : 'Sent an image')}`;
   if (mentions.length > 0) {
     notifDesc = `${senderName} mentioned ${mentions.join(', ')}: ${text || ''}`;
   }
@@ -250,6 +274,26 @@ export async function uploadAudio(room: string, dataUri: string, requestOrigin: 
     return { body: { url }, httpStatus: 200 };
   } catch (error: any) {
     return { body: { error: error.message || 'Failed to upload voice note' }, httpStatus: 400 };
+  }
+}
+
+/**
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB) for a
+ * meeting conversation. Distinct from uploadImage/uploadAudio -- those keep their own existing
+ * dedicated inline-preview paths; this is for everything else, rendered as a download card.
+ */
+export async function uploadFile(room: string, dataUri: string, fileName: string): Promise<IServiceResult> {
+  const meeting = await Meeting.findOne({ roomSlug: room });
+
+  if (!meeting) {
+    return { body: { error: 'File sharing is only available in meetings created from your dashboard.' }, httpStatus: 403 };
+  }
+
+  try {
+    const file = await persistChatFile(dataUri, fileName, room);
+    return { body: file, httpStatus: 200 };
+  } catch (error: any) {
+    return { body: { error: error.message || 'Failed to upload file' }, httpStatus: 400 };
   }
 }
 

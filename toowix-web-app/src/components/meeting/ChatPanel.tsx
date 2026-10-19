@@ -8,8 +8,11 @@
 // component: in the original code it was only ever visible while this exact panel was rendered, so
 // moving it inside changes nothing a user could observe.
 import { useRef, useState } from 'react';
-import { Check, Copy, Pencil, Paperclip, Send, X } from 'lucide-react';
-import { persistChatMessage, editChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES } from '../../lib/chatApi';
+import { Check, Copy, Download, File as FileIcon, Paperclip, Pencil, Send, X } from 'lucide-react';
+import {
+  persistChatMessage, editChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES,
+  uploadChatFile, resolveChatFileUrl, MAX_CHAT_FILE_BYTES,
+} from '../../lib/chatApi';
 
 export interface IChatMessage {
   id: string;
@@ -18,11 +21,26 @@ export interface IChatMessage {
   time: string;
   text: string;
   imageUrl?: string;
+  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 5MB) -- rendered as a
+  // download card (name + size + a Download button) rather than an inline preview, distinct from
+  // imageUrl's own inline-image path.
+  fileUrl?: string;
+  fileName?: string;
+  fileSize?: number;
   uploading?: boolean;
   // Set once this message's text has been changed after sending (see handleSaveEdit below) --
   // shown as a small "(edited)" label, same convention WhatsApp uses, so nobody mistakes an
   // edited message for what was originally sent.
   edited?: boolean;
+}
+
+// Formats a byte count as a short human-readable size (e.g. "482 KB", "2.3 MB"), same convention
+// as the backend's own 5MB limit, for the download card's second line.
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Generates the id a message is known by for its entire lifetime: included in the live
@@ -62,6 +80,9 @@ export function ChatPanel({
   const [chatImageUploading, setChatImageUploading] = useState(false);
   const [chatImageError, setChatImageError] = useState<string | null>(null);
   const chatImageInputRef = useRef<HTMLInputElement | null>(null);
+  const [chatFileUploading, setChatFileUploading] = useState(false);
+  const [chatFileError, setChatFileError] = useState<string | null>(null);
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
   // Edit mode: at most one message editable at a time, same as WhatsApp. editingText is a
   // separate draft from the message's own stored text, so Cancel can discard it cleanly without
   // ever having mutated chatMessages.
@@ -260,6 +281,69 @@ export function ChatPanel({
     }
   };
 
+  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 5MB) -- distinct from
+  // handleAttachChatImage's dedicated inline-preview path above. No local preview is possible for
+  // an arbitrary file type, so the bubble shows a "Sending..." download card immediately instead,
+  // then swaps to the real hosted URL once uploadChatFile resolves.
+  const handleAttachChatFile = async (file: File | undefined) => {
+    if (!file) return;
+    setChatFileError(null);
+    const caption = chatInput.trim();
+
+    if (file.size > MAX_CHAT_FILE_BYTES) {
+      setChatFileError('File is too large -- the limit is 5MB.');
+      setTimeout(() => setChatFileError(null), 4000);
+      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+      return;
+    }
+
+    const id = generateMessageId(sessionId);
+
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id,
+        sender: displayName || 'You',
+        senderId: sessionId,
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        text: caption,
+        fileName: file.name,
+        fileSize: file.size,
+        uploading: true,
+      },
+    ]);
+    setChatInput('');
+    setChatFileUploading(true);
+    try {
+      const uploaded = await uploadChatFile(roomId, file);
+      const resolvedUrl = resolveChatFileUrl(uploaded.url);
+
+      setChatMessages((prev) => prev.map((m) => (
+        m.id === id ? { ...m, fileUrl: resolvedUrl, fileName: uploaded.fileName, fileSize: uploaded.fileSize, uploading: false } : m
+      )));
+      void postRoomSignal('CHAT_MESSAGE', {
+        id, text: caption, fileUrl: resolvedUrl, fileName: uploaded.fileName, fileSize: uploaded.fileSize,
+      });
+      void persistChatMessage(roomId, {
+        senderName: displayName || 'You',
+        senderId: sessionId,
+        text: caption,
+        fileUrl: resolvedUrl,
+        fileName: uploaded.fileName,
+        fileSize: uploaded.fileSize,
+        fileType: uploaded.fileType,
+        clientMessageId: id,
+      });
+    } catch (err: any) {
+      setChatMessages((prev) => prev.filter((m) => m.id !== id));
+      setChatFileError(err?.message || 'Failed to send file');
+      setTimeout(() => setChatFileError(null), 4000);
+    } finally {
+      setChatFileUploading(false);
+      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
       <div className="tw-chat-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', flex: 1, paddingBottom: '12px' }}>
@@ -297,7 +381,7 @@ export function ChatPanel({
                 flexDirection: 'column',
                 alignItems: isMine ? 'flex-end' : 'flex-start',
                 gap: '6px',
-                padding: msg.imageUrl || msg.text ? '8px' : '0',
+                padding: msg.imageUrl || msg.fileName || msg.text ? '8px' : '0',
                 borderRadius: '12px',
                 backgroundColor: isMine ? '#075E54' : '#263238',
                 border: '1px solid rgba(255,255,255,0.1)',
@@ -322,6 +406,44 @@ export function ChatPanel({
                     <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
                       Sending...
                     </span>
+                  )}
+                </div>
+              )}
+              {msg.fileName && !msg.imageUrl && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    width: '220px',
+                    padding: '8px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(0,0,0,0.2)',
+                    opacity: msg.uploading ? 0.65 : 1,
+                  }}
+                >
+                  <div style={{ width: '32px', height: '32px', borderRadius: '6px', backgroundColor: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <FileIcon size={16} color="#9AA0A6" />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', color: '#FFFFFF', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {msg.fileName}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#9AA0A6' }}>
+                      {msg.uploading ? 'Sending...' : formatFileSize(msg.fileSize || 0)}
+                    </div>
+                  </div>
+                  {!msg.uploading && msg.fileUrl && (
+                    <a
+                      href={msg.fileUrl}
+                      download={msg.fileName}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Download"
+                      style={{ ...chatIconButtonStyle, color: '#A8DAB5', flexShrink: 0 }}
+                    >
+                      <Download size={16} />
+                    </a>
                   )}
                 </div>
               )}
@@ -407,6 +529,9 @@ export function ChatPanel({
       {chatImageError && (
         <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatImageError}</div>
       )}
+      {chatFileError && (
+        <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatFileError}</div>
+      )}
       <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
         {attachmentsEnabled && (
           <>
@@ -437,6 +562,33 @@ export function ChatPanel({
               }}
             >
               <Paperclip size={16} />
+            </button>
+            <input
+              ref={chatFileInputRef}
+              type="file"
+              style={{ display: 'none' }}
+              onChange={(e) => void handleAttachChatFile(e.target.files?.[0])}
+            />
+            <button
+              type="button"
+              title="Attach a file (ZIP, PDF, DOCX, video, etc. -- max 5MB)"
+              disabled={chatFileUploading}
+              onClick={() => chatFileInputRef.current?.click()}
+              style={{
+                backgroundColor: 'transparent',
+                color: '#9AA0A6',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '50%',
+                width: '36px',
+                height: '36px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: chatFileUploading ? 'wait' : 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              <FileIcon size={16} />
             </button>
           </>
         )}

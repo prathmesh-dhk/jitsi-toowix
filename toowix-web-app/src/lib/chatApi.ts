@@ -4,6 +4,29 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API
 
 export const MAX_CHAT_IMAGE_BYTES = 3 * 1024 * 1024;
 export const MAX_CHAT_AUDIO_BYTES = 10 * 1024 * 1024;
+export const MAX_CHAT_FILE_BYTES = 5 * 1024 * 1024;
+
+// Resolves a generic file attachment's URL the same way resolveChatImageUrl/resolveChatAudioUrl
+// do (an older backend origin/host, a relative /api/uploads/... path, or an already-absolute
+// URL) -- kept as its own function rather than reusing resolveChatImageUrl so a future change
+// specific to one attachment type doesn't silently affect the others.
+export function resolveChatFileUrl(fileUrl: string): string {
+  if (!fileUrl) return '';
+  if (fileUrl.startsWith('blob:') || fileUrl.startsWith('data:')) {
+    return fileUrl;
+  }
+  if (fileUrl.includes('/api/uploads/')) {
+    const uploadPath = fileUrl.substring(fileUrl.indexOf('/api/uploads/'));
+    const backendRoot = BACKEND_URL ? BACKEND_URL.replace(/\/$/, '') : '';
+    return `${backendRoot}${uploadPath}`;
+  }
+  if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+    return fileUrl;
+  }
+  const backendRoot = BACKEND_URL ? BACKEND_URL.replace(/\/$/, '') : '';
+  const cleanPath = fileUrl.startsWith('/') ? fileUrl : `/${fileUrl}`;
+  return `${backendRoot}${cleanPath}`;
+}
 
 export function resolveChatImageUrl(imageUrl: string): string {
   if (!imageUrl) return '';
@@ -54,6 +77,10 @@ export async function persistChatMessage(
     imageUrl?: string | null;
     audioUrl?: string | null;
     audioDuration?: number | null;
+    fileUrl?: string | null;
+    fileName?: string | null;
+    fileSize?: number | null;
+    fileType?: string | null;
     mentions?: string[];
     // The SAME id used for the live real-time broadcast (see ChatPanel.tsx) -- so a later edit,
     // which only ever travels with this id, can find this exact persisted copy too.
@@ -148,6 +175,33 @@ export async function uploadChatAudio(roomId: string, audioBlob: Blob): Promise<
 }
 
 /**
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB) and
+ * returns its fetchable URL plus the metadata needed to render a download card in chat.
+ */
+export async function uploadChatFile(
+  roomId: string,
+  file: File
+): Promise<{ url: string; fileName: string; fileSize: number; fileType: string }> {
+  if (file.size > MAX_CHAT_FILE_BYTES) {
+    throw new Error('File is too large -- the limit is 5MB.');
+  }
+
+  const dataUri = await readFileAsDataUri(file);
+  const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/chat/file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ dataUri, fileName: file.name }),
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data?.error || 'Failed to upload file');
+  }
+
+  return data;
+}
+
+/**
  * Invites a member by email to a conversation, sending the E11_CONVERSATION_INVITE email.
  */
 export async function inviteConversationMember(
@@ -233,6 +287,10 @@ export interface ISavedChatMessage {
   imageUrl?: string | null;
   audioUrl?: string | null;
   audioDuration?: number | null;
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
+  fileType?: string | null;
   mentions?: string[];
   createdAt: string;
   edited?: boolean;
