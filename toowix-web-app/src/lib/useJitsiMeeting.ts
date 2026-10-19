@@ -548,10 +548,14 @@ export function useJitsiMeeting({
   const [ isLocked, setIsLocked ] = useState(false);
   const [ shareAudioActive, setShareAudioActive ] = useState(false);
   const shareAudioTrackRef = useRef<any>(null);
-  // Audio obtained from the same picker as a desktop share. It is intentionally distinct from
-  // the explicit audio-only share above so stopping a presentation never stops an independently
-  // shared tab/system-audio source.
-  const desktopShareAudioTrackRef = useRef<any>(null);
+  // JVB accepts one outbound audio source for a participant. Screen audio is therefore mixed
+  // into the existing microphone sender instead of being added as a second Jitsi audio track.
+  const desktopShareAudioMixRef = useRef<{
+    jitsiTrack: any;
+    originalTrack: MediaStreamTrack;
+    outputTrack: MediaStreamTrack;
+    context: AudioContext;
+  } | null>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
   // one exists. Read by toggleAudio/toggleVideo/switchDevice/toggleScreenShare, which are
@@ -1307,7 +1311,10 @@ export function useJitsiMeeting({
       setIsLocked(false);
       setShareAudioActive(false);
       shareAudioTrackRef.current = null;
-      desktopShareAudioTrackRef.current = null;
+      const desktopAudioMix = desktopShareAudioMixRef.current;
+      desktopShareAudioMixRef.current = null;
+      try { desktopAudioMix?.outputTrack.stop(); } catch { /* best-effort */ }
+      void desktopAudioMix?.context.close().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
@@ -1674,6 +1681,25 @@ export function useJitsiMeeting({
     }
   }, []);
 
+  const stopDesktopShareAudio = useCallback(async () => {
+    const mix = desktopShareAudioMixRef.current;
+    if (!mix) return;
+
+    desktopShareAudioMixRef.current = null;
+    setShareAudioActive(false);
+    try {
+      // Keep the existing Jitsi local-track wrapper and conference sender. Replacing its native
+      // source avoids a second JVB audio source (which the bridge does not forward) while
+      // restoring the untouched microphone immediately after the presentation ends.
+      await mix.jitsiTrack.replaceTrack(mix.originalTrack);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn('[useJitsiMeeting] Failed to restore microphone after screen audio:', error);
+    }
+    try { mix.outputTrack.stop(); } catch { /* best-effort */ }
+    try { await mix.context.close(); } catch { /* best-effort */ }
+  }, []);
+
   // Dedicated stop path, used by BOTH the Toowix "Stop presenting" button (via toggleScreenShare
   // below) and the browser's own native "Stop sharing" bar (LOCAL_TRACK_STOPPED, wired at track
   // creation time). Screen and camera are separate simultaneous JVB sources in this app (see the
@@ -1705,28 +1731,7 @@ export function useJitsiMeeting({
         }
       }
 
-      // System/tab audio selected from the *same* browser picker is a companion of this
-      // presentation. Remove it with the desktop source so a stopped share cannot leave audio
-      // playing in the conference. An audio-only share started from the More menu is stored in
-      // shareAudioTrackRef instead and is deliberately not touched here.
-      const desktopAudioTrack = desktopShareAudioTrackRef.current;
-      if (desktopAudioTrack) {
-        desktopShareAudioTrackRef.current = null;
-        setShareAudioActive(false);
-        if (room) {
-          try {
-            await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopAudioTrack)), 6000, 'Timed out removing desktop audio track');
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error('[useJitsiMeeting] Failed to remove desktop audio from the conference:', err);
-          }
-        }
-        try {
-          desktopAudioTrack.dispose();
-        } catch {
-          // best-effort
-        }
-      }
+      await stopDesktopShareAudio();
 
       // Do not make remote cleanup depend on TRACK_REMOVED or the receiver's native track.
       // Publish the terminal snapshot even when removeTrack timed out/failed: the browser has
@@ -1771,7 +1776,7 @@ export function useJitsiMeeting({
     } finally {
       desktopStopInFlightRef.current = false;
     }
-  }, [ publishScreenShareSignal ]);
+  }, [ publishScreenShareSignal, stopDesktopShareAudio ]);
 
   const toggleScreenShare = useCallback(async () => {
     const JitsiMeetJS = window.JitsiMeetJS;
@@ -1933,25 +1938,37 @@ export function useJitsiMeeting({
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       const displayAudioTrack = displayStream?.getAudioTracks()[0];
       if (displayAudioTrack) {
-        // Audio is supplementary. A browser/device may offer a video source but decline its
-        // audio source, and that must never undo an already-published presentation.
+        // JVB permits one outbound audio source per endpoint. Mixing screen audio into the
+        // already-published microphone sender keeps it on that source, so every receiver
+        // (including mobile) gets it. Adding a second room audio track appeared locally valid
+        // but the bridge never announced/forwarded it.
         try {
-          const [ desktopAudioTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
-            { stream: new MediaStream([ displayAudioTrack ]), mediaType: 'audio' }
-          ]);
-          desktopShareAudioTrackRef.current = desktopAudioTrack;
+          const microphoneJitsiTrack = localAudioTrackRef.current;
+          const microphoneNativeTrack = microphoneJitsiTrack?.getTrack?.();
+          const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+          if (!microphoneJitsiTrack || !microphoneNativeTrack || !AudioContextCtor || typeof microphoneJitsiTrack.replaceTrack !== 'function') {
+            throw new Error('The active microphone cannot be mixed with screen audio.');
+          }
+          const context: AudioContext = new AudioContextCtor();
+          if (context.state === 'suspended') await context.resume();
+          const destination = context.createMediaStreamDestination();
+          context.createMediaStreamSource(new MediaStream([ microphoneNativeTrack ])).connect(destination);
+          context.createMediaStreamSource(new MediaStream([ displayAudioTrack ])).connect(destination);
+          const mixedTrack = destination.stream.getAudioTracks()[0];
+          if (!mixedTrack) {
+            throw new Error('Unable to create the mixed screen-audio track.');
+          }
+          await microphoneJitsiTrack.replaceTrack(mixedTrack);
+          desktopShareAudioMixRef.current = {
+            jitsiTrack: microphoneJitsiTrack,
+            originalTrack: microphoneNativeTrack,
+            outputTrack: mixedTrack,
+            context
+          };
           displayAudioTrack.addEventListener('ended', () => {
-            if (desktopShareAudioTrackRef.current !== desktopAudioTrack) return;
-            desktopShareAudioTrackRef.current = null;
-            setShareAudioActive(false);
-            room.removeTrack(desktopAudioTrack).catch(() => {});
-            try {
-              desktopAudioTrack.dispose();
-            } catch {
-              // best-effort
-            }
+            if (!desktopShareAudioMixRef.current) return;
+            void stopDesktopShareAudio();
           });
-          await runSerializedRoomOperation(() => room.addTrack(desktopAudioTrack));
           setShareAudioActive(true);
         } catch (audioError) {
           // eslint-disable-next-line no-console
@@ -2010,7 +2027,7 @@ export function useJitsiMeeting({
     } finally {
       desktopStartInFlightRef.current = false;
     }
-  }, [ publishScreenShareSignal, stopScreenShareInternal ]);
+  }, [ publishScreenShareSignal, stopDesktopShareAudio, stopScreenShareInternal ]);
 
   // startRecording/stopRecording wrap the raw JitsiConference API correctly: stopRecording
   // REQUIRES the session id returned by startRecording (calling it with no id, as the previous
@@ -2682,22 +2699,10 @@ export function useJitsiMeeting({
       return;
     }
 
-    // If this is the optional audio captured alongside an active presentation, the More-menu
-    // control means "stop sharing audio" without ending the screen share itself.
-    if (desktopShareAudioTrackRef.current) {
-      const track = desktopShareAudioTrackRef.current;
-      desktopShareAudioTrackRef.current = null;
-      setShareAudioActive(false);
-      try {
-        await room.removeTrack(track);
-      } catch {
-        // best-effort
-      }
-      try {
-        track.dispose();
-      } catch {
-        // best-effort
-      }
+    // If this is audio mixed into an active presentation, the More-menu control means "stop
+    // sharing audio" without ending the screen share itself.
+    if (desktopShareAudioMixRef.current) {
+      await stopDesktopShareAudio();
       return;
     }
 
@@ -2749,7 +2754,7 @@ export function useJitsiMeeting({
       // user cancelled the picker, or the source had no audio -- no-op, matches screen share's
       // own silent-cancel behavior.
     }
-  }, []);
+  }, [ stopDesktopShareAudio ]);
 
   // Pure, read-only: returns the deviceId MediaStreamTrack.getSettings() reports for the
   // CURRENTLY active local mic track, i.e. the real, in-use device -- not whatever the UI's
