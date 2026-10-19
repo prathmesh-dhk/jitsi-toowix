@@ -602,6 +602,7 @@ export function MeetingRoomPage() {
           time: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
           text: m.text || '',
           imageUrl: m.imageUrl || undefined,
+          edited: Boolean(m.edited),
         })));
       })
       .catch(() => {
@@ -3914,7 +3915,13 @@ export function MeetingRoomPage() {
         const text = typeof payload?.text === 'string' ? payload.text : '';
         const imageUrl = typeof payload?.imageUrl === 'string' ? resolveChatImageUrl(payload.imageUrl) : undefined;
         if (!text && !imageUrl) return;
-        const chatId = msgId || String(Date.now());
+        // payload.id is the message's own stable id, generated client-side by the sender (see
+        // ChatPanel.tsx's generateMessageId) and shared with the persisted copy -- it's what a
+        // later CHAT_MESSAGE_EDITED signal for THIS message will reference, so it must be used
+        // here (not the signal's own separate msgId/dedup id) whenever a sender provides one. An
+        // older client that predates editing never sends payload.id, so this still falls back to
+        // the signal's own msgId exactly as before.
+        const chatId = typeof payload?.id === 'string' && payload.id ? payload.id : (msgId || String(Date.now()));
         setChatMessages((prev) => [
           ...prev,
           {
@@ -3932,6 +3939,16 @@ export function MeetingRoomPage() {
           setChatToasts((prev) => [ ...prev.slice(-2), { id: chatId, sender: sender || 'Participant', text: text || 'Sent an image' } ]);
           setTimeout(() => setChatToasts((prev) => prev.filter((t) => t.id !== chatId)), 5000);
         }
+      } else if (type === 'CHAT_MESSAGE_EDITED') {
+        // Real-time counterpart of ChatPanel.tsx's handleSaveEdit -- updates the matching
+        // message (by its stable client-generated id, see the CHAT_MESSAGE branch's own comment)
+        // for every OTHER participant currently in the call. A message id this client never
+        // received (joined after it was sent and before history loaded, or simply doesn't have
+        // it for any other reason) is a safe no-op -- .map leaves every non-matching entry alone.
+        const editedId = typeof payload?.id === 'string' ? payload.id : '';
+        const editedText = typeof payload?.text === 'string' ? payload.text : '';
+        if (!editedId || !editedText) return;
+        setChatMessages((prev) => prev.map((m) => (m.id === editedId ? { ...m, text: editedText, edited: true } : m)));
       } else if (type === 'REACTION') {
         const emoji = typeof payload?.emoji === 'string' ? payload.emoji : '';
 
