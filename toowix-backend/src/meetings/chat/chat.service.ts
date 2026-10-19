@@ -31,6 +31,12 @@ interface ISaveMessageParams {
   senderId?: string;
   senderName?: string;
   text?: string;
+  // Generated client-side at send time (see ChatPanel.tsx) so the SAME id is used for the live
+  // real-time broadcast (postRoomSignal) and this persisted copy -- needed so a later edit
+  // (editMessage below), which only ever travels with that client-generated id, can find the
+  // right message here too. Falls back to a server-generated id for an older client that
+  // predates this (or never sends one), which simply can't be edited later.
+  clientMessageId?: string;
 }
 
 /** Best-effort persistence for one chat message (text, image, voice message, and @mentions). */
@@ -53,8 +59,9 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
     return { body: { error: 'A message needs text, an image, or a voice message' }, httpStatus: 400 };
   }
 
+  const clientMessageId = typeof params.clientMessageId === 'string' ? params.clientMessageId.slice(0, 160) : '';
   const message = {
-    id: crypto.randomUUID(),
+    id: clientMessageId || crypto.randomUUID(),
     senderName,
     senderId,
     text,
@@ -108,6 +115,54 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
   }
 
   return { body: { persisted: true, id: message.id }, httpStatus: 200 };
+}
+
+interface IEditMessageParams {
+  senderId?: string;
+  text: string;
+}
+
+/**
+ * Edits the text of one already-sent message. Best-effort, same as saveMessage -- a meeting with
+ * no persisted Meeting document (the homepage's free instant meeting) has no history to edit
+ * here at all, so this is a silent no-op for it; the LIVE edit still broadcasts fine via the
+ * real-time signal, this only affects what a reload or a later viewer of saved history sees.
+ * Ownership is checked by senderId (the sender's live session id, same guard the live chat's own
+ * "is this my own message" check already uses) rather than an account -- a guest with no account
+ * can send a message and must be able to edit it too. This means editing is only possible from
+ * the SAME session that sent it (reloading starts a new session id), which matches how this
+ * feature is actually used -- fixing a typo moments after sending, not a long-lived edit history.
+ */
+export async function editMessage(room: string, messageId: string, params: IEditMessageParams): Promise<IServiceResult> {
+  const meeting = await Meeting.findOne({ roomSlug: room });
+
+  if (!meeting) {
+    return { body: { edited: false }, httpStatus: 200 };
+  }
+
+  const text = String(params.text || '').slice(0, MAX_TEXT_LENGTH);
+
+  if (!text.trim()) {
+    return { body: { error: 'Message text cannot be empty' }, httpStatus: 400 };
+  }
+
+  const existing = (meeting.chatMessages || []).find((m) => m.id === messageId);
+
+  if (!existing) {
+    return { body: { error: 'Message not found' }, httpStatus: 404 };
+  }
+  if (!params.senderId || existing.senderId !== params.senderId) {
+    return { body: { error: 'You can only edit your own messages' }, httpStatus: 403 };
+  }
+
+  const editedAt = new Date();
+
+  await Meeting.updateOne(
+    { _id: meeting._id, 'chatMessages.id': messageId },
+    { $set: { 'chatMessages.$.text': text, 'chatMessages.$.edited': true, 'chatMessages.$.editedAt': editedAt } }
+  );
+
+  return { body: { edited: true, editedAt: editedAt.toISOString() }, httpStatus: 200 };
 }
 
 /** Returns the saved conversation for a dashboard-created meeting. */

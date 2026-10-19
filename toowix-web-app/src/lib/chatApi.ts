@@ -55,6 +55,9 @@ export async function persistChatMessage(
     audioUrl?: string | null;
     audioDuration?: number | null;
     mentions?: string[];
+    // The SAME id used for the live real-time broadcast (see ChatPanel.tsx) -- so a later edit,
+    // which only ever travels with this id, can find this exact persisted copy too.
+    clientMessageId?: string;
   }
 ): Promise<void> {
   try {
@@ -62,6 +65,24 @@ export async function persistChatMessage(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify(message),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * Edits the text of one already-sent message (sender-only, same live session that sent it).
+ * Best-effort, same pattern as persistChatMessage -- the live edit broadcast (postRoomSignal) is
+ * the source of truth for everyone currently in the call; this only affects what a reload or a
+ * later viewer of saved history sees.
+ */
+export async function editChatMessage(roomId: string, messageId: string, senderId: string, text: string): Promise<void> {
+  try {
+    await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/chat/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({ senderId, text }),
     });
   } catch {
     // best-effort
@@ -214,6 +235,8 @@ export interface ISavedChatMessage {
   audioDuration?: number | null;
   mentions?: string[];
   createdAt: string;
+  edited?: boolean;
+  editedAt?: string | null;
 }
 
 export interface IChatReadReceipt {

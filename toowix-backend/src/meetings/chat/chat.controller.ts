@@ -22,11 +22,31 @@ export async function postChatMessageHandler(req: any, res: Response): Promise<v
       audioUrl: req.body.audioUrl,
       audioDuration: req.body.audioDuration,
       mentions: req.body.mentions,
+      clientMessageId: req.body.clientMessageId,
     });
     res.status(result.httpStatus).json(result.body);
   } catch (error: any) {
     console.error('[ChatHistory] Failed to persist chat message:', error.message);
     res.status(500).json({ error: 'Failed to save message' });
+  }
+}
+
+/**
+ * PATCH /api/meetings/room/:roomSlug/chat/:messageId
+ * Edits the text of one already-sent message (sender-only, same live session that sent it).
+ */
+export async function editChatMessageHandler(req: any, res: Response): Promise<void> {
+  try {
+    const room = String(req.params.roomSlug).toLowerCase();
+    const messageId = String(req.params.messageId);
+    const result = await chatService.editMessage(room, messageId, {
+      senderId: req.body.senderId,
+      text: req.body.text,
+    });
+    res.status(result.httpStatus).json(result.body);
+  } catch (error: any) {
+    console.error('[ChatHistory] Failed to edit chat message:', error.message);
+    res.status(500).json({ error: 'Failed to edit message' });
   }
 }
 

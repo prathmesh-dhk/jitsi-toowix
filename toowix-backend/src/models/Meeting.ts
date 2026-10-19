@@ -74,6 +74,10 @@ export interface IMeeting {
     audioDuration?: number | null;
     mentions?: string[];
     createdAt: Date;
+    // Set once a sender edits their own message's text after sending (see chat.service.ts's
+    // editMessage) -- surfaced to clients as a WhatsApp-style "(edited)" label.
+    edited?: boolean;
+    editedAt?: Date | null;
   }>;
   // One entry per person who has opened this conversation, so the sender's view can show a
   // WhatsApp-style read receipt (blue double-check once the other side's lastReadAt is at or
@@ -233,6 +237,8 @@ const MeetingSchema = new Schema<IMeetingDocument>(
         audioDuration: { type: Number, default: null },
         mentions: { type: [String], default: [] },
         createdAt: { type: Date, default: Date.now },
+        edited: { type: Boolean, default: false },
+        editedAt: { type: Date, default: null },
       }],
       default: [],
     },

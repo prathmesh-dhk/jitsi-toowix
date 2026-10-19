@@ -8,8 +8,8 @@
 // component: in the original code it was only ever visible while this exact panel was rendered, so
 // moving it inside changes nothing a user could observe.
 import { useRef, useState } from 'react';
-import { Paperclip, Send } from 'lucide-react';
-import { persistChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES } from '../../lib/chatApi';
+import { Check, Copy, Pencil, Paperclip, Send, X } from 'lucide-react';
+import { persistChatMessage, editChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES } from '../../lib/chatApi';
 
 export interface IChatMessage {
   id: string;
@@ -19,7 +19,31 @@ export interface IChatMessage {
   text: string;
   imageUrl?: string;
   uploading?: boolean;
+  // Set once this message's text has been changed after sending (see handleSaveEdit below) --
+  // shown as a small "(edited)" label, same convention WhatsApp uses, so nobody mistakes an
+  // edited message for what was originally sent.
+  edited?: boolean;
 }
+
+// Generates the id a message is known by for its entire lifetime: included in the live
+// real-time broadcast (postRoomSignal's payload) AND the persisted copy (persistChatMessage's
+// clientMessageId) AND this sender's own local copy, so all three agree -- required for a later
+// edit (which only ever travels with this id) to find and update the right message everywhere.
+function generateMessageId(sessionId: string): string {
+  return `${sessionId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+const chatIconButtonStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#9AA0A6',
+  cursor: 'pointer',
+  padding: '2px 4px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: '4px',
+};
 
 export interface IChatPanelProps {
   chatMessages: IChatMessage[];
@@ -38,13 +62,21 @@ export function ChatPanel({
   const [chatImageUploading, setChatImageUploading] = useState(false);
   const [chatImageError, setChatImageError] = useState<string | null>(null);
   const chatImageInputRef = useRef<HTMLInputElement | null>(null);
+  // Edit mode: at most one message editable at a time, same as WhatsApp. editingText is a
+  // separate draft from the message's own stored text, so Cancel can discard it cleanly without
+  // ever having mutated chatMessages.
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  // Brief "Copied" confirmation on the clicked message's own Copy button -- clears itself.
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!chatInput.trim()) return;
     const text = chatInput.trim();
+    const id = generateMessageId(sessionId);
     const msg: IChatMessage = {
-      id: String(Date.now()),
+      id,
       sender: displayName || 'You',
       senderId: sessionId,
       time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -57,11 +89,75 @@ export function ChatPanel({
     // accelerant) instead of only sendEndpointTextMessage directly -- that datachannel relies
     // on Jitsi's BridgeChannel, which can be unready or unavailable, and had no fallback, so
     // messages could silently never reach other participants. HTTP always works.
-    void postRoomSignal('CHAT_MESSAGE', { text });
+    void postRoomSignal('CHAT_MESSAGE', { id, text });
     // Saving the conversation is a no-op on the backend for a meeting with no Meeting document
     // (the homepage's free instant meeting) -- only a dashboard-created meeting actually gets
     // anything written, so there's no persisted check needed here.
-    void persistChatMessage(roomId, { senderName: displayName || 'You', senderId: sessionId, text });
+    void persistChatMessage(roomId, { senderName: displayName || 'You', senderId: sessionId, text, clientMessageId: id });
+  };
+
+  // Copies the message's own text to the clipboard. navigator.clipboard requires a secure
+  // context (https, which this app always runs under) -- falls back to the older
+  // execCommand('copy') path (a temp, off-screen textarea) for any browser/context where it's
+  // unavailable, same fallback pattern as most other copy-to-clipboard UIs.
+  const handleCopyMessage = async (msg: IChatMessage) => {
+    const text = msg.text || '';
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        throw new Error('Clipboard API unavailable');
+      }
+    } catch {
+      try {
+        const textarea = document.createElement('textarea');
+
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      } catch {
+        return; // Nothing more to do -- silently give up rather than show a broken "Copied".
+      }
+    }
+    setCopiedMessageId(msg.id);
+    setTimeout(() => setCopiedMessageId((current) => (current === msg.id ? null : current)), 1500);
+  };
+
+  const handleStartEdit = (msg: IChatMessage) => {
+    setEditingMessageId(msg.id);
+    setEditingText(msg.text || '');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingText('');
+  };
+
+  // Saves an edit: updates the LOCAL copy immediately (the sender's own view), broadcasts it
+  // live to everyone currently in the call (same postRoomSignal transport every other real-time
+  // chat event uses), and persists it so a reload or a later viewer of saved history also sees
+  // the edited text -- all three keyed off the SAME message id (see generateMessageId's own
+  // comment for why that id has to be shared across all three from the moment the message was
+  // first sent).
+  const handleSaveEdit = (messageId: string) => {
+    const text = editingText.trim();
+
+    if (!text) {
+      handleCancelEdit();
+
+      return;
+    }
+    setChatMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, text, edited: true } : m)));
+    setEditingMessageId(null);
+    setEditingText('');
+    void postRoomSignal('CHAT_MESSAGE_EDITED', { id: messageId, text });
+    void editChatMessage(roomId, messageId, sessionId, text);
   };
 
   const handleAttachChatImage = async (file: File | undefined) => {
@@ -86,12 +182,12 @@ export function ChatPanel({
     // upload round-trip -- the bubble then swaps to the real hosted URL (or is removed on
     // failure) once uploadChatImage resolves, same "instant preview" feel as WhatsApp/Messenger.
     const localPreviewUrl = URL.createObjectURL(file);
-    const tempId = `local-${Date.now()}`;
+    const id = generateMessageId(sessionId);
 
     setChatMessages((prev) => [
       ...prev,
       {
-        id: tempId,
+        id,
         sender: displayName || 'You',
         senderId: sessionId,
         time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
@@ -106,17 +202,18 @@ export function ChatPanel({
       const url = await uploadChatImage(roomId, file);
       const resolvedUrl = resolveChatImageUrl(url);
 
-      setChatMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, imageUrl: resolvedUrl, uploading: false } : m)));
+      setChatMessages((prev) => prev.map((m) => (m.id === id ? { ...m, imageUrl: resolvedUrl, uploading: false } : m)));
       URL.revokeObjectURL(localPreviewUrl);
-      void postRoomSignal('CHAT_MESSAGE', { text: caption, imageUrl: resolvedUrl });
+      void postRoomSignal('CHAT_MESSAGE', { id, text: caption, imageUrl: resolvedUrl });
       void persistChatMessage(roomId, {
         senderName: displayName || 'You',
         senderId: sessionId,
         text: caption,
         imageUrl: resolvedUrl,
+        clientMessageId: id,
       });
     } catch (err: any) {
-      setChatMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setChatMessages((prev) => prev.filter((m) => m.id !== id));
       URL.revokeObjectURL(localPreviewUrl);
       setChatImageError(err?.message || 'Failed to send image');
       setTimeout(() => setChatImageError(null), 4000);
@@ -152,6 +249,9 @@ export function ChatPanel({
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexDirection: isMine ? 'row-reverse' : 'row' }}>
               <span style={{ fontSize: '12px', fontWeight: 600, color: isMine ? '#A8DAB5' : '#8AB4F8' }}>{msg.sender}</span>
               <span style={{ fontSize: '11px', color: '#9AA0A6' }}>{msg.time}</span>
+              {msg.edited && (
+                <span style={{ fontSize: '11px', color: '#9AA0A6', fontStyle: 'italic' }}>(edited)</span>
+              )}
             </div>
             <div
               style={{
@@ -188,12 +288,85 @@ export function ChatPanel({
                   )}
                 </div>
               )}
-              {msg.text && (
-                <div style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
-                  {msg.text}
+              {editingMessageId === msg.id ? (
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <textarea
+                    autoFocus
+                    value={editingText}
+                    onChange={(e) => setEditingText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSaveEdit(msg.id);
+                      } else if (e.key === 'Escape') {
+                        handleCancelEdit();
+                      }
+                    }}
+                    rows={2}
+                    style={{
+                      width: '100%',
+                      resize: 'none',
+                      backgroundColor: 'rgba(0,0,0,0.25)',
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      borderRadius: '6px',
+                      padding: '6px',
+                      color: '#FFFFFF',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      title="Cancel"
+                      onClick={handleCancelEdit}
+                      style={chatIconButtonStyle}
+                    >
+                      <X size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Save"
+                      onClick={() => handleSaveEdit(msg.id)}
+                      style={{ ...chatIconButtonStyle, color: '#A8DAB5' }}
+                    >
+                      <Check size={13} />
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                msg.text && (
+                  <div style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                    {msg.text}
+                  </div>
+                )
               )}
             </div>
+            {editingMessageId !== msg.id && (
+              <div style={{ display: 'flex', gap: '4px', flexDirection: isMine ? 'row-reverse' : 'row' }}>
+                {msg.text && (
+                  <button
+                    type="button"
+                    title={copiedMessageId === msg.id ? 'Copied!' : 'Copy message'}
+                    onClick={() => void handleCopyMessage(msg)}
+                    style={chatIconButtonStyle}
+                  >
+                    {copiedMessageId === msg.id ? <Check size={12} color="#A8DAB5" /> : <Copy size={12} />}
+                  </button>
+                )}
+                {isMine && msg.text && !msg.uploading && (
+                  <button
+                    type="button"
+                    title="Edit message"
+                    onClick={() => handleStartEdit(msg)}
+                    style={chatIconButtonStyle}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           );
         })}
