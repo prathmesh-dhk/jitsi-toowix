@@ -67,8 +67,13 @@ export function ChatPanel({
   // ever having mutated chatMessages.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
-  // Brief "Copied" confirmation on the clicked message's own Copy button -- clears itself.
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  // Brief "Copied to clipboard" toast shown after using the right-click/long-press menu's Copy
+  // item -- clears itself.
+  const [showCopiedToast, setShowCopiedToast] = useState(false);
+  // Right-click (or long-press, see onTouchStart below) context menu: at most one open at a
+  // time, positioned at the pointer. null means closed.
+  const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -125,8 +130,40 @@ export function ChatPanel({
         return; // Nothing more to do -- silently give up rather than show a broken "Copied".
       }
     }
-    setCopiedMessageId(msg.id);
-    setTimeout(() => setCopiedMessageId((current) => (current === msg.id ? null : current)), 1500);
+    setContextMenu(null);
+    setShowCopiedToast(true);
+    setTimeout(() => setShowCopiedToast(false), 1500);
+  };
+
+  // Right-click opens a small "Copy" context menu at the pointer, instead of a permanently
+  // visible button on every bubble. clientX/Y position it; a window-level listener (below, in
+  // the render) closes it on any click elsewhere, matching how a native context menu behaves.
+  const openContextMenu = (e: React.MouseEvent, msg: IChatMessage) => {
+    if (!msg.text) return; // nothing to copy
+    e.preventDefault();
+    setContextMenu({ messageId: msg.id, x: e.clientX, y: e.clientY });
+  };
+
+  // Touch devices have no right-click -- a long-press (same gesture WhatsApp itself uses) opens
+  // the same menu, centered under the finger. Cancelled by a normal tap/scroll (onTouchEnd/
+  // onTouchMove) so it never fires on an ordinary tap.
+  const handleTouchStart = (e: React.TouchEvent, msg: IChatMessage) => {
+    if (!msg.text) return;
+    const touch = e.touches[0];
+
+    if (!touch) return;
+    const x = touch.clientX;
+    const y = touch.clientY;
+
+    longPressTimerRef.current = window.setTimeout(() => {
+      setContextMenu({ messageId: msg.id, x, y });
+    }, 500);
+  };
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
 
   const handleStartEdit = (msg: IChatMessage) => {
@@ -337,7 +374,13 @@ export function ChatPanel({
                 </div>
               ) : (
                 msg.text && (
-                  <div style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                  <div
+                    onContextMenu={(e) => openContextMenu(e, msg)}
+                    onTouchStart={(e) => handleTouchStart(e, msg)}
+                    onTouchEnd={cancelLongPress}
+                    onTouchMove={cancelLongPress}
+                    style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left', cursor: 'context-menu', userSelect: 'text' }}
+                  >
                     {msg.text}
                   </div>
                 )
@@ -345,16 +388,6 @@ export function ChatPanel({
             </div>
             {editingMessageId !== msg.id && (
               <div style={{ display: 'flex', gap: '4px', flexDirection: isMine ? 'row-reverse' : 'row' }}>
-                {msg.text && (
-                  <button
-                    type="button"
-                    title={copiedMessageId === msg.id ? 'Copied!' : 'Copy message'}
-                    onClick={() => void handleCopyMessage(msg)}
-                    style={chatIconButtonStyle}
-                  >
-                    {copiedMessageId === msg.id ? <Check size={12} color="#A8DAB5" /> : <Copy size={12} />}
-                  </button>
-                )}
                 {isMine && msg.text && !msg.uploading && (
                   <button
                     type="button"
@@ -443,6 +476,81 @@ export function ChatPanel({
           <Send size={16} />
         </button>
       </form>
+      {contextMenu && (
+        // Fixed-position overlay: an invisible full-screen backdrop closes the menu on any click
+        // outside it (mousedown fires before the menu item's own onClick, so a click ON the Copy
+        // item still reaches it first -- same layering a native context menu uses), then the
+        // actual small menu, positioned at the pointer and nudged back on-screen if it would
+        // overflow the panel's own edge.
+        <>
+          <div
+            onMouseDown={() => setContextMenu(null)}
+            onTouchStart={() => setContextMenu(null)}
+            style={{ position: 'fixed', inset: 0, zIndex: 999 }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: contextMenu.y,
+              left: Math.min(contextMenu.x, window.innerWidth - 140),
+              zIndex: 1000,
+              backgroundColor: '#2D2E30',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: '8px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              overflow: 'hidden',
+              minWidth: '120px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                const msg = chatMessages.find((m) => m.id === contextMenu.messageId);
+
+                if (msg) void handleCopyMessage(msg);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                padding: '9px 12px',
+                background: 'transparent',
+                border: 'none',
+                color: '#E8EAED',
+                fontSize: '13px',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              <Copy size={14} />
+              Copy
+            </button>
+          </div>
+        </>
+      )}
+      {showCopiedToast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '24px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1001,
+            backgroundColor: '#2D2E30',
+            color: '#FFFFFF',
+            fontSize: '12px',
+            padding: '7px 14px',
+            borderRadius: '16px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            pointerEvents: 'none',
+          }}
+        >
+          Copied to clipboard
+        </div>
+      )}
     </div>
   );
 }
