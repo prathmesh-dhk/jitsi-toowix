@@ -548,6 +548,10 @@ export function useJitsiMeeting({
   const [ isLocked, setIsLocked ] = useState(false);
   const [ shareAudioActive, setShareAudioActive ] = useState(false);
   const shareAudioTrackRef = useRef<any>(null);
+  // Audio obtained from the same picker as a desktop share. It is intentionally distinct from
+  // the explicit audio-only share above so stopping a presentation never stops an independently
+  // shared tab/system-audio source.
+  const desktopShareAudioTrackRef = useRef<any>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
   // one exists. Read by toggleAudio/toggleVideo/switchDevice/toggleScreenShare, which are
@@ -1303,6 +1307,7 @@ export function useJitsiMeeting({
       setIsLocked(false);
       setShareAudioActive(false);
       shareAudioTrackRef.current = null;
+      desktopShareAudioTrackRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
@@ -1700,6 +1705,29 @@ export function useJitsiMeeting({
         }
       }
 
+      // System/tab audio selected from the *same* browser picker is a companion of this
+      // presentation. Remove it with the desktop source so a stopped share cannot leave audio
+      // playing in the conference. An audio-only share started from the More menu is stored in
+      // shareAudioTrackRef instead and is deliberately not touched here.
+      const desktopAudioTrack = desktopShareAudioTrackRef.current;
+      if (desktopAudioTrack) {
+        desktopShareAudioTrackRef.current = null;
+        setShareAudioActive(false);
+        if (room) {
+          try {
+            await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopAudioTrack)), 6000, 'Timed out removing desktop audio track');
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error('[useJitsiMeeting] Failed to remove desktop audio from the conference:', err);
+          }
+        }
+        try {
+          desktopAudioTrack.dispose();
+        } catch {
+          // best-effort
+        }
+      }
+
       // Do not make remote cleanup depend on TRACK_REMOVED or the receiver's native track.
       // Publish the terminal snapshot even when removeTrack timed out/failed: the browser has
       // already stopped producing the source, and this presence update is the authoritative
@@ -1774,6 +1802,7 @@ export function useJitsiMeeting({
     }
 
     let desktopTrack: any;
+    let displayStream: MediaStream | null = null;
     // Resolution applies when the browser creates the desktop source. We intentionally do not
     // tear down and re-prompt an already active share merely to change its resolution.
     const desktopPolicy = getMediaQualityPolicy(
@@ -1789,17 +1818,48 @@ export function useJitsiMeeting({
       // default frame rate. Capping it to 1080p is what actually reduces the CPU/GPU cost on
       // constrained hardware (e.g. two full browser call instances competing for one machine's
       // CPU during same-device testing) -- screen content is legible at 1080p either way.
-      [ desktopTrack ] = await JitsiMeetJS.createLocalTracks({
-        devices: [ 'desktop' ],
-        desktopSharingResolution: {
+      // lib-jitsi-meet's built-in desktop capture requests video only. Use one native picker so
+      // Chromium can offer its normal "Share tab audio" / system-audio choice, then hand both
+      // selected tracks to Jitsi. Audio is optional: browsers and source types that do not offer
+      // it still publish the screen normally.
+      // Do not put resolution constraints into getDisplayMedia itself. Chromium applies those
+      // before it has finished constructing a tab/window source, which is less reliable than a
+      // full-display source on some versions. Capture first, then ask for limits as a
+      // best-effort optimisation below.
+      displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const displayVideoTrack = displayStream.getVideoTracks()[0];
+      if (!displayVideoTrack) {
+        throw new Error('The selected source did not provide a video track.');
+      }
+      try {
+        await displayVideoTrack.applyConstraints({
           width: { max: desktopPolicy.desktopMaxWidth },
-          height: { max: desktopPolicy.desktopMaxHeight }
+          height: { max: desktopPolicy.desktopMaxHeight },
+          frameRate: { max: desktopPolicy.desktopFps }
+        });
+      } catch {
+        // Window/tab capture is still valid when a browser declines these optional limits.
+      }
+      [ desktopTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+        {
+          stream: new MediaStream([ displayVideoTrack ]),
+          mediaType: 'video',
+          videoType: 'desktop',
+          constraints: {
+            // lib-jitsi-meet uses ideal values as its early-track fallback before a selected
+            // tab/window has populated getSettings(). Full displays commonly populate sooner,
+            // which is why the old max-only shape appeared to work for them.
+            width: { ideal: desktopPolicy.desktopMaxWidth },
+            height: { ideal: desktopPolicy.desktopMaxHeight },
+            frameRate: { ideal: desktopPolicy.desktopFps }
+          }
         }
-      });
+      ]);
     } catch {
       // User cancelled the OS share picker, or permission was denied -- silently no-op,
       // matches the previous toggleShareScreen behavior. Nothing was acquired yet, so there's
       // nothing to clean up.
+      displayStream?.getTracks().forEach((track) => track.stop());
       desktopStartInFlightRef.current = false;
 
       return;
@@ -1871,6 +1931,38 @@ export function useJitsiMeeting({
         }
       } catch { /* hint is best-effort */ }
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
+      const displayAudioTrack = displayStream?.getAudioTracks()[0];
+      if (displayAudioTrack) {
+        // Audio is supplementary. A browser/device may offer a video source but decline its
+        // audio source, and that must never undo an already-published presentation.
+        try {
+          const [ desktopAudioTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+            { stream: new MediaStream([ displayAudioTrack ]), mediaType: 'audio' }
+          ]);
+          desktopShareAudioTrackRef.current = desktopAudioTrack;
+          displayAudioTrack.addEventListener('ended', () => {
+            if (desktopShareAudioTrackRef.current !== desktopAudioTrack) return;
+            desktopShareAudioTrackRef.current = null;
+            setShareAudioActive(false);
+            room.removeTrack(desktopAudioTrack).catch(() => {});
+            try {
+              desktopAudioTrack.dispose();
+            } catch {
+              // best-effort
+            }
+          });
+          await runSerializedRoomOperation(() => room.addTrack(desktopAudioTrack));
+          setShareAudioActive(true);
+        } catch (audioError) {
+          // eslint-disable-next-line no-console
+          console.warn('[useJitsiMeeting] Screen share started without system audio:', audioError);
+          try {
+            displayAudioTrack.stop();
+          } catch {
+            // best-effort
+          }
+        }
+      }
       const sessionId = typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -2587,6 +2679,25 @@ export function useJitsiMeeting({
     const room = roomRef.current;
 
     if (!JitsiMeetJS || !room) {
+      return;
+    }
+
+    // If this is the optional audio captured alongside an active presentation, the More-menu
+    // control means "stop sharing audio" without ending the screen share itself.
+    if (desktopShareAudioTrackRef.current) {
+      const track = desktopShareAudioTrackRef.current;
+      desktopShareAudioTrackRef.current = null;
+      setShareAudioActive(false);
+      try {
+        await room.removeTrack(track);
+      } catch {
+        // best-effort
+      }
+      try {
+        track.dispose();
+      } catch {
+        // best-effort
+      }
       return;
     }
 
