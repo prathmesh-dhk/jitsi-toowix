@@ -373,10 +373,13 @@ export async function requestPasswordReset(emailRaw: unknown, meta: IRequestMeta
 
       try {
         const auth = getFirebaseAuth();
-        resetLink = await auth.generatePasswordResetLink(normalizedEmail);
+        resetLink = await auth.generatePasswordResetLink(normalizedEmail, {
+          url: `${emailConfig.appUrl}/resetpassword`,
+          handleCodeInApp: true,
+        });
       } catch (fbError: any) {
         console.warn(`[Forgot Password] Could not generate Firebase reset link: ${fbError.message}`);
-        resetLink = `https://meet.toowix.com/reset-password?email=${encodeURIComponent(normalizedEmail)}`;
+        resetLink = `${emailConfig.appUrl}/resetpassword?email=${encodeURIComponent(normalizedEmail)}`;
       }
 
       // Dispatch E7 Password Reset email asynchronously (non-blocking)

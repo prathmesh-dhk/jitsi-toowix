@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, ArrowLeft, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
-import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
@@ -30,28 +28,18 @@ export function ForgotPasswordPage() {
 
     setIsLoading(true);
     try {
-      // 1. Trigger Firebase Client Password Reset Email
-      await sendPasswordResetEmail(auth, email.trim());
-
-      // 2. Trigger Backend Anti-Enumeration Reset Endpoint Tue-BE-3
-      try {
-        await fetch(`${BACKEND_URL}/api/auth/forgot-password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim() }),
-        });
-      } catch (backendErr) {
-        console.warn('[Forgot Password Backend Sync] Optional sync notice:', backendErr);
-      }
+      // Backend generates the Firebase action link (pointed at our own
+      // /resetpassword page) and sends the branded Toowix email.
+      await fetch(`${BACKEND_URL}/api/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
 
       setIsSent(true);
     } catch (err: any) {
-      console.error('[Firebase Reset Password] Error:', err);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-email') {
-        setIsSent(true);
-      } else {
-        setErrorMessage(err.message || 'Failed to send password reset email.');
-      }
+      console.error('[Forgot Password] Error:', err);
+      setErrorMessage(err.message || 'Failed to send password reset email.');
     } finally {
       setIsLoading(false);
     }

@@ -286,6 +286,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage').then(module => 
 import { LoginPage } from './pages/LoginPage';
 const SignupPage = lazy(() => import('./pages/SignupPage').then(module => ({ default: module.SignupPage })));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage').then(module => ({ default: module.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then(module => ({ default: module.ResetPasswordPage })));
 const EmailVerificationPage = lazy(() => import('./pages/EmailVerificationPage').then(module => ({ default: module.EmailVerificationPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(module => ({ default: module.SettingsPage })));
 const ProfileSection = lazy(() => import('./components/settings/ProfileSection').then(module => ({ default: module.ProfileSection })));
@@ -349,6 +350,8 @@ export default function App() {
           <Route path="/signup" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
           <Route path="/register" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
           <Route path="/forgot-password" element={<Suspense fallback={<RouteLoader />}><ForgotPasswordPage /></Suspense>} />
+          <Route path="/resetpassword" element={<Suspense fallback={<RouteLoader />}><ResetPasswordPage /></Suspense>} />
+          <Route path="/reset-password" element={<Suspense fallback={<RouteLoader />}><ResetPasswordPage /></Suspense>} />
           <Route path="/verify-email" element={<Suspense fallback={<RouteLoader />}><EmailVerificationPage /></Suspense>} />
           <Route element={<AccountGuard />}>
           {/* One Suspense boundary at the parent covers SettingsPage itself AND every lazy
