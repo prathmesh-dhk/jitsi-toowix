@@ -10,6 +10,7 @@ import {
   trackToStream,
 } from './jitsi/mediaHelpers';
 import { registerConferenceEventListeners } from './jitsi/useConferenceEvents';
+import { SCREEN_SHARE_PROPERTY, type IScreenShareSignal } from './jitsi/screenShareSignal';
 import { useNetworkQualityMonitor } from './jitsi/useNetworkQuality';
 
 // Type-only -- the runtime implementations (TensorFlow/MediaPipe segmentation model, RNNoise
@@ -35,6 +36,7 @@ import {
   type NetworkState,
   verifyCameraCaptureOrientation,
   getCameraCaptureDebugInfo,
+  getCameraDeviceCategory,
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
@@ -555,6 +557,11 @@ export function useJitsiMeeting({
   const localAudioTrackRef = useRef<any>(null);
   const localVideoTrackRef = useRef<any>(null);
   const localDesktopTrackRef = useRef<any>(null);
+  // Versioned, persistent participant presence is the authoritative screen-share snapshot.
+  // It survives a receiver joining late and is deliberately separate from transient WebRTC/Jitsi
+  // track events, which can be lost when a browser stops getDisplayMedia natively.
+  const localScreenShareSignalRef = useRef<IScreenShareSignal | null>(null);
+  const localScreenShareVersionRef = useRef(0);
   const networkStateRef = useRef<NetworkState>('GOOD');
   // Tracks call size for the background effect's initial resolution guess (see
   // setVirtualBackground) -- kept in sync by the network-quality effect below.
@@ -638,6 +645,9 @@ export function useJitsiMeeting({
   // negotiation is ever in flight against this room at a time.
   const trackOperationQueueRef = useRef<Promise<any>>(Promise.resolve());
   const remoteDesktopTracksRef = useRef<Record<string, any>>({});
+  const pendingRemoteDesktopTracksRef = useRef<Record<string, any>>({});
+  const remoteScreenShareSignalsRef = useRef<Record<string, IScreenShareSignal>>({});
+  const remoteDesktopTrackSessionsRef = useRef<Record<string, string>>({});
   const remoteNamesRef = useRef<Record<string, string>>({});
   const remoteAvatarsRef = useRef<Record<string, string | null>>({});
   const remoteSessionIdsRef = useRef<Record<string, string>>({});
@@ -730,6 +740,20 @@ export function useJitsiMeeting({
     trackOperationQueueRef.current = result.catch(() => undefined);
 
     return result;
+  }, []);
+
+  const publishScreenShareSignal = useCallback((signal: IScreenShareSignal) => {
+    const room = roomRef.current;
+    if (!room?.setLocalParticipantProperty) return false;
+    try {
+      room.setLocalParticipantProperty(SCREEN_SHARE_PROPERTY, JSON.stringify(signal));
+      localScreenShareSignalRef.current = signal;
+      if (import.meta.env.DEV) console.debug(`[screen-share] ${signal.status.toUpperCase()} state announced`, { sessionId: signal.sessionId, version: signal.version });
+      return true;
+    } catch (err) {
+      console.error('[screen-share] presence signaling error:', err);
+      return false;
+    }
   }, []);
 
   const patchParticipant = useCallback((id: string, patch: Partial<IRemoteParticipant>) => {
@@ -1053,7 +1077,8 @@ export function useJitsiMeeting({
             registerConferenceEventListeners(room, JitsiMeetJS, {
               isStale, patchParticipant, trackToStream, setSpeakingLevel, clearSpeaking, isSharingStatus,
               isDesktopTrackUsable, recomputeRemoteScreenShare,
-              lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
+              lastRemoteSpokeRef, remoteDesktopTracksRef, pendingRemoteDesktopTracksRef, remoteScreenShareSignalsRef,
+              remoteDesktopTrackSessionsRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
               localSessionIdRef, recordingSessionIdRef, sharedVideoRef, offerAnswerRecoveryRef, offerAnswerRecoveryTimerRef,
               onKickedRef,
               setRemoteParticipants, setConnectionStats, setIsModerator, setLocalParticipantId, setJoined,
@@ -1230,6 +1255,9 @@ export function useJitsiMeeting({
         localDesktopTrackRef.current = null;
       }
       remoteDesktopTracksRef.current = {};
+      pendingRemoteDesktopTracksRef.current = {};
+      remoteScreenShareSignalsRef.current = {};
+      remoteDesktopTrackSessionsRef.current = {};
       if (screenShareClearTimerRef.current) {
         clearTimeout(screenShareClearTimerRef.current);
         screenShareClearTimerRef.current = null;
@@ -1473,6 +1501,29 @@ export function useJitsiMeeting({
     return () => clearInterval(timer);
   }, [ joined ]);
 
+  // Backstop for a remote screen share freezing on viewers: real reported bug -- clicking the
+  // BROWSER'S OWN native "Stop sharing" bar (not the in-app button) stops the underlying native
+  // track directly. If that doesn't cleanly produce a TRACK_REMOVED/TRACK_MUTE_CHANGED signal for
+  // every other participant (seen in practice -- lib-jitsi-meet's own signaling for this exact
+  // path is not always reliable), recomputeRemoteScreenShare's own dead-track purge (see
+  // isDesktopTrackUsable there) never runs, because every call site that invokes it is itself
+  // event-driven -- nothing was left to purge a desktop entry whose native track quietly ended
+  // with no event ever arriving to trigger a recheck. Same pattern as the mic-badge backstop
+  // above: periodically re-run the existing purge so a stuck frame clears within ~2s even when
+  // the triggering event never arrives, instead of staying frozen for the rest of the call.
+  useEffect(() => {
+    if (!joined) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      if (Object.keys(remoteDesktopTracksRef.current).length > 0) {
+        recomputeRemoteScreenShare();
+      }
+    }, 2000);
+
+    return () => clearInterval(timer);
+  }, [ joined, recomputeRemoteScreenShare ]);
+
   const switchDeviceRef = useRef<typeof switchDevice | null>(null);
 
   const toggleAudio = useCallback((): Promise<void> => {
@@ -1641,11 +1692,23 @@ export function useJitsiMeeting({
           // presentation. The underlying operation is still allowed to settle in its serialized
           // queue after the visual state has been cleared.
           await withTimeout(runSerializedRoomOperation(() => room.removeTrack(desktopTrack)), 6000, 'Timed out removing desktop track');
+          if (import.meta.env.DEV) console.debug('[screen-share] Jitsi desktop track removed');
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
           setError('Could not stop screen sharing cleanly -- please try again.');
         }
+      }
+
+      // Do not make remote cleanup depend on TRACK_REMOVED or the receiver's native track.
+      // Publish the terminal snapshot even when removeTrack timed out/failed: the browser has
+      // already stopped producing the source, and this presence update is the authoritative
+      // instruction for every receiver (including a late joiner).
+      const activeSignal = localScreenShareSignalRef.current;
+      if (activeSignal && activeSignal.status === 'active') {
+        // STOP gets its own monotonic version.  Reusing the START version would allow a delayed
+        // START presence update for this same session to revive an already-stopped share.
+        publishScreenShareSignal({ ...activeSignal, version: ++localScreenShareVersionRef.current, status: 'stopped' });
       }
 
       // Only clear the ref if it still points at THIS track -- a newer share (started while this
@@ -1680,7 +1743,7 @@ export function useJitsiMeeting({
     } finally {
       desktopStopInFlightRef.current = false;
     }
-  }, []);
+  }, [ publishScreenShareSignal ]);
 
   const toggleScreenShare = useCallback(async () => {
     const JitsiMeetJS = window.JitsiMeetJS;
@@ -1787,6 +1850,7 @@ export function useJitsiMeeting({
         const nativeDesktopTrackForEndedListener = desktopTrack.getTrack?.();
 
         nativeDesktopTrackForEndedListener?.addEventListener?.('ended', () => {
+          if (import.meta.env.DEV) console.debug('[screen-share] native browser STOP detected');
           if (localDesktopTrackRef.current === desktopTrack) {
             void stopScreenShareInternal(desktopTrack);
           }
@@ -1807,6 +1871,18 @@ export function useJitsiMeeting({
         }
       } catch { /* hint is best-effort */ }
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
+      const sessionId = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const signal: IScreenShareSignal = {
+        version: ++localScreenShareVersionRef.current,
+        sessionId,
+        status: 'active'
+      };
+      if (import.meta.env.DEV) console.debug('[screen-share] desktop track published', { sessionId, version: signal.version });
+      if (!publishScreenShareSignal(signal)) {
+        throw new Error('Could not publish screen-share state');
+      }
       room.setDesktopSharingFrameRate?.(desktopPolicy.desktopFps);
       void applyMediaQualityPolicy();
       setIsScreenSharing(true);
@@ -1826,6 +1902,13 @@ export function useJitsiMeeting({
       if (localDesktopTrackRef.current === desktopTrack) {
         localDesktopTrackRef.current = null;
       }
+      // If publication failed after addTrack succeeded, retract the transport source too. This
+      // avoids an unannounced desktop source lingering until the participant leaves.
+      try {
+        await runSerializedRoomOperation(() => room.removeTrack(desktopTrack));
+      } catch {
+        // The normal stop path will still publish a terminal state if one was announced.
+      }
       try {
         desktopTrack.dispose();
       } catch {
@@ -1835,7 +1918,7 @@ export function useJitsiMeeting({
     } finally {
       desktopStartInFlightRef.current = false;
     }
-  }, [ stopScreenShareInternal ]);
+  }, [ publishScreenShareSignal, stopScreenShareInternal ]);
 
   // startRecording/stopRecording wrap the raw JitsiConference API correctly: stopRecording
   // REQUIRES the session id returned by startRecording (calling it with no id, as the previous
@@ -2088,6 +2171,65 @@ export function useJitsiMeeting({
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('pageshow', onVisible);
+    };
+  }, [ joined, switchDevice ]);
+
+  // Real reported bug (iPhone 13, Chrome -- actually WebKit under the hood, like every iOS
+  // browser): the camera came in landscape while held in portrait, and swapped to portrait once
+  // rotated to landscape -- backwards either way. Root cause is a known WebKit limitation, not a
+  // constraint/orientation-detection bug in this app: iOS computes the correct capture rotation
+  // ONCE, at the moment getUserMedia() starts, and then never re-applies it for the rest of that
+  // track's life -- physically rotating the phone afterward does not refresh it, so the live
+  // video stays locked to whichever orientation was current when the call started. The fix is to
+  // force a fresh capture (same mechanism the Bluetooth-recovery code above already uses --
+  // switchDevice with the SAME camera id reacquires via a brand new getUserMedia call) whenever
+  // the device actually rotates, so iOS recomputes rotation for the NEW orientation. Phone-only:
+  // desktop/tablet cameras aren't orientation-dependent, and this would just be a pointless
+  // restart for them.
+  const lastOrientationRecaptureAtRef = useRef(0);
+  // A reacquire briefly drops the live frame (a new getUserMedia + replaceTrack, same visible
+  // cost any device-switch in this app already has) -- fine for one genuine rotation, but several
+  // of those back-to-back would read as repeated flashes/freezes of their own. Orientation events
+  // can fire in bursts well past the 600ms per-event debounce below (e.g. the phone being tilted
+  // around rather than cleanly rotated, or iOS emitting more than one event for a single real
+  // turn) -- this is a hard floor between actual reacquisitions, independent of how many events
+  // arrive, so a burst still only ever reacquires once per cooldown window.
+  const MIN_ORIENTATION_RECAPTURE_INTERVAL_MS = 4000;
+
+  useEffect(() => {
+    if (getCameraDeviceCategory() !== 'phone') return undefined;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const onOrientationChange = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      // iOS fires the orientation-change event before the camera hardware/OS have actually
+      // settled into the new orientation -- reacquiring immediately can just recapture the
+      // still-stale orientation. A short settle delay (same order of magnitude other mobile
+      // camera recovery paths in this file already use) lets it catch up first.
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        if (!joined || switchDeviceInFlightRef.current.videoInput) return;
+        if (Date.now() - lastOrientationRecaptureAtRef.current < MIN_ORIENTATION_RECAPTURE_INTERVAL_MS) {
+          // Too soon after the last reacquire -- the track is already either correctly
+          // reoriented or mid-recapture; let the cooldown lapse instead of stacking another one.
+          return;
+        }
+        const track = localVideoTrackRef.current;
+        if (!track || track.isMuted?.()) return;
+        lastOrientationRecaptureAtRef.current = Date.now();
+        void switchDevice('videoInput', deviceIdsRef.current.videoDeviceId || '').catch(() => {
+          // Best-effort -- the existing (wrongly-oriented) track keeps working either way.
+        });
+      }, 600);
+    };
+
+    window.addEventListener('orientationchange', onOrientationChange);
+    (screen as any)?.orientation?.addEventListener?.('change', onOrientationChange);
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      window.removeEventListener('orientationchange', onOrientationChange);
+      (screen as any)?.orientation?.removeEventListener?.('change', onOrientationChange);
     };
   }, [ joined, switchDevice ]);
 

@@ -1,4 +1,7 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { Meeting } from '../models/Meeting';
+import { getChatFileUploadRoot, parseRoomSlugFromChatFileSubdir } from '../uploads/chatFileStorage';
 
 // Immediate cases (cancelled; instant meetings ended via "End for everyone") are handled
 // event-driven at the point of action -- see cancelMeetingHandler in meetings.ts and
@@ -94,6 +97,66 @@ const sweepAbandonedInstantMeetings = async (now: number): Promise<number> => {
   return result.deletedCount || 0;
 };
 
+// An ad-hoc room (instant meeting, or any link with no Meeting document) has no chat persisted
+// anywhere -- the conversation itself already dies with the in-memory signal buffer once the
+// meeting ends (see the chatMessages field comment on the Meeting model). A file attachment sent
+// in one of those rooms is the one piece of that conversation that DOES touch disk (persistChatFile
+// writes it regardless of whether a Meeting document exists), so it needs its own cleanup to match
+// the same "destroyed when the meeting ends, never saved" behavior the rest of an ad-hoc
+// conversation already has. 3 hours comfortably covers the 2-hour free-instant-meeting cap plus
+// room for a slow upload/download right at the end, without needing to hook this into whichever
+// exact signal fires "this meeting ended" for an ad-hoc room (there isn't one reliable single
+// point -- people simply close the tab most of the time).
+const ADHOC_CHAT_FILE_GRACE_MS = 3 * 60 * 60 * 1000;
+
+const sweepAdHocChatFiles = async (now: number): Promise<number> => {
+  const root = getChatFileUploadRoot();
+  let entries: string[];
+
+  try {
+    entries = await fs.readdir(root);
+  } catch {
+    // Directory doesn't exist yet -- nothing has ever been uploaded.
+    return 0;
+  }
+
+  let deleted = 0;
+
+  for (const subdir of entries) {
+    const dirPath = path.join(root, subdir);
+
+    try {
+      const stat = await fs.stat(dirPath);
+
+      if (!stat.isDirectory() || now - stat.mtimeMs < ADHOC_CHAT_FILE_GRACE_MS) {
+        continue;
+      }
+
+      const roomSlug = parseRoomSlugFromChatFileSubdir(subdir);
+
+      if (!roomSlug) {
+        continue;
+      }
+
+      // A real dashboard-created meeting's attachment lives as long as the meeting (and its
+      // saved chat) does -- that's managed by the sweeps above, not this one. Only delete here
+      // when there is genuinely no Meeting document for this room at all.
+      const meetingExists = await Meeting.exists({ roomSlug });
+
+      if (meetingExists) {
+        continue;
+      }
+
+      await fs.rm(dirPath, { recursive: true, force: true });
+      deleted++;
+    } catch {
+      // Best-effort -- a single bad entry must not abort the rest of the sweep.
+    }
+  }
+
+  return deleted;
+};
+
 export const runMeetingRetentionSweep = async () => {
   try {
     const now = Date.now();
@@ -101,6 +164,7 @@ export const runMeetingRetentionSweep = async () => {
     const scheduled = await sweepScheduledMeetings(now);
     const recurring = await sweepRecurringSeries(now);
     const abandoned = await sweepAbandonedInstantMeetings(now);
+    const adHocFiles = await sweepAdHocChatFiles(now);
     const total = cancelled + scheduled + recurring + abandoned;
 
     if (total > 0) {
@@ -108,6 +172,9 @@ export const runMeetingRetentionSweep = async () => {
         `[Meetings] Retention sweep: deleted ${total} meeting(s) `
         + `(cancelled=${cancelled}, scheduled=${scheduled}, recurring=${recurring}, abandoned=${abandoned})`
       );
+    }
+    if (adHocFiles > 0) {
+      console.log(`[Meetings] Retention sweep: deleted ${adHocFiles} ad-hoc chat file upload(s)`);
     }
   } catch (error: any) {
     console.error('[Meetings] Retention sweep failed:', error.message);

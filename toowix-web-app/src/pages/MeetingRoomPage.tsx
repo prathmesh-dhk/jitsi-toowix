@@ -180,8 +180,8 @@ interface IWaitingParticipant {
 }
 
 // Ticks every second, same self-ticking pattern as ElapsedClock (now in RecordingControls.tsx), but counting DOWN to a
-// meeting's scheduled/free-tier end time -- renders nothing until inside the final 5 minutes (see
-// the 5-minutes-remaining effect in MeetingRoomPage, which fires the matching tone/toast at the
+// meeting's scheduled/free-tier end time -- renders nothing until inside the final 10 minutes (see
+// the 10-minutes-remaining effect in MeetingRoomPage, which fires the matching tone/toast at the
 // same threshold), then shows a live MM:SS countdown badge in the top bar for the rest of the call.
 const MeetingEndCountdown = memo(function MeetingEndCountdown({ expiresAt }: { expiresAt: string | null }) {
   const [, setTick] = useState(0);
@@ -196,7 +196,7 @@ const MeetingEndCountdown = memo(function MeetingEndCountdown({ expiresAt }: { e
   if (!expiresAt) return null;
   const secondsRemaining = Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000);
 
-  if (secondsRemaining > 5 * 60 || secondsRemaining <= 0) return null;
+  if (secondsRemaining > 10 * 60 || secondsRemaining <= 0) return null;
 
   return (
     <div
@@ -213,6 +213,54 @@ const MeetingEndCountdown = memo(function MeetingEndCountdown({ expiresAt }: { e
       <Clock size={13} color="#F9AB00" />
       <span style={{ fontSize: '11px', fontWeight: 600, color: '#F9AB00', letterSpacing: '0.4px' }}>
         Ending in {formatDuration(secondsRemaining)}
+      </span>
+    </div>
+  );
+});
+
+// Ticks every second, same self-ticking pattern as MeetingEndCountdown above and ElapsedClock in
+// RecordingControls.tsx -- shown in the bottom-left corner for the whole call. Two modes: a
+// dashboard-made meeting counts UP from 00:00 since it started (no fixed end to count down to);
+// a free instant meeting instead counts DOWN from its 2-hour reserved cap (countdownTo), since
+// that one has an actual end time already being enforced elsewhere (see the 10-minute warning
+// effect above).
+const MeetingDurationTimer = memo(function MeetingDurationTimer({ startedAt, countdownTo }: { startedAt: number | null; countdownTo?: number | null }) {
+  const [, setTick] = useState(0);
+  const active = countdownTo != null ? true : startedAt != null;
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  if (!active) return null;
+  const seconds = countdownTo != null
+    ? Math.max(0, Math.floor((countdownTo - Date.now()) / 1000))
+    : Math.max(0, Math.floor((Date.now() - (startedAt as number)) / 1000));
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: '24px',
+        bottom: '16px',
+        zIndex: 100,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        backgroundColor: 'rgba(32, 33, 36, 0.88)',
+        backdropFilter: 'blur(8px)',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
+        padding: '8px 14px',
+        borderRadius: '20px',
+        boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+      }}
+    >
+      <Clock size={14} color="#8AB4F8" />
+      <span style={{ fontSize: '13px', fontWeight: 600, color: '#E8EAED', fontFamily: 'monospace', letterSpacing: '0.4px' }}>
+        {formatDuration(seconds)}
       </span>
     </div>
   );
@@ -259,9 +307,16 @@ export function MeetingRoomPage() {
   // capped at 2 hours, like a free-tier call limit. Captured once at mount (not re-read from
   // location.state on every render) so it can't be lost on an in-page navigation.
   const [isFreeInstantMeeting] = useState<boolean>(Boolean((location.state as any)?.freeInstantMeeting));
-  const freeInstantExpiresAtRef = useRef<number | null>(null);
+  // Real reported bug: the 2-hour warning toast/tone and countdown timer could silently never
+  // fire for a free instant meeting. Root cause -- this was a ref, not state: setting it inside
+  // an effect doesn't itself trigger a re-render, so effectiveExpiresAt (a plain const computed
+  // every render, not memoized) could stay closed over its stale `null` value inside the warning
+  // effects below until something ELSE happened to cause another render soon after join. In a
+  // quiet solo call that can take a while, which read as the warning "sometimes" not showing up.
+  // Real state guarantees the render (and therefore every effect reading it) picks up the real
+  // value the moment it's set, deterministically, every time.
+  const [freeInstantExpiresAt, setFreeInstantExpiresAt] = useState<number | null>(null);
   const tenMinuteWarningFiredRef = useRef(false);
-  const fiveMinuteWarningFiredRef = useRef(false);
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
   const [joining, setJoining] = useState(false);
@@ -2786,8 +2841,8 @@ export function MeetingRoomPage() {
   // client silently dropping out at a slightly different moment; a non-moderator still has its
   // own fallback leave in case the moderator's client isn't present for some reason.
   useEffect(() => {
-    if (isFreeInstantMeeting && hasJoined && !freeInstantExpiresAtRef.current) {
-      freeInstantExpiresAtRef.current = Date.now() + 2 * 60 * 60 * 1000;
+    if (isFreeInstantMeeting && hasJoined) {
+      setFreeInstantExpiresAt((current) => current ?? Date.now() + 2 * 60 * 60 * 1000);
     }
   }, [isFreeInstantMeeting, hasJoined]);
 
@@ -2796,7 +2851,7 @@ export function MeetingRoomPage() {
   // for an old meeting that's long since passed, using it here would auto-end the call within
   // moments of joining. A conversation call has no scheduled window to enforce, so skip it.
   const effectiveExpiresAt = isFromConversation ? null : (meetingInfo?.expiresAt
-    || (freeInstantExpiresAtRef.current ? new Date(freeInstantExpiresAtRef.current).toISOString() : null));
+    || (freeInstantExpiresAt ? new Date(freeInstantExpiresAt).toISOString() : null));
 
   useEffect(() => {
     if (!hasJoined || !effectiveExpiresAt) return;
@@ -2810,7 +2865,7 @@ export function MeetingRoomPage() {
     // routed through leaveMeeting() -> /meeting-ended, which is the right page for an explicit
     // host action, not for the link's own validity window running out from under you.
     //
-    // A free INSTANT meeting's cap (effectiveExpiresAt falling back to freeInstantExpiresAtRef,
+    // A free INSTANT meeting's cap (effectiveExpiresAt falling back to freeInstantExpiresAt,
     // see above) is NOT a link-validity window -- an instant meeting's link never expires on its
     // own; this is purely an app-level safety cap on how long one session may run. "Meeting
     // Ended" stays the honest, correct label for THAT case, so only a genuinely scheduled
@@ -2854,12 +2909,23 @@ export function MeetingRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined, effectiveExpiresAt, isModerator]);
 
-  // 10-minutes-remaining heads-up -- a gentle toast + tone, not an alert, fired once per meeting.
+  // 10-minutes-remaining heads-up: a toast + tone, fired once per meeting, and from this same
+  // moment the live MM:SS countdown appears in the top bar (see MeetingEndCountdown below) --
+  // consolidated into one single event instead of two separate 10-minute/5-minute warnings, so
+  // the message and the timer always start together.
   useEffect(() => {
     if (!hasJoined || !effectiveExpiresAt || tenMinuteWarningFiredRef.current) return;
     const msUntilWarning = new Date(effectiveExpiresAt).getTime() - Date.now() - 10 * 60 * 1000;
 
     if (msUntilWarning <= 0) {
+      // Already inside the final 10 minutes by the time this effect first runs (e.g. a late
+      // join, or effectiveExpiresAt only became available after some delay) -- still mark it
+      // fired and play the cue now rather than silently never firing it at all.
+      tenMinuteWarningFiredRef.current = true;
+      playTimeWarningTone();
+      setTimeLimitToast('10 minutes left in this meeting');
+      setTimeout(() => setTimeLimitToast((t) => (t === '10 minutes left in this meeting' ? null : t)), 6000);
+
       return;
     }
     const timer = setTimeout(() => {
@@ -2868,27 +2934,6 @@ export function MeetingRoomPage() {
       playTimeWarningTone();
       setTimeLimitToast('10 minutes left in this meeting');
       setTimeout(() => setTimeLimitToast((t) => (t === '10 minutes left in this meeting' ? null : t)), 6000);
-    }, msUntilWarning);
-
-    return () => clearTimeout(timer);
-  }, [hasJoined, effectiveExpiresAt]);
-
-  // 5-minutes-remaining heads-up -- the same tone used when recording starts (recognisable, more
-  // urgent than the 10-minute one above), a toast, and a live MM:SS countdown to the meeting's end
-  // shown in the top bar for the rest of the call (see MeetingEndCountdown below).
-  useEffect(() => {
-    if (!hasJoined || !effectiveExpiresAt || fiveMinuteWarningFiredRef.current) return;
-    const msUntilWarning = new Date(effectiveExpiresAt).getTime() - Date.now() - 5 * 60 * 1000;
-
-    if (msUntilWarning <= 0) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (fiveMinuteWarningFiredRef.current) return;
-      fiveMinuteWarningFiredRef.current = true;
-      playRecordingStartedTone();
-      setTimeLimitToast('5 minutes left in this meeting');
-      setTimeout(() => setTimeLimitToast((t) => (t === '5 minutes left in this meeting' ? null : t)), 6000);
     }, msUntilWarning);
 
     return () => clearTimeout(timer);
@@ -3080,7 +3125,7 @@ export function MeetingRoomPage() {
       clearTimeout(speakerRailPromotionTimerRef.current);
       speakerRailPromotionTimerRef.current = null;
     }
-    if (tileViewEnabled && !activePanel) return;
+    if (tileViewEnabled) return;
 
     const rawDominantId = jitsiMeeting.dominantSpeakerId;
     if (!rawDominantId || rawDominantId === jitsiMeeting.localParticipantId) return;
@@ -3417,7 +3462,7 @@ export function MeetingRoomPage() {
       ? 'screen-share-stage'
       : remoteParticipants.length === 0
         ? 'solo-stage'
-        : (!tileViewEnabled || activePanel)
+        : !tileViewEnabled
           ? 'toggle-speaker-view'
           : 'gallery-tile-view';
 
@@ -5497,15 +5542,17 @@ export function MeetingRoomPage() {
               )}
 
             </div>
-          ) : (!tileViewEnabled || activePanel) ? (
+          ) : !tileViewEnabled ? (
             /* Speaker View: one large stage (pinned participant, or the live dominant speaker when
                nothing is manually pinned -- see manuallyPinnedRef/setPinnedManually) + filmstrip
-               sidebar. Also used whenever a side panel (chat/people/etc) is open, even with tile
-               view otherwise on -- a full grid crammed next to a 380px panel read as a cluttered,
-               redundant layout; a single auto-following spotlight stage is what's wanted there
-               instead, matching Meet's own panel-open behaviour. The stage swaps automatically
-               as the dominant speaker changes (the same effect that drives this when tile view is
-               off), not just on manual pin. */
+               sidebar. Real reported bug: this used to also force itself on whenever a side panel
+               (chat/people/etc) was open, even with tile view otherwise on -- opening chat while in
+               grid view silently snapped to speaker view, and reopening grid view while a panel was
+               open didn't work at all (the panel-open check overrode tileViewEnabled regardless of
+               what was just clicked). Grid view and an open side panel aren't mutually exclusive;
+               this is now driven purely by tileViewEnabled, exactly like every other toggle in the
+               app. The stage swaps automatically as the dominant speaker changes (the same effect
+               that drives this when tile view is off), not just on manual pin. */
             <div
               className="tw-stage-row"
               style={{
@@ -6117,6 +6164,15 @@ export function MeetingRoomPage() {
                     sessionId={sessionIdRef.current}
                     roomId={roomId}
                     attachmentsEnabled={Boolean(meetingInfo?.persisted)}
+                    // Unlike image/voice attachments (unchanged -- dashboard-created meetings
+                    // only), generic file attachments are also allowed in an ad-hoc room (instant
+                    // meeting, or any shared link with no Meeting document): the file is written
+                    // to disk only, never the database, and gets swept away once the meeting's
+                    // gone (see sweepAdHocChatFiles in retention.service.ts and the matching
+                    // backend-side allowance in chat.service.ts's uploadFile) -- the same
+                    // "destroyed when the meeting ends" lifetime the rest of an ad-hoc
+                    // conversation already has.
+                    fileAttachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
                     postRoomSignal={postRoomSignal}
                   />
                 )}
@@ -6510,6 +6566,18 @@ export function MeetingRoomPage() {
             </div>
           )}
         </div>
+
+        {/* Meeting duration: shown for a real live call -- a dashboard-created meeting or an
+            instant one alike -- just not when replaying a saved conversation (isFromConversation),
+            which has no live "this meeting started at X" to time against. A free instant meeting
+            has an actual reserved 2-hour cap (freeInstantExpiresAt), so it counts DOWN to that
+            instead of counting up from zero -- "reserved for 2 hours, going down", not elapsed. */}
+        {!isFromConversation && (
+          <MeetingDurationTimer
+            startedAt={hasJoined ? meetingStartedAtRef.current : null}
+            countdownTo={isFreeInstantMeeting ? freeInstantExpiresAt : null}
+          />
+        )}
 
         {/* 3. CENTERED FLOATING BOTTOM TOOLBAR (72px height, pill container near #202124) */}
         <div

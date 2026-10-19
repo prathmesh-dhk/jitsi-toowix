@@ -1,4 +1,5 @@
 import { PLAYBACK_STATUSES, SHARED_VIDEO } from '../sharedVideo/constants';
+import { SCREEN_SHARE_PROPERTY, parseScreenShareSignal, type IScreenShareSignal } from './screenShareSignal';
 
 // Extracted from useJitsiMeeting.ts (Track 3, Phase 2, item 3): the room.on(...)/addCommandListener
 // wiring that used to run inline inside the CONNECTION_ESTABLISHED handler. This is NOT a React
@@ -30,6 +31,9 @@ export interface IConferenceEventDeps {
 
   lastRemoteSpokeRef: { current: Record<string, number> };
   remoteDesktopTracksRef: { current: Record<string, any> };
+  pendingRemoteDesktopTracksRef: { current: Record<string, any> };
+  remoteScreenShareSignalsRef: { current: Record<string, IScreenShareSignal> };
+  remoteDesktopTrackSessionsRef: { current: Record<string, string> };
   remoteNamesRef: { current: Record<string, string> };
   remoteAvatarsRef: { current: Record<string, string | null> };
   remoteSessionIdsRef: { current: Record<string, string> };
@@ -79,7 +83,8 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
   const {
     isStale, patchParticipant, trackToStream, setSpeakingLevel, clearSpeaking, isSharingStatus,
     isDesktopTrackUsable, recomputeRemoteScreenShare,
-    lastRemoteSpokeRef, remoteDesktopTracksRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
+    lastRemoteSpokeRef, remoteDesktopTracksRef, pendingRemoteDesktopTracksRef, remoteScreenShareSignalsRef,
+    remoteDesktopTrackSessionsRef, remoteNamesRef, remoteAvatarsRef, remoteSessionIdsRef, localConferenceIdRef,
     localSessionIdRef, recordingSessionIdRef, sharedVideoRef, offerAnswerRecoveryRef, offerAnswerRecoveryTimerRef,
     onKickedRef,
     setRemoteParticipants, setConnectionStats, setIsModerator, setLocalParticipantId, setJoined,
@@ -114,6 +119,9 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     delete remoteAvatarsRef.current[id];
     delete remoteSessionIdsRef.current[id];
     delete remoteDesktopTracksRef.current[id];
+    delete pendingRemoteDesktopTracksRef.current[id];
+    delete remoteScreenShareSignalsRef.current[id];
+    delete remoteDesktopTrackSessionsRef.current[id];
     recomputeRemoteScreenShare();
     setRemoteParticipants((prev) => {
       if (!(id in prev)) {
@@ -135,6 +143,28 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
 
       return next;
     });
+  };
+
+  const clearRemoteDesktop = (participantId: string, sessionId?: string) => {
+    // A late STOP for share #1 must never remove share #2.  Tracks are associated with the
+    // authoritative property snapshot at the instant they are promoted to the visible map.
+    if (sessionId && remoteDesktopTrackSessionsRef.current[participantId] !== sessionId) {
+      return;
+    }
+    delete remoteDesktopTracksRef.current[participantId];
+    delete pendingRemoteDesktopTracksRef.current[participantId];
+    delete remoteDesktopTrackSessionsRef.current[participantId];
+    if (import.meta.env.DEV) console.debug('[screen-share] remote presentation state cleared', { participantId, sessionId });
+    recomputeRemoteScreenShare();
+  };
+
+  const promotePendingDesktop = (participantId: string, signal: IScreenShareSignal) => {
+    const track = pendingRemoteDesktopTracksRef.current[participantId];
+    if (!track || track.isMuted() || !isDesktopTrackUsable(track)) return;
+    remoteDesktopTracksRef.current[participantId] = track;
+    remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
+    delete pendingRemoteDesktopTracksRef.current[participantId];
+    recomputeRemoteScreenShare();
   };
 
   const reconcileParticipantSession = (id: string, participant: any, sessionId?: unknown) => {
@@ -218,10 +248,40 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       // presentation -- Jitsi can deliver a track in a muted state before the first
       // real frame, and registering it here would present a black/frozen tile until
       // (if ever) it unmutes.
-      if (!track.isMuted() && isDesktopTrackUsable(track)) {
-        remoteDesktopTracksRef.current[participantId] = track;
-      }
-      recomputeRemoteScreenShare();
+      const signal = remoteScreenShareSignalsRef.current[participantId]
+        || parseScreenShareSignal(trackParticipant?.getProperty?.(SCREEN_SHARE_PROPERTY));
+      if (signal) remoteScreenShareSignalsRef.current[participantId] = signal;
+      // Track and presence may arrive in either order. Keep an early desktop track pending;
+      // only a current ACTIVE presence snapshot may put it on stage.
+      pendingRemoteDesktopTracksRef.current[participantId] = track;
+      if (signal?.status === 'active') promotePendingDesktop(participantId, signal);
+
+      // Real reported bug: a presenter clicking the BROWSER'S OWN native "Stop sharing" bar
+      // (instead of our in-app button) could leave the receiver's tile frozen forever. Root
+      // cause on the SENDER side was already found and fixed (see the matching "CONFIRMED BUG"
+      // comment in useJitsiMeeting.ts) -- Chromium's LOCAL_TRACK_STOPPED relies on
+      // MediaStream.oninactive, which is known-unreliable specifically for a native-bar stop,
+      // so a direct listener on the native track's own 'ended' event was added there as the
+      // reliable signal. The SAME unreliability can affect the RECEIVER side of Jitsi's own
+      // XMPP-level TRACK_REMOVED/TRACK_MUTE_CHANGED signaling for this exact path -- if it
+      // never arrives, remoteDesktopTracksRef is never purged and the tile stays frozen with
+      // nothing left to ever clear it. WebRTC's own RTCRtpReceiver track 'ended' event is a
+      // browser-native signal independent of that application-level signaling layer, and is
+      // the correct direct fix here, not a workaround: attach it the moment this desktop track
+      // is registered, so a dead remote share is purged immediately once the browser itself
+      // confirms the media line ended, rather than only via Jitsi's own (sometimes-missing)
+      // app-level event.
+      try {
+        const nativeDesktopTrack = track.getTrack?.();
+
+        nativeDesktopTrack?.addEventListener?.('ended', () => {
+          if (remoteDesktopTracksRef.current[participantId] === track) {
+            clearRemoteDesktop(participantId);
+          } else if (pendingRemoteDesktopTracksRef.current[participantId] === track) {
+            delete pendingRemoteDesktopTracksRef.current[participantId];
+          }
+        });
+      } catch { /* best-effort backstop; TRACK_REMOVED/TRACK_MUTE_CHANGED still cover the common paths */ }
     } else {
       patchParticipant(participantId, { stream: trackToStream(track), video: !track.isMuted() });
     }
@@ -247,10 +307,14 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
         // screen and never cleared.
         if (track.isMuted() || !isDesktopTrackUsable(track)) {
           if (remoteDesktopTracksRef.current[participantId] === track) {
-            delete remoteDesktopTracksRef.current[participantId];
+            clearRemoteDesktop(participantId);
+          } else if (pendingRemoteDesktopTracksRef.current[participantId] === track) {
+            delete pendingRemoteDesktopTracksRef.current[participantId];
           }
         } else {
-          remoteDesktopTracksRef.current[participantId] = track;
+          pendingRemoteDesktopTracksRef.current[participantId] = track;
+          const signal = remoteScreenShareSignalsRef.current[participantId];
+          if (signal?.status === 'active') promotePendingDesktop(participantId, signal);
         }
         recomputeRemoteScreenShare();
       } else {
@@ -294,8 +358,9 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       // by a newer desktop track added since) must not clear the current one out from
       // under it.
       if (remoteDesktopTracksRef.current[participantId] === track) {
-        delete remoteDesktopTracksRef.current[participantId];
-        recomputeRemoteScreenShare();
+        clearRemoteDesktop(participantId);
+      } else if (pendingRemoteDesktopTracksRef.current[participantId] === track) {
+        delete pendingRemoteDesktopTracksRef.current[participantId];
       }
     } else {
       patchParticipant(participantId, { stream: null, video: false });
@@ -352,10 +417,6 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     // lib-jitsi-meet exposes the logical property name in current versions, while some older
     // builds expose the XMPP-prefixed form. Accept both without treating unrelated properties as
     // roster changes.
-    if (propertyName !== 'deviceSessionId' && propertyName !== 'jitsi_participant_deviceSessionId') {
-      return;
-    }
-
     const participantId = typeof participantOrId === 'string'
       ? participantOrId
       : participantOrId?.getId?.();
@@ -365,6 +426,27 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     const participant = typeof participantOrId === 'string'
       ? room.getParticipantById(participantId)
       : participantOrId;
+
+    if (propertyName === SCREEN_SHARE_PROPERTY || propertyName === `jitsi_participant_${SCREEN_SHARE_PROPERTY}`) {
+      const signal = parseScreenShareSignal(newValue);
+      const previous = remoteScreenShareSignalsRef.current[participantId];
+      if (!signal || (previous && signal.version < previous.version)) {
+        if (import.meta.env.DEV) console.debug('[screen-share] ignored stale or invalid presence state', { participantId });
+        return;
+      }
+      if (previous && signal.version === previous.version && signal.status === previous.status && signal.sessionId === previous.sessionId) return;
+      remoteScreenShareSignalsRef.current[participantId] = signal;
+      if (signal.status === 'stopped') {
+        if (import.meta.env.DEV) console.debug('[screen-share] receiver STOP', { participantId, sessionId: signal.sessionId });
+        clearRemoteDesktop(participantId, signal.sessionId);
+      } else {
+        if (import.meta.env.DEV) console.debug('[screen-share] receiver START', { participantId, sessionId: signal.sessionId });
+        promotePendingDesktop(participantId, signal);
+      }
+      return;
+    }
+
+    if (propertyName !== 'deviceSessionId' && propertyName !== 'jitsi_participant_deviceSessionId') return;
     const deviceSessionId = reconcileParticipantSession(participantId, participant, newValue);
 
     if (deviceSessionId === localSessionIdRef.current) {
@@ -398,6 +480,9 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     delete remoteAvatarsRef.current[id];
     delete remoteSessionIdsRef.current[id];
     delete remoteDesktopTracksRef.current[id];
+    delete pendingRemoteDesktopTracksRef.current[id];
+    delete remoteScreenShareSignalsRef.current[id];
+    delete remoteDesktopTrackSessionsRef.current[id];
     recomputeRemoteScreenShare();
     // connectionStats is keyed by participant id and only ever grown by the
     // cq.remote_stats_updated listener above -- with nothing pruning it here, anyone

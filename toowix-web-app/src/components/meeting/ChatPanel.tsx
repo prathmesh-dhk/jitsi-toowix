@@ -70,11 +70,15 @@ export interface IChatPanelProps {
   sessionId: string;
   roomId: string;
   attachmentsEnabled: boolean;
+  // Separate from attachmentsEnabled: generic file attachments are also allowed in an ad-hoc
+  // room (no Meeting document), unlike image/voice attachments -- see MeetingRoomPage.tsx's own
+  // comment on this prop for why.
+  fileAttachmentsEnabled: boolean;
   postRoomSignal: (type: string, payload: any, targetSessionId?: string) => Promise<void> | void;
 }
 
 export function ChatPanel({
-  chatMessages, setChatMessages, displayName, sessionId, roomId, attachmentsEnabled, postRoomSignal,
+  chatMessages, setChatMessages, displayName, sessionId, roomId, attachmentsEnabled, fileAttachmentsEnabled, postRoomSignal,
 }: IChatPanelProps) {
   const [chatInput, setChatInput] = useState('');
   const [chatImageUploading, setChatImageUploading] = useState(false);
@@ -563,6 +567,10 @@ export function ChatPanel({
             >
               <Paperclip size={16} />
             </button>
+          </>
+        )}
+        {fileAttachmentsEnabled && (
+          <>
             <input
               ref={chatFileInputRef}
               type="file"

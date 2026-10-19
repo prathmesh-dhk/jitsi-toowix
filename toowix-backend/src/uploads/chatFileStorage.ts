@@ -71,3 +71,13 @@ export async function persistChatFile(
 export function getChatFileUploadRoot(): string {
   return UPLOAD_ROOT;
 }
+
+// Matches persistChatFile's own subdir naming (`${safeRoom}-${16 hex chars}`) so a sweep can
+// recover which room a stored upload belongs to.
+const SUBDIR_PATTERN = /^(.+)-([0-9a-f]{16})$/;
+
+export function parseRoomSlugFromChatFileSubdir(subdir: string): string | null {
+  const match = SUBDIR_PATTERN.exec(subdir);
+
+  return match ? match[1] : null;
+}

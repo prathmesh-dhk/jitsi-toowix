@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react';
 // indicator, never the whole meeting page.
 const speaking = new Map<string, boolean>();
 const holdTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const onsetTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Map<string, Set<() => void>>();
 const levels = new Map<string, number>();
 const levelListeners = new Map<string, Set<() => void>>();
@@ -41,30 +42,60 @@ function publishLevel(id: string, level: number) {
 // promptly once someone genuinely stops talking) -- distinct from DOMINANT_SPEAKER_CHANGED's own
 // explicit 2500ms fallback hold (useConferenceEvents.ts), which exists for a different reason
 // (covering a gap with no audio-level data at all, not smoothing normal speech).
+// Real reported bug: the speaking ring flickered on and off while the person wasn't actually
+// talking. Root cause -- only the "stop speaking" side had any debounce (the 1200ms hold below);
+// a level blip from ordinary background/room noise crossing the threshold turned the ring on
+// INSTANTLY, with nothing to tell a brief noise spike apart from someone genuinely starting to
+// talk. SPEAKING_ONSET_DELAY_MS adds the same kind of hysteresis to the "start speaking" side:
+// the level has to stay above threshold for a short sustained window before the ring actually
+// shows, so a quick blip that drops back down before that elapses never flips it on at all.
+const SPEAKING_ONSET_DELAY_MS = 300;
+
 export function setSpeakingLevel(id: string, level: number, holdMs = 1200) {
   publishLevel(id, level);
   if (level > 0.04) {
-    const timer = holdTimers.get(id);
+    const holdTimer = holdTimers.get(id);
 
-    if (timer) {
-      clearTimeout(timer);
+    if (holdTimer) {
+      clearTimeout(holdTimer);
       holdTimers.delete(id);
     }
-    set(id, true);
-  } else if (speaking.get(id) && !holdTimers.has(id)) {
-    holdTimers.set(id, setTimeout(() => {
-      holdTimers.delete(id);
-      set(id, false);
-    }, holdMs));
+    if (!speaking.get(id) && !onsetTimers.has(id)) {
+      onsetTimers.set(id, setTimeout(() => {
+        onsetTimers.delete(id);
+        set(id, true);
+      }, SPEAKING_ONSET_DELAY_MS));
+    }
+  } else {
+    const onsetTimer = onsetTimers.get(id);
+
+    if (onsetTimer) {
+      // Dropped back down before the onset delay elapsed -- was just a blip, never actually
+      // turn the ring on for it.
+      clearTimeout(onsetTimer);
+      onsetTimers.delete(id);
+    }
+    if (speaking.get(id) && !holdTimers.has(id)) {
+      holdTimers.set(id, setTimeout(() => {
+        holdTimers.delete(id);
+        set(id, false);
+      }, holdMs));
+    }
   }
 }
 
 export function clearSpeaking(id: string) {
   publishLevel(id, 0);
-  const timer = holdTimers.get(id);
+  const onsetTimer = onsetTimers.get(id);
 
-  if (timer) {
-    clearTimeout(timer);
+  if (onsetTimer) {
+    clearTimeout(onsetTimer);
+    onsetTimers.delete(id);
+  }
+  const holdTimer = holdTimers.get(id);
+
+  if (holdTimer) {
+    clearTimeout(holdTimer);
     holdTimers.delete(id);
   }
   set(id, false);

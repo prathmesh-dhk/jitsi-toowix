@@ -286,7 +286,13 @@ export async function uploadAudio(room: string, dataUri: string, requestOrigin: 
 export async function uploadFile(room: string, dataUri: string, fileName: string): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
 
-  if (!meeting) {
+  // Same ad-hoc-room allowance saveMessage already gives text messages (persisted: false, no
+  // error) -- a file sent in an instant meeting with no Meeting document is never written to the
+  // database here either; it's written to disk only (see persistChatFile) and swept away by
+  // sweepAdHocChatFiles once the meeting's gone, matching how the rest of that conversation is
+  // already "destroyed with the in-memory signal buffer once the meeting ends" (see the
+  // chatMessages field comment on the Meeting model).
+  if (!meeting && !room.startsWith('instant-') && !room.startsWith('twx-')) {
     return { body: { error: 'File sharing is only available in meetings created from your dashboard.' }, httpStatus: 403 };
   }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Video,
@@ -33,6 +33,7 @@ import { ConversationsPanel } from '../components/ConversationsPanel';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, buildMeetingPath, getMeetingUrl } from '../lib/meeting-id';
+import { formatDuration } from '../lib/formatDuration';
 import { useTheme } from '../lib/theme';
 import { ScheduleCalendar } from '../components/ScheduleCalendar';
 import { RecordingsPanel } from '../components/RecordingsPanel';
@@ -170,6 +171,23 @@ const mapApiMeeting = (meeting: IApiMeeting): IMeeting => {
     rsvps: meeting.rsvps,
   };
 };
+
+// Ticks every second, same self-ticking pattern as MeetingEndCountdown in MeetingRoomPage.tsx,
+// but counting UP from 00:00 (or H:MM:SS past the hour) since the live meeting's scheduled start,
+// shown on the dashboard's "LIVE NOW" spotlight card for however long it stays the featured one.
+const LiveElapsedTimer = memo(function LiveElapsedTimer({ startMs }: { startMs: number }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+
+  return <span>{formatDuration(elapsedSeconds)}</span>;
+});
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -1132,6 +1150,9 @@ export function DashboardPage() {
                         >
                           <span style={{ width: '8px', height: '8px', backgroundColor: '#EF4444', borderRadius: '50%' }} />
                           LIVE NOW
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>
+                            <LiveElapsedTimer startMs={featuredMeeting.startMs} />
+                          </span>
                         </span>
                       ) : (
                         <span
