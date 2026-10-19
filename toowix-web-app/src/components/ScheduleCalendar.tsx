@@ -14,7 +14,7 @@ import {
   Plus,
   X as XIcon,
 } from 'lucide-react';
-import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
+import { generateUniqueMeetingId, sanitizeCustomMeetingId, getMeetingUrl } from '../lib/meeting-id';
 import { ContactPicker } from './ContactPicker';
 import { ScheduledMeetingCardModal, IScheduledMeetingDetails } from './ScheduledMeetingCardModal';
 import { ShareMeetingModal, IShareMeetingData } from './ShareMeetingModal';
@@ -131,7 +131,7 @@ export function ScheduleCalendar({
   };
 
   const handleQuickWhatsAppShare = (m: IScheduleMeeting) => {
-    const meetingUrl = `${window.location.origin}/meet/${m.roomSlug}`;
+    const meetingUrl = getMeetingUrl(m.roomSlug);
     const dateStr = m.scheduledAt
       ? new Date(m.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'Scheduled';
@@ -147,7 +147,7 @@ export function ScheduleCalendar({
   };
 
   const openMeetingModal = (m: IScheduleMeeting) => {
-    const meetingUrl = `${window.location.origin}/meet/${m.roomSlug}`;
+    const meetingUrl = getMeetingUrl(m.roomSlug);
     const parsedInvitees = (m.invitees || []).map((email) => {
       const rsvp = (m.rsvps || []).find((r) => r.email?.toLowerCase() === email.toLowerCase());
       return {
@@ -235,7 +235,7 @@ export function ScheduleCalendar({
         recurrence: recurrence !== 'NONE' ? { frequency: recurrence, until: recurrenceUntil ? new Date(recurrenceUntil).toISOString() : undefined } : null,
       });
 
-      const meetingUrl = `${window.location.origin}/meet/${roomSlug}`;
+      const meetingUrl = getMeetingUrl(roomSlug);
       setScheduledLink(meetingUrl);
       setSubmitted(true);
       setTimeout(() => setSubmitted(false), 2000);
@@ -534,13 +534,13 @@ export function ScheduleCalendar({
                         {m.passcode && <span style={{ marginLeft: '6px', color: '#B45309' }}>• Passcode: {m.passcode}</span>}
                       </div>
                       <a
-                        href={`${window.location.origin}/meet/${m.roomSlug}`}
+                        href={getMeetingUrl(m.roomSlug)}
                         target="_blank"
                         rel="noreferrer"
                         onClick={(e) => e.stopPropagation()}
                         style={{ display: 'block', marginTop: '5px', fontSize: '11px', color: '#4F46E5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                       >
-                        {window.location.origin}/meet/{m.roomSlug}
+                        {getMeetingUrl(m.roomSlug)}
                       </a>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -552,7 +552,7 @@ export function ScheduleCalendar({
                           e.stopPropagation();
                           setShareModalMeeting({
                             name: m.name,
-                            meetingUrl: `${window.location.origin}/meet/${m.roomSlug}`,
+                            meetingUrl: getMeetingUrl(m.roomSlug),
                             roomSlug: m.roomSlug,
                             scheduledAt: m.scheduledAt,
                             passcode: m.passcode,
@@ -582,7 +582,7 @@ export function ScheduleCalendar({
                         title="Copy meeting link"
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigator.clipboard.writeText(`${window.location.origin}/meet/${m.roomSlug}`);
+                          navigator.clipboard.writeText(getMeetingUrl(m.roomSlug));
                           setCopiedLink(true);
                           setTimeout(() => setCopiedLink(false), 1500);
                         }}

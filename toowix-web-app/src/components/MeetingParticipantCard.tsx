@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Hand, Mic, MicOff, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
+import { useSpeaking } from '../lib/speakingStore';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
 import { computeSmartVideoBoundary, type BoundaryMode } from '../lib/videoBoundary';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
@@ -24,6 +25,9 @@ export interface MeetingParticipantCardProps {
   style?: React.CSSProperties;
   compact?: boolean;
   mirrored?: boolean;
+  // Optional override only -- the card already tracks its own live speaking state reactively via
+  // participantId (see the useSpeaking call below). Leave unset; a caller only needs this for a
+  // case the store can't key by participantId.
   speaking?: boolean;
   isPinned?: boolean;
   onPin?: () => void;
@@ -83,6 +87,15 @@ export function MeetingParticipantCard({
 }: MeetingParticipantCardProps) {
   const initial = (name.trim() || 'P').charAt(0).toUpperCase();
   const size = compact ? 44 : 72;
+  // Real reported bug: the static speaking-ring border (the boxShadow below) could get stuck on
+  // after a remote participant muted mid-sentence. A caller that computed `speaking` with the
+  // non-reactive isSpeakingNow() snapshot (see ParticipantGallery.tsx's remote cards) only got a
+  // fresh value whenever ITS OWN parent happened to re-render for some unrelated reason -- never
+  // automatically when the store's speaking state actually changed. Reading it here instead, via
+  // the reactive useSpeaking hook keyed on this card's own participantId, re-renders this card
+  // the instant speaking actually starts/stops, the same guarantee SpeakingOverlay below already
+  // had. `speaking` is now an override only (OR'd in), not the source of truth.
+  const isActivelySpeaking = useSpeaking(participantId) || speaking;
   // Mobile camera orientation fix: a portrait (9:16) incoming stream must show fully, not get
   // cropped by 'cover' into a vertical zoom (objectFit), AND -- ONLY when adaptiveAspect is true --
   // the gallery that places this card can reshape the card itself to match (ratio, reported
@@ -154,7 +167,7 @@ export function MeetingParticipantCard({
       style={{
         position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0,
         borderRadius: compact ? '16px' : '24px', backgroundColor: theme.tileBg,
-        boxShadow: speaking
+        boxShadow: isActivelySpeaking
           ? `0 0 0 3px ${theme.ringColor}, 0 8px 32px rgba(0, 0, 0, 0.6)`
           : '0 8px 32px rgba(0, 0, 0, 0.4)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',

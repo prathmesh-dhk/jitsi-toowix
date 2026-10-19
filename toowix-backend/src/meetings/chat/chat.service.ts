@@ -8,6 +8,7 @@ import { persistChatFile } from '../../uploads/chatFileStorage';
 import { notifyCompany, notifyUser } from '../../notifications/notification.service';
 import { sendEmailAsync } from '../../email/sender';
 import { emailConfig } from '../../config/email';
+import { buildMeetingPath } from '../../lib/meetingPath';
 
 // All business rules for a meeting's saved conversation (chat messages, read receipts, image/
 // audio attachments, membership) live here as plain functions -- no `req`/`res` anywhere in this
@@ -342,7 +343,7 @@ export async function inviteMember(room: string, firebaseUid: string | undefined
   }
 
   const appUrl = emailConfig.appUrl || 'http://localhost:3000';
-  const conversationUrl = `${appUrl}/meet/${encodeURIComponent(meeting.roomSlug)}?fromConversation=1`;
+  const conversationUrl = `${appUrl}${buildMeetingPath(meeting.roomSlug)}?fromConversation=1`;
 
   // Send the conversation invitation email asynchronously
   await sendEmailAsync({

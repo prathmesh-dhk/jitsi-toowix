@@ -2,6 +2,7 @@ import { Meeting } from '../models/Meeting';
 import { notifyCompany, notifyUser } from './notification.service';
 import { sendEmailAsync } from '../email/sender';
 import { emailConfig } from '../config/email';
+import { buildMeetingPath } from '../lib/meetingPath';
 
 const CHECK_INTERVAL_MS = 60 * 1000;
 
@@ -32,7 +33,7 @@ const fireReminder = async (
       description: `"${meeting.name}" ${type === 'MEETING_STARTS_NOW' ? 'is starting now.' : `starts soon.`}`,
       relatedName: meeting.name,
       actionLabel: 'Join' as const,
-      actionUrl: `/meet/${meeting.roomSlug}`,
+      actionUrl: buildMeetingPath(meeting.roomSlug),
     };
     if (meeting.companyId) {
       await notifyCompany(meeting.companyId, payload);
@@ -45,7 +46,7 @@ const fireReminder = async (
       try {
         const populatedMeeting = await Meeting.findById(meeting._id).populate('createdBy', 'fullName email');
         if (populatedMeeting) {
-          const roomUrl = `${emailConfig.appUrl}/meet/${populatedMeeting.roomSlug}`;
+          const roomUrl = `${emailConfig.appUrl}${buildMeetingPath(populatedMeeting.roomSlug)}`;
           const dateTime = populatedMeeting.scheduledAt
             ? new Date(populatedMeeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
             : 'In 1 hour';

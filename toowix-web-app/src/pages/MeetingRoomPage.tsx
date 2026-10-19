@@ -56,6 +56,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { fetchChatHistory, resolveChatImageUrl, resolveChatFileUrl } from '../lib/chatApi';
+import { getMeetingUrl } from '../lib/meeting-id';
 import { ChatPanel } from '../components/meeting/ChatPanel';
 import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } from '../components/meeting/RecordingControls';
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
@@ -2307,7 +2308,7 @@ export function MeetingRoomPage() {
   };
 
   const handleCopyMeetingLink = () => {
-    const url = `${window.location.origin}/meet/${encodeURIComponent(roomId)}`;
+    const url = getMeetingUrl(roomId);
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
@@ -3399,7 +3400,13 @@ export function MeetingRoomPage() {
   // to false the moment a share starts, so "focused stage first" remains the actual starting state
   // every time -- the toggle click during an active share is what the restored condition here now
   // actually honors, instead of always being overridden back to the stage layout.
-  const showShareStage = Boolean(jitsiMeeting.sharedVideo) || (anyScreenShare && !tileViewEnabled);
+  // Double-clicking a participant card in the grid while a screen share is active sets
+  // tileViewEnabled false to request the normal pinned/speaker-view stage -- exactly like
+  // double-clicking a card works when nobody is sharing. Without this manual-pin check, that same
+  // tileViewEnabled flip would satisfy `anyScreenShare && !tileViewEnabled` below and snap
+  // straight back to the screen-share stage, silently ignoring the double-click.
+  const showShareStage = Boolean(jitsiMeeting.sharedVideo)
+    || (anyScreenShare && !tileViewEnabled && !(manuallyPinnedRef.current && pinnedParticipantId));
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- which of the four top-level render
   // branches (screen-share stage / solo stage / Toggle(speaker) View / Gallery(tile) view) is
   // actually active, so a "portrait card never appeared" report can be told apart from "it
@@ -3423,6 +3430,11 @@ export function MeetingRoomPage() {
     if (anyScreenShare && !wasSharingRef.current) {
       tileBeforeShareRef.current = tileViewEnabled;
       setTileViewEnabled(false);
+      // A screen share always starts on the share stage itself, not whatever participant was
+      // pinned from before -- otherwise showShareStage's manual-pin check (added so a double-click
+      // during an active share doesn't get overridden) would keep an old, unrelated pin showing
+      // instead of the share that was just started.
+      setPinnedManually(null);
     } else if (!anyScreenShare && wasSharingRef.current) {
       setTileViewEnabled(tileBeforeShareRef.current);
       // Don't carry a full-view choice into the next, unrelated share.
@@ -4769,6 +4781,76 @@ export function MeetingRoomPage() {
 
           {/* Top-Right: Participant Indicator Pill with Pin */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Presentation Status: sits beside the participant pill instead of floating over the
+                share tile itself -- only shown while someone is actively presenting/sharing. */}
+            {showShareStage && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  backgroundColor: '#202124',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: '20px',
+                  padding: '5px 10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {jitsiMeeting.sharedVideo ? <Youtube size={14} color="#8AB4F8" /> : <ScreenShare size={14} color="#8AB4F8" />}
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: '#E8EAED', whiteSpace: 'nowrap' }}>
+                    {jitsiMeeting.sharedVideo
+                      ? (jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId
+                        ? 'You are sharing a video'
+                        : 'Watching a shared video')
+                      : primaryShare?.kind === 'local'
+                        ? 'You are presenting your screen'
+                        : `${remotePresenterName || 'Participant'} is presenting their screen`}
+                  </span>
+                </div>
+                {isScreenSharing && (
+                  <button
+                    onClick={handleToggleScreenShare}
+                    style={{
+                      backgroundColor: '#EA4335',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '3px 10px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      transition: 'background-color 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#D93025')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
+                  >
+                    Stop presenting
+                  </button>
+                )}
+                {jitsiMeeting.sharedVideo && jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId && (
+                  <button
+                    onClick={() => jitsiMeeting.stopSharedVideo()}
+                    style={{
+                      backgroundColor: '#EA4335',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '3px 10px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      transition: 'background-color 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#D93025')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
+                  >
+                    Stop sharing
+                  </button>
+                )}
+              </div>
+            )}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -4977,79 +5059,6 @@ export function MeetingRoomPage() {
                   </Suspense>
                 ) : null}
 
-                {/* Floating Top Banner: Presentation Status */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '16px',
-                    left: '16px',
-                    backgroundColor: 'rgba(32, 33, 36, 0.88)',
-                    backdropFilter: 'blur(8px)',
-                    padding: '8px 16px',
-                    borderRadius: '16px',
-                    color: '#FFFFFF',
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {jitsiMeeting.sharedVideo ? <Youtube size={16} color="#8AB4F8" /> : <ScreenShare size={16} color="#8AB4F8" />}
-                    <span>
-                      {jitsiMeeting.sharedVideo
-                        ? (jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId
-                          ? 'You are sharing a video'
-                          : 'Watching a shared video')
-                        : primaryShare?.kind === 'local'
-                          ? 'You are presenting your screen'
-                          : `${remotePresenterName || 'Participant'} is presenting their screen`}
-                    </span>
-                  </div>
-                  {isScreenSharing && (
-                    <button
-                      onClick={handleToggleScreenShare}
-                      style={{
-                        backgroundColor: '#EA4335',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '8px',
-                        padding: '4px 12px',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        transition: 'background-color 0.15s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#D93025')}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
-                    >
-                      Stop presenting
-                    </button>
-                  )}
-                  {jitsiMeeting.sharedVideo && jitsiMeeting.sharedVideo.ownerId === jitsiMeeting.localParticipantId && (
-                    <button
-                      onClick={() => jitsiMeeting.stopSharedVideo()}
-                      style={{
-                        backgroundColor: '#EA4335',
-                        color: '#FFFFFF',
-                        border: 'none',
-                        borderRadius: '8px',
-                        padding: '4px 12px',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        transition: 'background-color 0.15s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#D93025')}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#EA4335')}
-                    >
-                      Stop sharing
-                    </button>
-                  )}
-                </div>
               </div>
 
               {/* Side People Box: ALWAYS placed on the RIGHT (Google Meet Layout), unless
@@ -5099,6 +5108,7 @@ export function MeetingRoomPage() {
                     // this click was a pin or an unpin).
                     setTileViewEnabled(wasPinned);
                   }}
+                  onDoubleClick={() => { setPinnedManually('local'); setTileViewEnabled(false); }}
                 />
                 {false && (
                 <div
@@ -5228,6 +5238,11 @@ export function MeetingRoomPage() {
                       setPinnedManually(wasPinned ? null : remote.id);
                       setTileViewEnabled(wasPinned);
                     }}
+                    // Double-clicking a participant while the screen share is on the main stage
+                    // switches to the normal pinned/speaker-view stage for them -- the share itself
+                    // isn't disturbed, it just moves into that stage's own filmstrip (see
+                    // showShareStage's manual-pin check and the screen-share filmstrip card there).
+                    onDoubleClick={() => { setPinnedManually(remote.id); setTileViewEnabled(false); }}
                   />;
                   if (false) return (
                     <div
@@ -5793,6 +5808,23 @@ export function MeetingRoomPage() {
                         )}
                       </div>
 
+                      {/* Screen share stays visible here instead of disappearing the moment a
+                          participant is pinned -- same ScreenShareTile used everywhere else,
+                          untouched. One click clears the manual pin, which hands control straight
+                          back to showShareStage above -- the same original full presentation-mode
+                          layout the share already uses the moment it starts, not a re-skinned copy
+                          of it squeezed into this stage's own card (that produced letterboxing, see
+                          the request this was changed in response to). */}
+                      {primaryShare && (
+                        <div
+                          onClick={() => setPinnedManually(null)}
+                          title={primaryShare.kind === 'local' ? 'View your screen share' : `View ${primaryShare.name}'s screen share`}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <ScreenShareTile stream={primaryShare.stream} label={primaryShare.name} compact />
+                        </div>
+                      )}
+
                       {orderedOthers.map((p, idx) => {
                         const t = getParticipantColorTheme(p.name, idx + 2);
                         const initial = (p.name.trim() || 'P').charAt(0).toUpperCase();
@@ -5997,12 +6029,12 @@ export function MeetingRoomPage() {
                           borderRadius: '10px',
                         }}
                       >
-                        {window.location.origin}/meet/{roomId}
+                        {getMeetingUrl(roomId)}
                       </div>
                     </div>
                     <button
                       onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/meet/${roomId}`);
+                        navigator.clipboard.writeText(getMeetingUrl(roomId));
                         setCopiedLink(true);
                         setTimeout(() => setCopiedLink(false), 2000);
                       }}
@@ -7272,7 +7304,7 @@ export function MeetingRoomPage() {
           onClose={() => setShowShareModal(false)}
           meeting={{
             name: formattedRoomTitle,
-            meetingUrl: `${window.location.origin}/meet/${encodeURIComponent(roomId)}`,
+            meetingUrl: getMeetingUrl(roomId),
             roomSlug: roomId,
             hostName: meetingInfo?.organizerName || displayName || 'Organizer',
             description: meetingInfo?.description || undefined,
@@ -7426,7 +7458,7 @@ export function MeetingRoomPage() {
         <EmbedMeetingModal
           isOpen={showEmbedModal}
           onClose={() => setShowEmbedModal(false)}
-          meetingUrl={`${window.location.origin}/meet/${encodeURIComponent(roomId)}`}
+          meetingUrl={getMeetingUrl(roomId)}
         />
 
         <SecurityOptionsModal
@@ -7482,7 +7514,7 @@ export function MeetingRoomPage() {
           isOpen={Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0 && !showMoreMenu && !showSettingsModal && !activePanel)}
           onClose={() => setShowMeetingReady(false)}
           onAddOthers={() => setShowShareModal(true)}
-          meetingUrl={`${window.location.origin}/meet/${encodeURIComponent(roomId)}`}
+          meetingUrl={getMeetingUrl(roomId)}
           joinedAs={auth.currentUser?.email || ''}
           isDark={isDark}
         />
@@ -8771,7 +8803,7 @@ export function MeetingRoomPage() {
                 Joining Info
               </span>
               <div style={{ fontSize: '13px', color: isDark ? '#E8EAED' : '#202124', fontFamily: 'monospace', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                {window.location.origin}/meet/{roomId}
+                {getMeetingUrl(roomId)}
               </div>
             </div>
 
@@ -8888,7 +8920,7 @@ export function MeetingRoomPage() {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {`${window.location.origin}/meet/${roomId}`}
+                    {getMeetingUrl(roomId)}
                   </span>
                   <button
                     onClick={handleCopyMeetingLink}

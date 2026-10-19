@@ -229,6 +229,15 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
     track.addEventListener(JitsiMeetJS.events.track.TRACK_MUTE_CHANGED, () => {
       if (type === 'audio') {
         patchParticipant(participantId, { muted: track.isMuted() });
+        // Real reported bug: the speaking ring/card outline stayed stuck on after muting
+        // mid-sentence. The TRACK_AUDIO_LEVEL_CHANGED listener above already clears it on mute,
+        // but only if another level event actually arrives afterward -- many browsers simply stop
+        // producing them once a track is muted, so that handler can go silent forever right at
+        // the moment speaking=true, leaving the ring on with no event left to turn it off.
+        // TRACK_MUTE_CHANGED always fires on mute regardless, so clear it here too.
+        if (track.isMuted()) {
+          clearSpeaking(participantId);
+        }
       } else if (videoType === 'desktop') {
         // This is the real signal Jitsi uses to stop a screen share in many cases --
         // muting the existing desktop track rather than immediately removing it. This

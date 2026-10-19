@@ -8,6 +8,7 @@ import { jitsiConfig } from '../../config/jitsi';
 import { notifyUser } from '../../notifications/notification.service';
 import { mayManageResource } from '../../middleware/ownership';
 import { SimpleCache } from '../../lib/simpleCache';
+import { buildMeetingPath } from '../../lib/meetingPath';
 import { publishLobbyEvent, publishLobbyQueue, publishLobbyStatus, issueLobbyStreamTicket } from './lobby.realtime';
 
 // All business rules for the waiting room / lobby / direct-admission flow live here as plain
@@ -254,7 +255,7 @@ export async function requestEntry(room: string, params: IRequestEntryParams): P
         title: `${displayName} is waiting to join`,
         description: `Waiting for admission to ${meeting.name}`,
         actionLabel: 'Join',
-        actionUrl: `/meet/${encodeURIComponent(room)}`,
+        actionUrl: buildMeetingPath(room),
       });
     }
   }

@@ -56,6 +56,7 @@ import {
   uploadChatImage,
 } from '../lib/chatApi';
 import { auth } from '../lib/firebase';
+import { buildMeetingPath } from '../lib/meeting-id';
 
 interface IConversationsPanelProps {
   isDark: boolean;
@@ -419,7 +420,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
     if (!selectedConversation) return;
     try {
       await navigator.clipboard.writeText(
-        `${window.location.origin}/meet/${encodeURIComponent(selectedConversation.roomSlug)}?fromConversation=1`
+        `${window.location.origin}${buildMeetingPath(selectedConversation.roomSlug)}?fromConversation=1`
       );
     } catch {
       // Best-effort
@@ -612,7 +613,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
   // effect in MeetingRoomPage.tsx).
   const handleStartConversationCall = () => {
     if (!selectedConversation?.roomSlug) return;
-    navigate(`/meet/${encodeURIComponent(selectedConversation.roomSlug)}?fromConversation=1`);
+    navigate(`${buildMeetingPath(selectedConversation.roomSlug)}?fromConversation=1`);
   };
 
   // Reset the privacy form to match the conversation's actual current state whenever the info
@@ -1310,7 +1311,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
                   <div className="tm-call-status-actions">
                     <button
                       type="button"
-                      onClick={() => navigate(`/meet/${encodeURIComponent(selectedConversation.roomSlug)}?fromConversation=1`)}
+                      onClick={() => navigate(`${buildMeetingPath(selectedConversation.roomSlug)}?fromConversation=1`)}
                       className="tm-open-tab-btn"
                       title="Go full screen"
                     >
@@ -1328,7 +1329,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
                 </div>
                 <iframe
                   title={`${selectedConversation.name} meeting`}
-                  src={`/meet/${encodeURIComponent(selectedConversation.roomSlug)}?fromConversation=1`}
+                  src={`${buildMeetingPath(selectedConversation.roomSlug)}?fromConversation=1`}
                   allow="camera; microphone; fullscreen; display-capture; autoplay"
                   className="tm-call-iframe"
                 />

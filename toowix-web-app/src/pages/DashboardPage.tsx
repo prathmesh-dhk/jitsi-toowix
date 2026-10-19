@@ -32,7 +32,7 @@ import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { ConversationsPanel } from '../components/ConversationsPanel';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
-import { generateUniqueMeetingId, sanitizeCustomMeetingId } from '../lib/meeting-id';
+import { generateUniqueMeetingId, buildMeetingPath, getMeetingUrl } from '../lib/meeting-id';
 import { useTheme } from '../lib/theme';
 import { ScheduleCalendar } from '../components/ScheduleCalendar';
 import { RecordingsPanel } from '../components/RecordingsPanel';
@@ -356,7 +356,7 @@ export function DashboardPage() {
     // their name) -- matches the "Public" option in the Schedule Meeting form's visibility select.
     try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Guest'); }
     catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
-    navigate(`/meet/${roomId}`, { state: { participation: "account" } });
+    navigate(buildMeetingPath(roomId), { state: { participation: "account" } });
   };
 
   const handleCreateMeetingForLater = async () => {
@@ -364,7 +364,7 @@ export function DashboardPage() {
     const password = laterPassword.trim();
     if (isPrivate && !password) return;
     const roomId = generateUniqueMeetingId();
-    const url = `${window.location.origin}/meet/${roomId}`;
+    const url = getMeetingUrl(roomId);
     setLaterCreating(true);
     try {
       await persistMeeting(
@@ -406,13 +406,9 @@ export function DashboardPage() {
     e.preventDefault();
     if (!joinCodeInput.trim()) return;
 
-    let input = joinCodeInput.trim();
-    // Support full URLs like https://talk.toowix.com/meet/my-room
-    if (input.includes('/meet/')) {
-      input = input.substring(input.lastIndexOf('/meet/') + 6);
-    }
-    const cleanRoom = sanitizeCustomMeetingId(input);
-    navigate(`/meet/${cleanRoom}`, { state: { participation: "account" } });
+    // Support full URLs in any of our link shapes (bare /twx-..., /instant/..., /meet/...) --
+    // sanitizeCustomMeetingId already extracts just the last path segment from a full URL.
+    navigate(buildMeetingPath(joinCodeInput.trim()), { state: { participation: "account" } });
   };
 
   // Determine greeting based on current hour
@@ -957,7 +953,7 @@ export function DashboardPage() {
                 duration: meeting.duration,
                 refDateIso: meeting.refDateIso,
                 roomSlug: meeting.roomSlug,
-                meetingUrl: `${window.location.origin}/meet/${meeting.roomSlug}`,
+                meetingUrl: getMeetingUrl(meeting.roomSlug),
                 status: meeting.status === 'Scheduled' ? 'Completed' : meeting.status,
                 actualStartTime: meeting.actualStartTime,
                 actualEndTime: meeting.actualEndTime,
@@ -1172,7 +1168,7 @@ export function DashboardPage() {
                     {/* Join Action CTA */}
                     <div>
                       <button
-                        onClick={() => navigate(`/meet/${featuredMeeting.meeting.roomSlug}`, { state: { participation: "account" } })}
+                        onClick={() => navigate(buildMeetingPath(featuredMeeting.meeting.roomSlug), { state: { participation: "account" } })}
                         className="dashboard-spotlight-btn"
                         style={{
                           padding: '12px 32px',
@@ -1227,7 +1223,7 @@ export function DashboardPage() {
                           </div>
                         </div>
                         <button
-                          onClick={() => navigate(`/meet/${m.meeting.roomSlug}`, { state: { participation: "account" } })}
+                          onClick={() => navigate(buildMeetingPath(m.meeting.roomSlug), { state: { participation: "account" } })}
                           style={{
                             padding: '6px 14px',
                             backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
@@ -1330,7 +1326,7 @@ export function DashboardPage() {
                           </td>
                           <td style={{ padding: '14px 18px', textAlign: 'right' }}>
                             <button
-                              onClick={() => navigate(`/meet/${meeting.roomSlug}`, { state: { participation: "account" } })}
+                              onClick={() => navigate(buildMeetingPath(meeting.roomSlug), { state: { participation: "account" } })}
                               style={{
                                 padding: '5px 12px',
                                 backgroundColor: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF',

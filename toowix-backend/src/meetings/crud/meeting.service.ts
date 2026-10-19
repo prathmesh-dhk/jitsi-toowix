@@ -10,6 +10,7 @@ import { notifyCompany } from '../../notifications/notification.service';
 import { sendEmailAsync } from '../../email/sender';
 import { emailConfig } from '../../config/email';
 import { SimpleCache } from '../../lib/simpleCache';
+import { buildMeetingPath } from '../../lib/meetingPath';
 
 // All business rules for meeting CRUD, conversations list/handoff, invites, and RSVP live here as
 // plain functions -- no `req`/`res` anywhere in this file. meeting.controller.ts parses HTTP in,
@@ -328,7 +329,7 @@ export async function createMeeting(params: ICreateMeetingParams): Promise<IServ
       );
     }
 
-    const roomUrl = `${emailConfig.appUrl}/meet/${meeting.roomSlug}`;
+    const roomUrl = `${emailConfig.appUrl}${buildMeetingPath(meeting.roomSlug)}`;
     const dateTime = meeting.scheduledAt
       ? new Date(meeting.scheduledAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
       : 'Starting now';
@@ -869,7 +870,7 @@ export async function inviteToMeeting(room: string, accountUserId: string | unde
       return { body: { error: 'Only the meeting host can invite people.' }, httpStatus: 403 };
     }
 
-    const roomUrl = `${emailConfig.appUrl}/meet/${room}`;
+    const roomUrl = `${emailConfig.appUrl}${buildMeetingPath(room)}`;
     let topic = 'Toowix meeting';
     let dateTime = 'Starting now';
     let passcode = 'Not required';
@@ -989,7 +990,7 @@ export async function submitRsvp(meetingIdOrSlug: string | undefined, emailRaw: 
           scheduledAt: meeting.scheduledAt,
           passcode: meeting.passcode,
           hostName,
-          meetingUrl: `${emailConfig.appUrl}/meet/${meeting.roomSlug}`,
+          meetingUrl: `${emailConfig.appUrl}${buildMeetingPath(meeting.roomSlug)}`,
         },
       },
     };

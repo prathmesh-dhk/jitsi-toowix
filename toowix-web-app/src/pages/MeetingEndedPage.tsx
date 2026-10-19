@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, RotateCcw, CheckCircle2, ShieldAlert, LogOut, Timer, X } from 'lucide-react';
 import { useTheme } from '../lib/theme';
 import { auth } from '../lib/firebase';
+import { buildMeetingPath } from '../lib/meeting-id';
 
 export function MeetingEndedPage() {
   const { isDark } = useTheme();
@@ -306,7 +307,7 @@ export function MeetingEndedPage() {
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', width: '100%' }}>
           {!isEndedForEveryone && !isDenied && (
             <button
-              onClick={() => navigate(`/meet/${encodeURIComponent(roomId)}`, { state: rejoinState })}
+              onClick={() => navigate(buildMeetingPath(roomId), { state: rejoinState })}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',

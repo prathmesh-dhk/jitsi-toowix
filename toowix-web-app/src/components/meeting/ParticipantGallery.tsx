@@ -20,7 +20,6 @@ import { animateGalleryCell, readVisualFrame } from '../../lib/galleryMotion';
 import { logGalleryDebug } from '../../lib/galleryOrientationDebug';
 import type { GalleryFrame } from '../../lib/galleryMotion';
 import { getParticipantColorTheme, type IParticipantColorTheme } from '../../lib/participantColorTheme';
-import { isSpeakingNow } from '../../lib/speakingStore';
 import { ScreenShareTile } from '../ScreenShareTile';
 import { MeetingParticipantCard } from '../MeetingParticipantCard';
 
@@ -457,7 +456,18 @@ export function ParticipantGallery({
           const cells = [
             ...allShares.map((share) => ({
               key: `share:${share.key}`,
-              node: () => <ScreenShareTile stream={share.stream} label={share.name} />,
+              // One click on the screen share tile exits tile view straight to the normal full
+              // presentation stage (showShareStage in MeetingRoomPage.tsx) -- the same layout the
+              // share already uses the moment it starts, not a re-skinned copy of it inside a
+              // participant card. ScreenShareTile itself is untouched; this just wraps it.
+              node: () => (
+                <div
+                  onClick={() => { setPinnedManually(null); setTileViewEnabled(false); }}
+                  style={{ width: '100%', height: '100%', cursor: 'pointer' }}
+                >
+                  <ScreenShareTile stream={share.stream} label={share.name} />
+                </div>
+              ),
             })),
             {
               key: 'local',
@@ -502,7 +512,6 @@ export function ParticipantGallery({
                   muted={remote.muted}
                   raisedHand={remote.raisedHand}
                   theme={getParticipantColorTheme(remote.name, idx + 1)}
-                  speaking={isSpeakingNow(remote.id)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect
                   layoutFit={isMobileGallery ? 'contain' : 'adaptive'}

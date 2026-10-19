@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CalendarPlus, Copy, Edit3, Eye, LogOut, Search, SlidersHorizontal, Trash2, Users, Video, Calendar as CalendarIcon, Clock, MoreVertical, Plus, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { ActionMenu, IActionMenuItem } from './ActionMenu';
+import { getMeetingUrl, buildMeetingPath } from '../lib/meeting-id';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -62,7 +63,7 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<IUpcomingMeeting | null>(null);
 
-  const meetingUrl = (meeting: IUpcomingMeeting) => `${window.location.origin}/meet/${meeting.roomSlug}`;
+  const meetingUrl = (meeting: IUpcomingMeeting) => getMeetingUrl(meeting.roomSlug);
   const copyText = (text: string) => navigator.clipboard.writeText(text);
 
   const addToCalendar = (meeting: IUpcomingMeeting) => {
@@ -108,11 +109,11 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
       ...(meeting.canManage ? [
         { label: 'Edit meeting', icon: <Edit3 size={15} />, onClick: () => editMeeting(meeting) },
         { label: 'Manage participants', icon: <Users size={15} />, onClick: () => setSelectedMeeting(meeting) },
-        { label: 'Start meeting', icon: <Video size={15} />, onClick: () => navigate(`/meet/${meeting.roomSlug}`) },
+        { label: 'Start meeting', icon: <Video size={15} />, onClick: () => navigate(buildMeetingPath(meeting.roomSlug)) },
         { label: 'Cancel meeting', icon: <Trash2 size={15} />, destructive: true, separated: true, onClick: () => cancelMeeting(meeting) },
       ] : []),
       ...(meeting.isInvitedParticipant ? [{ label: 'Leave meeting', icon: <LogOut size={15} />, destructive: true, separated: true, onClick: () => window.alert('You have left this meeting invitation.') }] : []),
-      ...(isStartingSoon ? [{ label: 'Join Meeting', icon: <Video size={15} />, onClick: () => navigate(`/meet/${meeting.roomSlug}`) }] : []),
+      ...(isStartingSoon ? [{ label: 'Join Meeting', icon: <Video size={15} />, onClick: () => navigate(buildMeetingPath(meeting.roomSlug)) }] : []),
     ];
   };
 
@@ -267,7 +268,7 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
 
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <button
-                onClick={() => nextStartsSoon ? navigate(`/meet/${nextMeeting.roomSlug}`) : setSelectedMeeting(nextMeeting)}
+                onClick={() => nextStartsSoon ? navigate(buildMeetingPath(nextMeeting.roomSlug)) : setSelectedMeeting(nextMeeting)}
                 style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '42px', padding: '0 22px', borderRadius: '8px', border: 'none', background: '#4F46E5', color: '#FFFFFF', fontSize: '14px', fontWeight: 700, cursor: 'pointer', boxShadow: '0 2px 4px rgba(79, 70, 229, 0.25)' }}
               >
                 {nextStartsSoon ? <Video size={16} /> : <Eye size={16} />}
@@ -335,7 +336,7 @@ export function UpcomingMeetingsPanel({ meetings, onJoinWithCode, onNewMeeting, 
                     <td style={{ padding: '14px 18px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
                         <button
-                          onClick={() => canJoinNow ? navigate(`/meet/${m.roomSlug}`) : setSelectedMeeting(m)}
+                          onClick={() => canJoinNow ? navigate(buildMeetingPath(m.roomSlug)) : setSelectedMeeting(m)}
                           style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid #C7D2FE', backgroundColor: '#FFFFFF', color: '#4F46E5', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
                         >
                           {canJoinNow ? 'Join' : 'View'}

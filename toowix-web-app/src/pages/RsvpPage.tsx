@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CheckCircle2, XCircle, Calendar, Clock, Video, Lock, Copy, Check, Share2, ArrowRight } from 'lucide-react';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
+import { buildMeetingPath } from '../lib/meeting-id';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -321,7 +322,7 @@ export function RsvpPage() {
                   <>
                     <button
                       type="button"
-                      onClick={() => navigate(`/meet/${encodeURIComponent(meeting.roomSlug)}`)}
+                      onClick={() => navigate(buildMeetingPath(meeting.roomSlug))}
                       style={{
                         height: '46px',
                         borderRadius: 'var(--radius-md)',
