@@ -555,6 +555,7 @@ export function useJitsiMeeting({
     originalTrack: MediaStreamTrack;
     outputTrack: MediaStreamTrack;
     context: AudioContext;
+    restoreMuted: boolean;
   } | null>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
@@ -1692,6 +1693,10 @@ export function useJitsiMeeting({
       // source avoids a second JVB audio source (which the bridge does not forward) while
       // restoring the untouched microphone immediately after the presentation ends.
       await mix.jitsiTrack.replaceTrack(mix.originalTrack);
+      if (mix.restoreMuted) {
+        await mix.jitsiTrack.mute();
+        setLocalAudioMuted(true);
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.warn('[useJitsiMeeting] Failed to restore microphone after screen audio:', error);
@@ -1944,15 +1949,25 @@ export function useJitsiMeeting({
         // but the bridge never announced/forwarded it.
         try {
           const microphoneJitsiTrack = localAudioTrackRef.current;
-          const microphoneNativeTrack = microphoneJitsiTrack?.getTrack?.();
           const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-          if (!microphoneJitsiTrack || !microphoneNativeTrack || !AudioContextCtor || typeof microphoneJitsiTrack.replaceTrack !== 'function') {
+          if (!microphoneJitsiTrack || !AudioContextCtor || typeof microphoneJitsiTrack.replaceTrack !== 'function') {
             throw new Error('The active microphone cannot be mixed with screen audio.');
+          }
+          // Jitsi mutes the entire RTP sender, not merely microphone samples. To share tab audio
+          // while the participant joined muted, temporarily unmute that sender but keep the mic
+          // silent in the Web Audio graph. The original muted state is restored on stop.
+          const restoreMuted = Boolean(microphoneJitsiTrack.isMuted?.());
+          if (restoreMuted) await microphoneJitsiTrack.unmute();
+          const microphoneNativeTrack = microphoneJitsiTrack.getTrack?.();
+          if (!microphoneNativeTrack) {
+            throw new Error('The microphone track was unavailable after enabling screen audio.');
           }
           const context: AudioContext = new AudioContextCtor();
           if (context.state === 'suspended') await context.resume();
           const destination = context.createMediaStreamDestination();
-          context.createMediaStreamSource(new MediaStream([ microphoneNativeTrack ])).connect(destination);
+          const microphoneGain = context.createGain();
+          microphoneGain.gain.value = restoreMuted ? 0 : 1;
+          context.createMediaStreamSource(new MediaStream([ microphoneNativeTrack ])).connect(microphoneGain).connect(destination);
           context.createMediaStreamSource(new MediaStream([ displayAudioTrack ])).connect(destination);
           const mixedTrack = destination.stream.getAudioTracks()[0];
           if (!mixedTrack) {
@@ -1963,7 +1978,8 @@ export function useJitsiMeeting({
             jitsiTrack: microphoneJitsiTrack,
             originalTrack: microphoneNativeTrack,
             outputTrack: mixedTrack,
-            context
+            context,
+            restoreMuted
           };
           displayAudioTrack.addEventListener('ended', () => {
             if (!desktopShareAudioMixRef.current) return;
