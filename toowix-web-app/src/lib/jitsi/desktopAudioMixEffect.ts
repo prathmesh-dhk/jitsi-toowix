@@ -12,44 +12,42 @@
 // The real, public, already-proven-in-this-codebase mechanism for swapping what a JitsiLocalTrack
 // actually transmits is setEffect() -- the SAME mechanism NoiseSuppressionEffect.ts and virtual
 // background already use. This class is a `setEffect`-compatible effect (startEffect/isEnabled/
-// stopEffect, matching NoiseSuppressionEffect's own exact shape) that mixes the local microphone
-// with the shared source's own audio track via a small Web Audio graph, so viewers hear both over
-// the ONE audio source JVB actually forwards per endpoint (mixing into the existing mic sender,
-// rather than adding a second room audio track, is deliberate -- see useJitsiMeeting.ts's own
-// comment on that point, confirmed separately: the bridge does not forward a second one).
+// stopEffect, matching NoiseSuppressionEffect's own exact shape).
+//
+// SECOND reported bug, fixed in this same class: an earlier version of this effect mixed the local
+// microphone into the shared audio (at gain 0 while muted, full volume while unmuted) so there was
+// always a single combined stream to hand to the one audio sender JVB forwards. That coupled the
+// presenter's own mic state to whether shared audio worked at all -- muted sometimes produced no
+// audio whatsoever, unmuted leaked the presenter's own voice into the shared audio, neither of
+// which is desired. This version carries ONLY the shared source's own audio -- the presenter's mic
+// is never connected to this graph at all, so what listeners hear while audio sharing is active is
+// always exactly the shared tab/window/screen's own sound, completely independent of whether the
+// presenter's mic is on or off.
+//
+// Confirmed in the real JitsiLocalTrack._setMuted source: for an audio track with an active
+// _streamEffect, Jitsi's own mute()/unmute() routes through `effect.setMuted(muted)` instead of
+// touching the transmitted track's `.enabled` directly -- this is the library's own intended
+// extension point for an effect that needs custom mute behavior, confirmed by that exact
+// conditional existing in the real minified source. Implementing it below as a no-op is what
+// keeps the shared audio playing through any later mic mute/unmute the presenter does while
+// sharing, and removes the need to force-unmute the sender (and the race that could introduce)
+// before applying this effect in the first place.
 export class DesktopAudioMixEffect {
   private _ctx: AudioContext | null = null;
-  private _micSource: MediaStreamAudioSourceNode | null = null;
-  private _micGain: GainNode | null = null;
   private _displaySource: MediaStreamAudioSourceNode | null = null;
   private _destination: MediaStreamAudioDestinationNode | null = null;
 
-  constructor(
-    private readonly displayAudioTrack: MediaStreamTrack,
-    // The participant may have joined muted. Jitsi's mute is a whole-sender mute, not a
-    // mic-samples-only mute -- unmuting the sender is what's required to transmit the shared
-    // audio at all, but the ORIGINAL mic must still sound silent to listeners while the
-    // participant's own mute toggle stays visually "muted". Mixing the mic in at gain 0 (instead
-    // of skipping it entirely) keeps a single, simple audio graph regardless of mute state.
-    private readonly micWasMuted: boolean,
-  ) {}
+  constructor(private readonly displayAudioTrack: MediaStreamTrack) {}
 
-  startEffect(micStream: MediaStream): MediaStream {
+  // The mic's own current stream is still the parameter setEffect()'s internals pass in (see
+  // JitsiLocalTrack._startStreamEffect), but it is deliberately never connected into this graph --
+  // see this file's own top comment for why.
+  startEffect(_micStream: MediaStream): MediaStream {
     const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new AudioContextCtor();
 
     this._ctx = ctx;
     this._destination = ctx.createMediaStreamDestination();
-
-    const micTrack = micStream.getAudioTracks()[0];
-
-    if (micTrack) {
-      this._micSource = ctx.createMediaStreamSource(new MediaStream([ micTrack ]));
-      this._micGain = ctx.createGain();
-      this._micGain.gain.value = this.micWasMuted ? 0 : 1;
-      this._micSource.connect(this._micGain).connect(this._destination);
-    }
-
     this._displaySource = ctx.createMediaStreamSource(new MediaStream([ this.displayAudioTrack ]));
     this._displaySource.connect(this._destination);
 
@@ -62,10 +60,13 @@ export class DesktopAudioMixEffect {
     return sourceLocalTrack.isAudioTrack();
   }
 
+  // See this file's own top comment -- deliberately a no-op. The shared audio must keep playing
+  // for everyone regardless of the presenter's own mic mute state; the mic was never part of this
+  // graph, so there is nothing here that muting should silence.
+  setMuted(_muted: boolean): void {}
+
   stopEffect(): void {
     try {
-      this._micSource?.disconnect();
-      this._micGain?.disconnect();
       this._displaySource?.disconnect();
       this._destination?.disconnect();
     } catch {

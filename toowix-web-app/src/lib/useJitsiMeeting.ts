@@ -549,14 +549,14 @@ export function useJitsiMeeting({
   const [ isLocked, setIsLocked ] = useState(false);
   const [ shareAudioActive, setShareAudioActive ] = useState(false);
   const shareAudioTrackRef = useRef<any>(null);
-  // JVB accepts one outbound audio source for a participant. Screen audio is therefore mixed
-  // into the existing microphone sender instead of being added as a second Jitsi audio track, via
-  // a setEffect()-based DesktopAudioMixEffect -- see that file's own comment for the confirmed
-  // root cause of the bug this replaced (a non-existent .replaceTrack() call on JitsiLocalTrack).
+  // JVB accepts one outbound audio source for a participant. Screen audio is therefore carried on
+  // the existing microphone sender (via a setEffect()-based DesktopAudioMixEffect) instead of
+  // being added as a second Jitsi audio track -- see that file's own comment for the confirmed
+  // root cause of the bug this replaced (a non-existent .replaceTrack() call on JitsiLocalTrack)
+  // and why the effect carries ONLY the shared audio, never the mic.
   const desktopShareAudioMixRef = useRef<{
     jitsiTrack: any;
     effect: DesktopAudioMixEffect;
-    restoreMuted: boolean;
   } | null>(null);
 
   // Shared refs: always point at the CURRENT (latest, non-stale) generation's live objects, once
@@ -1697,11 +1697,10 @@ export function useJitsiMeeting({
       // Keep the existing Jitsi local-track wrapper and conference sender. Clearing the effect
       // (setEffect(undefined)) restores the untouched microphone as the transmitted source --
       // same mechanism virtual background/noise suppression already use to remove themselves.
+      // Nothing to restore beyond that: the effect never touched the mic's own mute state (see
+      // desktopAudioMixEffect.ts's own comment), so whatever the mute button already shows is
+      // already correct.
       await mix.jitsiTrack.setEffect(undefined);
-      if (mix.restoreMuted) {
-        await mix.jitsiTrack.mute();
-        setLocalAudioMuted(true);
-      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.warn('[useJitsiMeeting] Failed to restore microphone after screen audio:', error);
@@ -1946,35 +1945,37 @@ export function useJitsiMeeting({
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       const displayAudioTrack = displayStream?.getAudioTracks()[0];
       if (displayAudioTrack) {
-        // JVB permits one outbound audio source per endpoint. Mixing screen audio into the
+        // JVB permits one outbound audio source per endpoint. Carrying screen audio on the
         // already-published microphone sender keeps it on that source, so every receiver
         // (including mobile) gets it. Adding a second room audio track appeared locally valid
         // but the bridge never announced/forwarded it.
         //
-        // CONFIRMED BUG (traced into lib-jitsi-meet.min.js, not assumed -- see
+        // CONFIRMED BUG #1 (traced into lib-jitsi-meet.min.js, not assumed -- see
         // desktopAudioMixEffect.ts's own comment for the full story): this used to call
         // microphoneJitsiTrack.replaceTrack(...), a method that does not exist anywhere on
         // JitsiLocalTrack. The guard below caught that every time and fell back to a silent,
         // audio-less share -- "Share audio" never once actually transmitted anything. Fixed by
         // using setEffect(), the real, public mechanism this codebase already uses successfully
         // for virtual background and noise suppression.
+        //
+        // CONFIRMED BUG #2, also fixed by the same DesktopAudioMixEffect rewrite: this also used
+        // to force-unmute the sender first and mix the mic in at gain 0/1 depending on mute
+        // state, coupling whether shared audio worked at all to the presenter's own mic state
+        // (reported: muted sometimes produced no audio, unmuted leaked the presenter's own voice
+        // into the shared audio). The effect now carries ONLY the shared source's own audio and
+        // implements a no-op setMuted() -- the real extension point JitsiLocalTrack._setMuted
+        // itself checks for -- so the shared audio plays identically regardless of the mic's mute
+        // state, with no need to touch (or race) the sender's own mute/unmute at all here.
         try {
           const microphoneJitsiTrack = localAudioTrackRef.current;
 
           if (!microphoneJitsiTrack) {
-            throw new Error('The active microphone cannot be mixed with screen audio.');
+            throw new Error('The active microphone cannot carry screen audio.');
           }
-          // Jitsi mutes the entire RTP sender, not merely microphone samples. To share tab audio
-          // while the participant joined muted, temporarily unmute that sender but keep the mic
-          // silent in the Web Audio graph (DesktopAudioMixEffect mixes it in at gain 0). The
-          // original muted state is restored on stop.
-          const restoreMuted = Boolean(microphoneJitsiTrack.isMuted?.());
-
-          if (restoreMuted) await microphoneJitsiTrack.unmute();
-          const mixEffect = new DesktopAudioMixEffect(displayAudioTrack, restoreMuted);
+          const mixEffect = new DesktopAudioMixEffect(displayAudioTrack);
 
           await microphoneJitsiTrack.setEffect(mixEffect);
-          desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect, restoreMuted };
+          desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect };
           displayAudioTrack.addEventListener('ended', () => {
             if (!desktopShareAudioMixRef.current) return;
             void stopDesktopShareAudio();
