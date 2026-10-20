@@ -33,11 +33,17 @@ function loadSpeakingStore() {
   return exports;
 }
 
-test('#1 clearSpeaking clears the ring IMMEDIATELY, unlike setSpeakingLevel(id, 0) which only starts the hold countdown', () => {
+// Must stay >= speakingStore.ts's own SPEAKING_ONSET_DELAY_MS (300ms at time of writing) --
+// sustaining a level past this is what actually flips the ring on in the first place (a separate,
+// later onset-debounce feature; this file is about the HOLD/mute side, not onset).
+const ONSET_WAIT_MS = 400;
+
+test('#1 clearSpeaking clears the ring IMMEDIATELY, unlike setSpeakingLevel(id, 0) which only starts the hold countdown', async () => {
   const { setSpeakingLevel, clearSpeaking, isSpeakingNow } = loadSpeakingStore();
 
   setSpeakingLevel('p1', 0.5); // genuinely speaking
-  assert.equal(isSpeakingNow('p1'), true);
+  await new Promise((resolve) => setTimeout(resolve, ONSET_WAIT_MS));
+  assert.equal(isSpeakingNow('p1'), true, 'sanity: sustained speech must have turned the ring on after the onset delay');
 
   // The bug: setSpeakingLevel(id, 0) alone does NOT clear it synchronously.
   setSpeakingLevel('p1', 0);
@@ -45,6 +51,7 @@ test('#1 clearSpeaking clears the ring IMMEDIATELY, unlike setSpeakingLevel(id, 
 
   // The fix: clearSpeaking bypasses the hold entirely.
   setSpeakingLevel('p2', 0.5);
+  await new Promise((resolve) => setTimeout(resolve, ONSET_WAIT_MS));
   assert.equal(isSpeakingNow('p2'), true);
   clearSpeaking('p2');
   assert.equal(isSpeakingNow('p2'), false, 'clearSpeaking must clear the ring synchronously, with no hold delay');

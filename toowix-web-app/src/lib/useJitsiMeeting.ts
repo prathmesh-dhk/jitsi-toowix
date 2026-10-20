@@ -11,6 +11,7 @@ import {
 } from './jitsi/mediaHelpers';
 import { registerConferenceEventListeners } from './jitsi/useConferenceEvents';
 import { SCREEN_SHARE_PROPERTY, type IScreenShareSignal } from './jitsi/screenShareSignal';
+import { DesktopAudioMixEffect } from './jitsi/desktopAudioMixEffect';
 import { useNetworkQualityMonitor } from './jitsi/useNetworkQuality';
 
 // Type-only -- the runtime implementations (TensorFlow/MediaPipe segmentation model, RNNoise
@@ -549,12 +550,12 @@ export function useJitsiMeeting({
   const [ shareAudioActive, setShareAudioActive ] = useState(false);
   const shareAudioTrackRef = useRef<any>(null);
   // JVB accepts one outbound audio source for a participant. Screen audio is therefore mixed
-  // into the existing microphone sender instead of being added as a second Jitsi audio track.
+  // into the existing microphone sender instead of being added as a second Jitsi audio track, via
+  // a setEffect()-based DesktopAudioMixEffect -- see that file's own comment for the confirmed
+  // root cause of the bug this replaced (a non-existent .replaceTrack() call on JitsiLocalTrack).
   const desktopShareAudioMixRef = useRef<{
     jitsiTrack: any;
-    originalTrack: MediaStreamTrack;
-    outputTrack: MediaStreamTrack;
-    context: AudioContext;
+    effect: DesktopAudioMixEffect;
     restoreMuted: boolean;
   } | null>(null);
 
@@ -1313,9 +1314,13 @@ export function useJitsiMeeting({
       setShareAudioActive(false);
       shareAudioTrackRef.current = null;
       const desktopAudioMix = desktopShareAudioMixRef.current;
+
       desktopShareAudioMixRef.current = null;
-      try { desktopAudioMix?.outputTrack.stop(); } catch { /* best-effort */ }
-      void desktopAudioMix?.context.close().catch(() => {});
+      // Defensive only: the owning JitsiLocalTrack's own dispose() already calls
+      // setEffect(undefined) when it has an active effect, which runs DesktopAudioMixEffect's own
+      // stopEffect() (see that class's own comment) -- this just guarantees the AudioContext/nodes
+      // are released even if that track is torn down some other way during a full disconnect.
+      try { desktopAudioMix?.effect.stopEffect(); } catch { /* best-effort */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
@@ -1689,10 +1694,10 @@ export function useJitsiMeeting({
     desktopShareAudioMixRef.current = null;
     setShareAudioActive(false);
     try {
-      // Keep the existing Jitsi local-track wrapper and conference sender. Replacing its native
-      // source avoids a second JVB audio source (which the bridge does not forward) while
-      // restoring the untouched microphone immediately after the presentation ends.
-      await mix.jitsiTrack.replaceTrack(mix.originalTrack);
+      // Keep the existing Jitsi local-track wrapper and conference sender. Clearing the effect
+      // (setEffect(undefined)) restores the untouched microphone as the transmitted source --
+      // same mechanism virtual background/noise suppression already use to remove themselves.
+      await mix.jitsiTrack.setEffect(undefined);
       if (mix.restoreMuted) {
         await mix.jitsiTrack.mute();
         setLocalAudioMuted(true);
@@ -1701,8 +1706,6 @@ export function useJitsiMeeting({
       // eslint-disable-next-line no-console
       console.warn('[useJitsiMeeting] Failed to restore microphone after screen audio:', error);
     }
-    try { mix.outputTrack.stop(); } catch { /* best-effort */ }
-    try { await mix.context.close(); } catch { /* best-effort */ }
   }, []);
 
   // Dedicated stop path, used by BOTH the Toowix "Stop presenting" button (via toggleScreenShare
@@ -1947,40 +1950,31 @@ export function useJitsiMeeting({
         // already-published microphone sender keeps it on that source, so every receiver
         // (including mobile) gets it. Adding a second room audio track appeared locally valid
         // but the bridge never announced/forwarded it.
+        //
+        // CONFIRMED BUG (traced into lib-jitsi-meet.min.js, not assumed -- see
+        // desktopAudioMixEffect.ts's own comment for the full story): this used to call
+        // microphoneJitsiTrack.replaceTrack(...), a method that does not exist anywhere on
+        // JitsiLocalTrack. The guard below caught that every time and fell back to a silent,
+        // audio-less share -- "Share audio" never once actually transmitted anything. Fixed by
+        // using setEffect(), the real, public mechanism this codebase already uses successfully
+        // for virtual background and noise suppression.
         try {
           const microphoneJitsiTrack = localAudioTrackRef.current;
-          const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-          if (!microphoneJitsiTrack || !AudioContextCtor || typeof microphoneJitsiTrack.replaceTrack !== 'function') {
+
+          if (!microphoneJitsiTrack) {
             throw new Error('The active microphone cannot be mixed with screen audio.');
           }
           // Jitsi mutes the entire RTP sender, not merely microphone samples. To share tab audio
           // while the participant joined muted, temporarily unmute that sender but keep the mic
-          // silent in the Web Audio graph. The original muted state is restored on stop.
+          // silent in the Web Audio graph (DesktopAudioMixEffect mixes it in at gain 0). The
+          // original muted state is restored on stop.
           const restoreMuted = Boolean(microphoneJitsiTrack.isMuted?.());
+
           if (restoreMuted) await microphoneJitsiTrack.unmute();
-          const microphoneNativeTrack = microphoneJitsiTrack.getTrack?.();
-          if (!microphoneNativeTrack) {
-            throw new Error('The microphone track was unavailable after enabling screen audio.');
-          }
-          const context: AudioContext = new AudioContextCtor();
-          if (context.state === 'suspended') await context.resume();
-          const destination = context.createMediaStreamDestination();
-          const microphoneGain = context.createGain();
-          microphoneGain.gain.value = restoreMuted ? 0 : 1;
-          context.createMediaStreamSource(new MediaStream([ microphoneNativeTrack ])).connect(microphoneGain).connect(destination);
-          context.createMediaStreamSource(new MediaStream([ displayAudioTrack ])).connect(destination);
-          const mixedTrack = destination.stream.getAudioTracks()[0];
-          if (!mixedTrack) {
-            throw new Error('Unable to create the mixed screen-audio track.');
-          }
-          await microphoneJitsiTrack.replaceTrack(mixedTrack);
-          desktopShareAudioMixRef.current = {
-            jitsiTrack: microphoneJitsiTrack,
-            originalTrack: microphoneNativeTrack,
-            outputTrack: mixedTrack,
-            context,
-            restoreMuted
-          };
+          const mixEffect = new DesktopAudioMixEffect(displayAudioTrack, restoreMuted);
+
+          await microphoneJitsiTrack.setEffect(mixEffect);
+          desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect, restoreMuted };
           displayAudioTrack.addEventListener('ended', () => {
             if (!desktopShareAudioMixRef.current) return;
             void stopDesktopShareAudio();

@@ -13,6 +13,12 @@ const ts = require('typescript');
 // silently relied on setSpeakingLevel's own default -- these tests exercise that default (and the
 // hold mechanism itself) directly, independent of React, same vm-sandbox pattern as the other
 // pure-logic test files in this suite.
+//
+// speakingStore.ts has since (separately) grown a companion SPEAKING_ONSET_DELAY_MS debounce on
+// the START side (a level blip has to stay above threshold for a short sustained window before
+// the ring turns ON at all, filtering a brief noise spike) -- these tests account for that onset
+// delay when establishing "speaking" in the first place, but are otherwise still exercising the
+// HOLD (stop) side this file is about.
 function load() {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/speakingStore.ts'), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
@@ -30,11 +36,16 @@ function load() {
   return exports;
 }
 
+// Must stay >= speakingStore.ts's own SPEAKING_ONSET_DELAY_MS (300ms at time of writing) --
+// sustaining a level past this is what actually flips the ring on in the first place.
+const ONSET_WAIT_MS = 400;
+
 test('#1 setSpeakingLevel default hold is at least 1000ms (long enough to survive a normal mid-sentence pause)', async () => {
   const { setSpeakingLevel, isSpeakingNow } = load();
 
   setSpeakingLevel('p1', 0.5); // speaking, using the DEFAULT hold (no third argument)
-  assert.equal(isSpeakingNow('p1'), true);
+  await new Promise((resolve) => setTimeout(resolve, ONSET_WAIT_MS));
+  assert.equal(isSpeakingNow('p1'), true, 'sanity check: sustained speech must have turned the ring on after the onset delay');
   setSpeakingLevel('p1', 0); // silence starts (e.g. a breath, a pause before the next word)
 
   await new Promise((resolve) => setTimeout(resolve, 700));
@@ -45,6 +56,7 @@ test('#2 the ring still clears once someone has genuinely stopped talking past t
   const { setSpeakingLevel, isSpeakingNow } = load();
 
   setSpeakingLevel('p2', 0.5);
+  await new Promise((resolve) => setTimeout(resolve, ONSET_WAIT_MS));
   assert.equal(isSpeakingNow('p2'), true);
   setSpeakingLevel('p2', 0);
 
@@ -52,16 +64,20 @@ test('#2 the ring still clears once someone has genuinely stopped talking past t
   assert.equal(isSpeakingNow('p2'), false, 'the indicator must still clear eventually -- this is a hold, not a permanent stick');
 });
 
-test('#3 repeated short silence/sound bursts within the hold window never clear the indicator (simulates natural word gaps)', async () => {
+test('#3 repeated short silence bursts within the hold window never clear the indicator (simulates natural word gaps, once speech is already established)', async () => {
   const { setSpeakingLevel, isSpeakingNow } = load();
 
+  setSpeakingLevel('p3', 0.4);
+  await new Promise((resolve) => setTimeout(resolve, ONSET_WAIT_MS));
+  assert.equal(isSpeakingNow('p3'), true, 'sanity: sustained speech must have turned the ring on first');
+
   for (let i = 0; i < 4; i += 1) {
-    setSpeakingLevel('p3', 0.4); // a spoken word
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    setSpeakingLevel('p3', 0); // the brief gap after it
+    setSpeakingLevel('p3', 0); // the brief gap after a word
     await new Promise((resolve) => setTimeout(resolve, 300)); // shorter than the hold window
     assert.equal(isSpeakingNow('p3'), true, `iteration ${i}: a short inter-word gap must not have cleared the indicator`);
+    setSpeakingLevel('p3', 0.4); // the next word
+    await new Promise((resolve) => setTimeout(resolve, 80));
   }
 });
 
-console.log('PASS speaking-ring hold: survives normal mid-speech pauses, still clears after genuine silence, never flickers during rapid word-gap bursts');
+console.log('PASS speaking-ring hold: survives normal mid-speech pauses, still clears after genuine silence, never flickers during rapid word-gap bursts once speech is established');
