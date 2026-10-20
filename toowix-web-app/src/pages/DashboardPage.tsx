@@ -33,6 +33,7 @@ import { ConversationsPanel } from '../components/ConversationsPanel';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { generateUniqueMeetingId, buildMeetingPath, getMeetingUrl } from '../lib/meeting-id';
+import { ensureLibJitsiMeetLoaded } from '../lib/jitsi/ensureLibJitsiMeetLoaded';
 import { formatDuration } from '../lib/formatDuration';
 import { useTheme } from '../lib/theme';
 import { ScheduleCalendar } from '../components/ScheduleCalendar';
@@ -46,6 +47,7 @@ import { NotificationBell } from '../components/NotificationBell';
 import { NotificationToasts } from '../components/NotificationToasts';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const JITSI_DOMAIN = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
 type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams' | 'conversations';
 const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams', 'conversations'];
@@ -244,6 +246,7 @@ export function DashboardPage() {
   const [laterType, setLaterType] = useState<'public' | 'private'>('public');
   const [laterPassword, setLaterPassword] = useState('');
   const [laterCreating, setLaterCreating] = useState(false);
+  const [startingInstant, setStartingInstant] = useState(false);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
   const [showDashboardShareModal, setShowDashboardShareModal] = useState(false);
 
@@ -369,11 +372,35 @@ export function DashboardPage() {
   };
 
   const handleStartInstantMeeting = async () => {
+    if (startingInstant) return; // a rapid double-click/tap must not create two meeting rooms
+    setStartingInstant(true);
+    // Real reported delay: Jitsi's own JS (config.js, lib-jitsi-meet.min.js) only started
+    // downloading once the lobby screen itself rendered -- after this screen's own network round
+    // trip had already finished. Starting that download now, in parallel with persistMeeting
+    // below instead of after it, means it's typically already well underway (or finished) by the
+    // time the lobby screen mounts and would otherwise be the one kicking it off. Best-effort: a
+    // failure here is silently absorbed, since the lobby screen's own preload (and the real join
+    // flow after that) retry it regardless -- this is only ever a head start.
+    void ensureLibJitsiMeetLoaded(JITSI_DOMAIN).catch(() => { /* real retry happens on the lobby screen */ });
     const roomId = generateUniqueMeetingId();
-    // Instant meetings default to public ('Guest' = anyone with the link can join by entering
-    // their name) -- matches the "Public" option in the Schedule Meeting form's visibility select.
-    try { await persistMeeting(`${displayName}'s Meeting`, roomId, 'Guest'); }
-    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not create meeting'); return; }
+
+    try {
+      // Instant meetings default to public ('Guest' = anyone with the link can join by entering
+      // their name) -- matches the "Public" option in the Schedule Meeting form's visibility select.
+      await persistMeeting(`${displayName}'s Meeting`, roomId, 'Guest');
+    } catch (error) {
+      setStartingInstant(false);
+      window.alert(error instanceof Error ? error.message : 'Could not create meeting');
+      return;
+    }
+    // Deliberately still awaited above, not fire-and-forget, despite the extra round trip it
+    // costs before navigating: the lobby screen's own admission check runs the moment it mounts,
+    // and only grants host/moderator rights once this meeting's database record actually exists
+    // (see admitToRoom on the backend) -- navigating before this resolves would race that check
+    // and could open the room with its own creator never admitted as host. setStartingInstant is
+    // deliberately NOT reset back to false here on success: this page is about to be left, and a
+    // stray state update after that (or after this component unmounts) is exactly what causes a
+    // "set state on an unmounted component" warning for no benefit.
     navigate(buildMeetingPath(roomId), { state: { participation: "account" } });
   };
 
@@ -1584,6 +1611,7 @@ export function DashboardPage() {
                 {/* Option 1: Instant Meeting */}
                 <button
                   onClick={handleStartInstantMeeting}
+                  disabled={startingInstant}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1592,7 +1620,8 @@ export function DashboardPage() {
                     borderRadius: '10px',
                     border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
                     backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
-                    cursor: 'pointer',
+                    cursor: startingInstant ? 'not-allowed' : 'pointer',
+                    opacity: startingInstant ? 0.7 : 1,
                     textAlign: 'left',
                     transition: 'all 0.15s ease',
                   }}
@@ -1603,7 +1632,9 @@ export function DashboardPage() {
                     <Video size={20} />
                   </div>
                   <div>
-                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Start an instant meeting</h4>
+                    <h4 style={{ margin: '0 0 2px 0', fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>
+                      {startingInstant ? 'Starting meeting…' : 'Start an instant meeting'}
+                    </h4>
                     <p style={{ margin: 0, fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>Launch an immediate video meeting in your browser</p>
                   </div>
                 </button>

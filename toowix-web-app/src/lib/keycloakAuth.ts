@@ -2,7 +2,6 @@ const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8080'
 const realm = import.meta.env.VITE_KEYCLOAK_REALM || 'toowix-dev';
 const clientId = import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'toowix-meet';
 const redirectUri = import.meta.env.VITE_KEYCLOAK_REDIRECT_URI || `${window.location.origin}/auth/callback`;
-const logoutRedirectUri = import.meta.env.VITE_KEYCLOAK_LOGOUT_REDIRECT_URI || window.location.origin;
 const authority = `${keycloakUrl.replace(/\/$/, '')}/realms/${encodeURIComponent(realm)}`;
 const storageKey = 'toowix_keycloak_session';
 const transactionKey = 'toowix_keycloak_pkce';
@@ -25,16 +24,6 @@ const randomString = () => base64Url(crypto.getRandomValues(new Uint8Array(32)))
 async function challengeFor(verifier: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   return base64Url(new Uint8Array(hash));
-}
-
-function loadSession(): KeycloakSession | null {
-  try {
-    const raw = sessionStorage.getItem(storageKey);
-    return raw ? JSON.parse(raw) as KeycloakSession : null;
-  } catch {
-    sessionStorage.removeItem(storageKey);
-    return null;
-  }
 }
 
 function saveSession(session: KeycloakSession): void {
@@ -86,30 +75,4 @@ export async function completeSignInCallback(): Promise<KeycloakSession> {
   const { verifier, state } = JSON.parse(stored) as { verifier: string; state: string };
   if (!returnedState || returnedState !== state) throw new Error('The sign-in response could not be verified.');
   return tokenRequest(new URLSearchParams({ grant_type: 'authorization_code', client_id: clientId, code, redirect_uri: redirectUri, code_verifier: verifier }));
-}
-
-export async function getAccessToken(): Promise<string | null> {
-  const session = loadSession();
-  if (!session) return null;
-  if (session.expiresAt > Date.now() + 60_000) return session.accessToken;
-  if (!session.refreshToken) { sessionStorage.removeItem(storageKey); return null; }
-  try {
-    return (await tokenRequest(new URLSearchParams({ grant_type: 'refresh_token', client_id: clientId, refresh_token: session.refreshToken }))).accessToken;
-  } catch {
-    sessionStorage.removeItem(storageKey);
-    return null;
-  }
-}
-
-export async function getSession(): Promise<KeycloakSession | null> {
-  return (await getAccessToken()) ? loadSession() : null;
-}
-
-export async function signOutFromToowix(): Promise<void> {
-  const session = loadSession();
-  sessionStorage.removeItem(storageKey);
-  sessionStorage.removeItem(transactionKey);
-  const url = new URL(`${authority}/protocol/openid-connect/logout`);
-  url.search = new URLSearchParams({ client_id: clientId, post_logout_redirect_uri: logoutRedirectUri, ...(session?.idToken ? { id_token_hint: session.idToken } : {}) }).toString();
-  window.location.assign(url.toString());
 }

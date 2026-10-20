@@ -365,4 +365,3 @@ export function DirectMeetingRoomPage() {
   );
 }
 
-export default DirectMeetingRoomPage;

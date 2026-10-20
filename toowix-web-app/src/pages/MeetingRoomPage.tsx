@@ -378,10 +378,18 @@ export function MeetingRoomPage() {
     } catch {}
   }, []);
 
-  // Same idea for the on/off toggle itself -- if someone joined muted or camera-off last time,
-  // don't silently turn their mic/camera back on for them without asking.
+  // Same idea for the on/off toggle itself -- if someone joined muted last time, don't silently
+  // turn their mic back on for them without asking.
   const [micEnabled, setMicEnabled] = useState(() => { try { return localStorage.getItem('toowix_mic_enabled') !== '0'; } catch { return true; } });
-  const [videoEnabled, setVideoEnabled] = useState(() => { try { return localStorage.getItem('toowix_video_enabled') !== '0'; } catch { return true; } });
+  // Real reported bug: the camera silently started OFF on a brand new meeting (read as "camera
+  // not detecting") whenever the person had turned it off in ANY past, unrelated meeting --
+  // toowix_video_enabled persisted that choice across every future session forever, with no way
+  // for a fresh meeting to tell "I meant this just for that one call" apart from "always start
+  // off from now on". Camera now always starts on for a fresh join, exactly like a brand new
+  // Google Meet call -- it still stays off for the REST of the current session the moment the
+  // person turns it off themselves (this is still real React state, not reset on every render),
+  // it just never again persists that choice into a future, unrelated meeting.
+  const [videoEnabled, setVideoEnabled] = useState(true);
   const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -2091,7 +2099,6 @@ export function MeetingRoomPage() {
   // Persist every device/on-off choice as it's made, and drop a saved device id that no longer
   // exists (unplugged headset, swapped phone) back to "default" instead of silently failing.
   useEffect(() => { try { localStorage.setItem('toowix_mic_enabled', micEnabled ? '1' : '0'); } catch { /* storage unavailable */ } }, [micEnabled]);
-  useEffect(() => { try { localStorage.setItem('toowix_video_enabled', videoEnabled ? '1' : '0'); } catch { /* storage unavailable */ } }, [videoEnabled]);
   useEffect(() => { try { if (audioId) localStorage.setItem('toowix_audio_device', audioId); else localStorage.removeItem('toowix_audio_device'); } catch { /* storage unavailable */ } }, [audioId]);
   useEffect(() => { try { if (videoId) localStorage.setItem('toowix_video_device', videoId); else localStorage.removeItem('toowix_video_device'); } catch { /* storage unavailable */ } }, [videoId]);
   useEffect(() => { try { if (outputId) localStorage.setItem('toowix_output_device', outputId); else localStorage.removeItem('toowix_output_device'); } catch { /* storage unavailable */ } }, [outputId]);

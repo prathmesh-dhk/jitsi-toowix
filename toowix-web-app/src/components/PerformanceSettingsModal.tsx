@@ -85,4 +85,3 @@ export function PerformanceSettingsModal({ isOpen, onClose, currentMaxHeight, on
   );
 }
 
-export default PerformanceSettingsModal;

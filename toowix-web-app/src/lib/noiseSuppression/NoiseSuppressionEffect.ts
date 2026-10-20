@@ -164,4 +164,3 @@ export class NoiseSuppressionEffect {
   }
 }
 
-export default NoiseSuppressionEffect;

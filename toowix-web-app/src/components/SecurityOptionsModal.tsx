@@ -168,4 +168,3 @@ export function SecurityOptionsModal({ isOpen, onClose, isLocked, isModerator, o
   );
 }
 
-export default SecurityOptionsModal;

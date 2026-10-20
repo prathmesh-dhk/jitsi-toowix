@@ -94,4 +94,3 @@ export function ShareVideoDialog({ isOpen, onClose, onSubmit }: IShareVideoDialo
   );
 }
 
-export default ShareVideoDialog;

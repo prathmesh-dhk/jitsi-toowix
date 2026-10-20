@@ -4,7 +4,6 @@ import {
   attachLocalSpeaking,
   describeMediaError,
   isTransientDeviceBusyError,
-  loadScript,
   startLocalLevelMonitor,
   stopLocalLevelMonitor,
   trackToStream,
@@ -106,37 +105,11 @@ interface IUseJitsiMeetingOptions {
   existingStream?: MediaStream | null;
 }
 
-let scriptLoadPromise: Promise<void> | null = null;
-
-// Exported so the lobby/pre-join screen can start this download the moment it renders, instead
-// of waiting for the person to click Join -- real reported delay: Jitsi's own JS (config.js then
-// lib-jitsi-meet.min.js, loaded serially) only started downloading AFTER the join click, even
-// though the person may have sat on the lobby screen for seconds doing nothing network-intensive.
-// scriptLoadPromise is still the single source of truth either way: a caller that preloads this
-// and a caller that invokes it again later from the real connect effect share the exact same
-// in-flight (or already-settled) promise -- no duplicate download, no race, and the second
-// caller's own `await` just resolves immediately if the first already finished.
-export async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
-  if (window.JitsiMeetJS && window.config) {
-    return;
-  }
-  if (!scriptLoadPromise) {
-    // Neither script depends on the other's content to start downloading -- lib-jitsi-meet.min.js
-    // only reads window.config later, when ensureLibJitsiMeetLoaded's caller actually uses it, not
-    // at parse/load time. Fetching them in parallel instead of one-after-another removes a full
-    // network round trip from every cold load.
-    //
-    // The browser library and the Jitsi deployment must still be the same release. A copied local
-    // lib-jitsi-meet build had drifted from Jicofo/JVB and rejected valid simulcast SDP from
-    // a third participant as duplicate SSRC lines. Always use the active server's own build.
-    scriptLoadPromise = Promise.all([
-      loadScript(`https://${jitsiDomain}/config.js`),
-      loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
-    ]).then(() => undefined);
-  }
-
-  return scriptLoadPromise;
-}
+// Moved to its own small module (ensureLibJitsiMeetLoaded.ts) so the dashboard's "Start an
+// instant meeting" flow can preload these scripts on click without pulling this whole file into
+// its own chunk. Re-exported here so every existing import of it from this file is unaffected.
+import { ensureLibJitsiMeetLoaded } from './jitsi/ensureLibJitsiMeetLoaded';
+export { ensureLibJitsiMeetLoaded };
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 

@@ -117,4 +117,3 @@ export function ParticipantStatsModal({ isOpen, onClose, localName, connectionSt
   );
 }
 
-export default ParticipantStatsModal;

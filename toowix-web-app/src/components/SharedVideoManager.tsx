@@ -192,4 +192,3 @@ export function SharedVideoManager({
   );
 }
 
-export default SharedVideoManager;

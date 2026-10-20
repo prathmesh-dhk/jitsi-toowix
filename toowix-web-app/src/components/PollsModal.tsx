@@ -207,4 +207,3 @@ export function PollsModal({ isOpen, onClose, polls, mySessionId, onCreate, onVo
   );
 }
 
-export default PollsModal;

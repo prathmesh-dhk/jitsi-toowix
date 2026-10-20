@@ -89,4 +89,3 @@ export function KeyboardShortcutsModal({ isOpen, onClose }: IKeyboardShortcutsMo
   );
 }
 
-export default KeyboardShortcutsModal;

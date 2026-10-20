@@ -107,4 +107,3 @@ export function EmbedMeetingModal({ isOpen, onClose, meetingUrl }: IEmbedMeeting
   );
 }
 
-export default EmbedMeetingModal;

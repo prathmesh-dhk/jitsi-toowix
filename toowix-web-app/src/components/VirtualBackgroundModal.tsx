@@ -244,4 +244,3 @@ export function VirtualBackgroundModal({ isOpen, onClose, onSelect }: IVirtualBa
   );
 }
 
-export default VirtualBackgroundModal;
