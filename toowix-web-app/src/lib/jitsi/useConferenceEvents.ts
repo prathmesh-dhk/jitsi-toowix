@@ -251,10 +251,29 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       const signal = remoteScreenShareSignalsRef.current[participantId]
         || parseScreenShareSignal(trackParticipant?.getProperty?.(SCREEN_SHARE_PROPERTY));
       if (signal) remoteScreenShareSignalsRef.current[participantId] = signal;
-      // Track and presence may arrive in either order. Keep an early desktop track pending;
-      // only a current ACTIVE presence snapshot may put it on stage.
-      pendingRemoteDesktopTracksRef.current[participantId] = track;
-      if (signal?.status === 'active') promotePendingDesktop(participantId, signal);
+      // The Jitsi desktop track is the media authority.  Presence is only a lifecycle
+      // backstop; it is delivered over a different path and can lag behind a second share
+      // cycle.  Previously an existing viewer received the new desktop TRACK_ADDED event but
+      // kept it pending until an `active` participant-property event arrived.  If that property
+      // event was delayed/lost, a fresh viewer (which receives the current presence snapshot on
+      // join) could see the share while everybody already in the meeting could not.
+      //
+      // Show a live, unmuted desktop track immediately.  The normal TRACK_MUTE_CHANGED,
+      // TRACK_REMOVED and native-track-ended handlers below remain responsible for removing it.
+      // Store a presence session only when it is known to be active, so a late STOP from the
+      // previous share cannot clear this newer Jitsi track.
+      if (!track.isMuted() && isDesktopTrackUsable(track)) {
+        remoteDesktopTracksRef.current[participantId] = track;
+        if (signal?.status === 'active') {
+          remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
+        } else {
+          delete remoteDesktopTrackSessionsRef.current[participantId];
+        }
+        delete pendingRemoteDesktopTracksRef.current[participantId];
+        recomputeRemoteScreenShare();
+      } else {
+        pendingRemoteDesktopTracksRef.current[participantId] = track;
+      }
 
       // Real reported bug: a presenter clicking the BROWSER'S OWN native "Stop sharing" bar
       // (instead of our in-app button) could leave the receiver's tile frozen forever. Root
@@ -312,9 +331,17 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
             delete pendingRemoteDesktopTracksRef.current[participantId];
           }
         } else {
-          pendingRemoteDesktopTracksRef.current[participantId] = track;
+          // An unmuted Jitsi desktop track is sufficient to render a presentation.  Do not
+          // wait for participant-property delivery here: that was the repeat-share race which
+          // left existing viewers blank until they rejoined the meeting.
+          remoteDesktopTracksRef.current[participantId] = track;
           const signal = remoteScreenShareSignalsRef.current[participantId];
-          if (signal?.status === 'active') promotePendingDesktop(participantId, signal);
+          if (signal?.status === 'active') {
+            remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
+          } else {
+            delete remoteDesktopTrackSessionsRef.current[participantId];
+          }
+          delete pendingRemoteDesktopTracksRef.current[participantId];
         }
         recomputeRemoteScreenShare();
       } else {
@@ -438,7 +465,13 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       remoteScreenShareSignalsRef.current[participantId] = signal;
       if (signal.status === 'stopped') {
         if (import.meta.env.DEV) console.debug('[screen-share] receiver STOP', { participantId, sessionId: signal.sessionId });
-        clearRemoteDesktop(participantId, signal.sessionId);
+        // Only presence-clear a track that was explicitly associated with this exact share.
+        // A second desktop track can arrive before its ACTIVE presence packet, in which case a
+        // delayed STOP for share #1 must not hide share #2.  Native Jitsi track events still
+        // clear an unassociated stopped source.
+        if (remoteDesktopTrackSessionsRef.current[participantId] === signal.sessionId) {
+          clearRemoteDesktop(participantId, signal.sessionId);
+        }
       } else {
         if (import.meta.env.DEV) console.debug('[screen-share] receiver START', { participantId, sessionId: signal.sessionId });
         promotePendingDesktop(participantId, signal);

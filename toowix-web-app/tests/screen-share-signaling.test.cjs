@@ -30,10 +30,12 @@ test('sender implementation publishes STOP after removeTrack and increments its 
   assert.match(source, /publishScreenShareSignal\(\{ \.\.\.activeSignal/);
 });
 
-test('receiver cleanup is presence-driven and protects a newer share from an old STOP', () => {
+test('receiver uses live Jitsi desktop tracks immediately and protects a newer share from an old STOP', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/jitsi/useConferenceEvents.ts'), 'utf8');
   assert.match(source, /signal\.version < previous\.version/);
   assert.match(source, /remoteDesktopTrackSessionsRef\.current\[participantId\] !== sessionId/);
   assert.match(source, /signal\.status === 'stopped'/);
+  assert.match(source, /remoteDesktopTracksRef\.current\[participantId\] = track/);
+  assert.match(source, /if \(remoteDesktopTrackSessionsRef\.current\[participantId\] === signal\.sessionId\)/);
   assert.match(source, /clearRemoteDesktop\(participantId, signal\.sessionId\)/);
 });
