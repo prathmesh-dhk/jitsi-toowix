@@ -1160,20 +1160,68 @@ export function useJitsiMeeting({
           setError(describeMediaError('microphone', audioError));
         }
 
-        const tryAddTrack = (track: any) => {
+        // Real reported bug, confirmed server-side (Jicofo's own Jingle logs showed a
+        // participant's audio source-add arrive normally, with video permanently absent --
+        // never muted, never retried, just never published, from the moment they joined through
+        // several minutes later): tryAddTrack used to report success the instant a room was
+        // AVAILABLE to attempt the add, regardless of whether myRoom.addTrack(track) itself
+        // actually succeeded. A genuine addTrack failure (SDP/Jingle negotiation error, a JVB
+        // rejection, a transient signaling hiccup) was therefore tried exactly once, silently
+        // logged with a bare console.warn, and never retried or surfaced -- the local self-view
+        // still looks completely normal the whole time (it's bound to the track directly,
+        // independent of whether the track ever reached the room), so the person has no visible
+        // reason to suspect their camera never actually reached anyone else.
+        const addTrackWithRetry = async (track: any, label: 'audio' | 'video'): Promise<boolean> => {
+          const maxAttempts = 3;
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (roomRef.current !== myRoom || !myRoom || isStale()) {
+              return false;
+            }
+
+            try {
+              await runSerializedRoomOperation(async () => {
+                if (roomRef.current !== myRoom || isStale()) {
+                  throw new Error('stale');
+                }
+                await myRoom.addTrack(track);
+              });
+
+              return true;
+            } catch (err) {
+              if (isStale()) {
+                return false;
+              }
+              // eslint-disable-next-line no-console
+              console.warn(`[useJitsiMeeting] ${label} track addTrack attempt ${attempt}/${maxAttempts} failed:`, err);
+              if (attempt < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+              }
+            }
+          }
+
+          return false;
+        };
+
+        const tryAddTrack = (track: any, label: 'audio' | 'video') => {
           if (roomRef.current === myRoom && myRoom && !isStale()) {
-            // Audio and camera acquisition resolve independently. Adding both directly can
-            // start two SDP offer/answer exchanges at once; a third participant's source update
-            // can then collide with them. Keep initial media on the same queue as device changes
-            // and screen-share operations.
-            void runSerializedRoomOperation(async () => {
-              if (roomRef.current !== myRoom || isStale()) {
+            void addTrackWithRetry(track, label).then((succeeded) => {
+              if (succeeded || isStale()) {
                 return;
               }
-              await myRoom.addTrack(track);
-            }).catch((err) => {
-              // eslint-disable-next-line no-console
-              console.warn('[useJitsiMeeting] initial media track could not be added:', err);
+              // Every retry failed -- this track genuinely never reached the conference. Surface
+              // it the same way an acquisition failure already is, so the person has an actual
+              // signal something is wrong instead of a self-view that looks fine while nobody
+              // else can see or hear them.
+              const message = label === 'video'
+                ? 'Your camera could not be turned on for this call. Try toggling it off and on, or rejoin if it keeps failing.'
+                : 'Your microphone could not be turned on for this call. Try toggling it off and on, or rejoin if it keeps failing.';
+
+              if (label === 'video') {
+                setCameraError(message);
+              } else {
+                setError(message);
+              }
             });
 
             return true;
@@ -1182,10 +1230,11 @@ export function useJitsiMeeting({
           return false;
         };
 
-        [ audioTrack, videoTrack ].filter(Boolean).forEach(track => {
-          if (!tryAddTrack(track)) {
+        ([ [ audioTrack, 'audio' ], [ videoTrack, 'video' ] ] as const).forEach(([ track, label ]) => {
+          if (!track) return;
+          if (!tryAddTrack(track, label)) {
             const interval = setInterval(() => {
-              if (tryAddTrack(track) || isStale()) {
+              if (tryAddTrack(track, label) || isStale()) {
                 clearInterval(interval);
                 myAddTrackIntervals.delete(interval);
               }
