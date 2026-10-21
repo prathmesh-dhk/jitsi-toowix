@@ -83,10 +83,13 @@ test('ParticipantGallery.tsx: the LOCAL gallery/grid card mirrors; the REMOTE on
 });
 
 test('both prejoin preview <video> elements apply scaleX(-1) (self-view mirrored before joining too)', () => {
-  // Mobile camera orientation fix: the ref is now a callback composing videoPreviewRef.current
-  // with the orientation-tracking bind() (see src/lib/videoOrientation.ts), instead of a bare
-  // object ref -- still exactly 2 occurrences, still both mirrored.
-  const previewBlocks = meetingRoomSource.match(/<video\s+ref=\{\(el\) => \{ videoPreviewRef\.current = el; previewVideoOrientation\.bind\(el\); \}\}[\s\S]*?\/>/g) || [];
+  // Mobile camera orientation fix: the ref composing videoPreviewRef.current with the
+  // orientation-tracking bind() (see src/lib/videoOrientation.ts) is now a single memoized
+  // previewVideoRef callback (camera-flicker fix: an inline arrow here was a brand-new function
+  // identity every render, causing React to spuriously detach/reattach the ref -- see that
+  // callback's own comment) instead of an inline arrow or a bare object ref -- still exactly 2
+  // occurrences, still both mirrored.
+  const previewBlocks = meetingRoomSource.match(/<video\s+ref=\{previewVideoRef\}[\s\S]*?\/>/g) || [];
 
   assert.equal(previewBlocks.length, 2, 'expected exactly 2 prejoin preview <video> elements (compact + full prejoin layouts)');
   for (const block of previewBlocks) {

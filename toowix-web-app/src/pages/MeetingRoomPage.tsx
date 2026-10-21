@@ -3,7 +3,7 @@ import { useMediaPreview } from '../lib/useMediaPreview';
 import { ensureLibJitsiMeetLoaded, useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
 import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
@@ -3429,6 +3429,76 @@ export function MeetingRoomPage() {
   const pinnedRemoteVideoOrientation = useCameraVideoOrientation();
   const previewVideoOrientation = useCameraVideoOrientation();
 
+  // CONFIRMED BUG (the actual root cause of the self-view "quick flash to pure black" -- traced
+  // via the TEMPORARY diagnostic logging above to repeated setInCallVideoNode unmount/mount PAIRS
+  // firing within the same millisecond, far more often than any genuine mute toggle or layout
+  // switch could explain): the three call sites below each used an INLINE arrow function
+  // (`ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}`) as their ref.
+  // React identifies a ref callback by its FUNCTION IDENTITY, not by whether the underlying DOM
+  // node actually changed -- an inline arrow is a brand-new function on every single render of
+  // the enclosing component, so React detaches the PREVIOUS render's callback (calling it with
+  // null, i.e. "unmount") and attaches the new one (calling it with the element, i.e. "mount") on
+  // every unrelated re-render (a speaking-indicator update, a connection-stats tick, anything),
+  // even though the real <video> DOM node never actually left the page. Each spurious "mount"
+  // reassigns srcObject and calls play() again on an element that already had a live frame,
+  // producing a visible black flash with no actual camera, network, or layout event behind it.
+  // setInCallVideoNode (useCallback, deps [inCallVideo, inCallStream]) and localVideoOrientation.bind
+  // (useCallback internally, see videoOrientation.ts) are each already stable; composing them
+  // through this single memoized callback keeps that stability instead of discarding it inline.
+  const localSelfViewRef = useCallback((el: HTMLVideoElement | null) => {
+    setInCallVideoNode(el);
+    localVideoOrientation.bind(el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ setInCallVideoNode, localVideoOrientation.bind ]);
+
+  // Same bug class, same fix, for the single pinned-REMOTE main-stage video: its ref used to be
+  // an inline arrow closing directly over `pinned` -- a value recomputed fresh (new object
+  // identity) inside a render-local IIFE every render, which made the ref both unstable (the
+  // inline-arrow identity problem above) AND impossible to memoize as written (its own dependency
+  // was never stable to begin with). Hoisting the "which remote is pinned" computation out of
+  // that IIFE into this top-level, properly memoized value fixes both at once: the IIFE below
+  // now just reads this instead of recomputing it, and this callback's identity only changes when
+  // the actually-pinned remote's own video/stream genuinely changes, not on every unrelated render.
+  const pinnedRemoteParticipant = useMemo(() => {
+    if (pinnedParticipantId === 'local') return null;
+
+    return remoteParticipants.find((participant) => participant.id === pinnedParticipantId) || remoteParticipants[0] || null;
+  }, [ pinnedParticipantId, remoteParticipants ]);
+  const pinnedRemoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const setPinnedRemoteVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    pinnedRemoteVideoRef.current = node;
+    if (node && pinnedRemoteParticipant?.video && pinnedRemoteParticipant?.stream) {
+      node.srcObject = pinnedRemoteParticipant.stream;
+      node.play().catch(() => { });
+    }
+    pinnedRemoteVideoOrientation.bind(node);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ pinnedRemoteParticipant, pinnedRemoteVideoOrientation.bind ]);
+  // The ref callback above only fires on a genuine mount -- if a DIFFERENT remote becomes pinned
+  // while the <video> element itself stays mounted (same position in the tree, video stays on for
+  // both), the node never remounts, so this effect carries the reattach the way the local
+  // self-view's own companion effect already does. Mirrors the exact same `srcObject !==` check
+  // the original inline ref used, just no longer re-attached from a recreated-every-render closure.
+  useEffect(() => {
+    const node = pinnedRemoteVideoRef.current;
+
+    if (!node || !pinnedRemoteParticipant?.video || !pinnedRemoteParticipant?.stream) return;
+    if (node.srcObject !== pinnedRemoteParticipant.stream) {
+      node.srcObject = pinnedRemoteParticipant.stream;
+      node.play().catch(() => { });
+    }
+  }, [ pinnedRemoteParticipant ]);
+
+  // Same bug class again, for the two prejoin/joining self-preview widgets: unlike the two fixes
+  // above, this ref never closed over any render-scoped data (just a stable ref object and a
+  // stable bind()), so the fix is simpler -- there was never a reason for this to be recreated
+  // every render in the first place.
+  const previewVideoRef = useCallback((el: HTMLVideoElement | null) => {
+    videoPreviewRef.current = el;
+    previewVideoOrientation.bind(el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ previewVideoOrientation.bind ]);
+
   // Safari can pause the self-view independently of the outgoing canvas stream.
   useEffect(() => {
     if (!hasJoined || !inCallVideo || !inCallStream) return;
@@ -5448,7 +5518,7 @@ export function MeetingRoomPage() {
               {/* Camera-ON State */}
               {inCallVideo ? (
                 <video
-                  ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
+                  ref={localSelfViewRef}
                   autoPlay
                   playsInline
                   muted
@@ -5586,10 +5656,11 @@ export function MeetingRoomPage() {
             >
               {(() => {
                 const isLocalPinned = pinnedParticipantId === 'local';
-                const pinnedRemote = remoteParticipants.find((p) => p.id === pinnedParticipantId);
-                const pinned = isLocalPinned
-                  ? null
-                  : (pinnedRemote || remoteParticipants[0]);
+                // Hoisted to the component's top level (pinnedRemoteParticipant) so the pinned
+                // remote video's own ref callback can be a stable, properly memoized value
+                // instead of closing over a freshly-recomputed object every render -- see that
+                // memo's own comment for the full story.
+                const pinned = pinnedRemoteParticipant;
                 const others = isLocalPinned
                   ? remoteParticipants
                   : remoteParticipants.filter((p) => p.id !== pinned?.id);
@@ -5668,7 +5739,7 @@ export function MeetingRoomPage() {
                             autoPlay
                             muted
                             playsInline
-                            ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
+                            ref={localSelfViewRef}
                             style={{ width: '100%', height: '100%', objectFit: localVideoOrientation.objectFit, transform: 'scaleX(-1)' }}
                           />
                         ) : (
@@ -5696,17 +5767,11 @@ export function MeetingRoomPage() {
                             )}
                           </div>
                         )
-                      ) : (pinned as any)?.video && (pinned as any)?.stream ? (
+                      ) : pinned?.video && pinned?.stream ? (
                         <video
                           autoPlay
                           playsInline
-                          ref={(el) => {
-                            if (el && (pinned as any).stream && el.srcObject !== (pinned as any).stream) {
-                              el.srcObject = (pinned as any).stream;
-                              el.play().catch(() => { });
-                            }
-                            pinnedRemoteVideoOrientation.bind(el);
-                          }}
+                          ref={setPinnedRemoteVideoNode}
                           style={{ width: '100%', height: '100%', objectFit: pinnedRemoteVideoOrientation.objectFit }}
                         />
                       ) : (
@@ -5814,7 +5879,7 @@ export function MeetingRoomPage() {
                             autoPlay
                             muted
                             playsInline
-                            ref={(el) => { setInCallVideoNode(el); localVideoOrientation.bind(el); }}
+                            ref={localSelfViewRef}
                             style={{ width: '100%', height: '100%', objectFit: localVideoOrientation.objectFit, transform: 'scaleX(-1)' }}
                           />
                         ) : (
@@ -8137,7 +8202,7 @@ export function MeetingRoomPage() {
           >
             {videoEnabled && !cameraPermissionError ? (
               <video
-                ref={(el) => { videoPreviewRef.current = el; previewVideoOrientation.bind(el); }}
+                ref={previewVideoRef}
                 autoPlay
                 playsInline
                 muted
@@ -8493,7 +8558,7 @@ export function MeetingRoomPage() {
           >
             {videoEnabled && !cameraPermissionError ? (
               <video
-                ref={(el) => { videoPreviewRef.current = el; previewVideoOrientation.bind(el); }}
+                ref={previewVideoRef}
                 autoPlay
                 playsInline
                 muted
