@@ -1841,23 +1841,24 @@ export function useJitsiMeeting({
       return;
     }
 
-    if (localDesktopTrackRef.current) {
-      await stopScreenShareInternal(localDesktopTrackRef.current);
-
-      return;
-    }
-
-    // The Stop button deliberately clears localDesktopTrackRef before final disposal so it can
-    // immediately reflect the stopped state.  If the participant presses Share again during that
-    // final cleanup window, wait for the old desktop source to be fully retired before obtaining
-    // and adding the next one.  This is intentionally local to desktop lifecycle operations and
-    // does not alter camera, audio, or the receiver-side frozen-frame cleanup.
+    // The native browser toolbar ends the capture track and starts this same asynchronous stop
+    // path. During that interval localDesktopTrackRef can still point at the *already-ended* old
+    // track. Check the in-flight stop BEFORE interpreting that ref as an active presentation:
+    // otherwise the next Share click merely calls the idempotent stop function again and returns,
+    // so no second desktop source is ever published to existing viewers.
     if (desktopStopInFlightRef.current) {
+      if (import.meta.env.DEV) console.debug('[screen-share] waiting for native-toolbar stop cleanup before restart');
       await desktopStopCompletionRef.current;
       room = roomRef.current;
       if (!room) {
         return;
       }
+    }
+
+    if (localDesktopTrackRef.current) {
+      await stopScreenShareInternal(localDesktopTrackRef.current);
+
+      return;
     }
 
     // See desktopStartInFlightRef's comment above: without this, a second call landing while the

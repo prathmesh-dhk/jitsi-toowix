@@ -30,6 +30,10 @@ test('sender implementation publishes STOP after removeTrack and increments its 
   assert.match(source, /publishScreenShareSignal\(\{ \.\.\.activeSignal/);
   assert.match(source, /desktopStopCompletionRef/);
   assert.match(source, /await desktopStopCompletionRef\.current/);
+  const waitForStop = source.indexOf('if (desktopStopInFlightRef.current) {', source.indexOf('const toggleScreenShare'));
+  const activeTrackBranch = source.indexOf('if (localDesktopTrackRef.current) {', source.indexOf('const toggleScreenShare'));
+  assert.ok(waitForStop !== -1 && activeTrackBranch !== -1 && waitForStop < activeTrackBranch,
+    'a native-toolbar stop in progress must be awaited before an old desktop ref can route a new Share click back into the stop branch');
 });
 
 test('receiver uses live Jitsi desktop tracks immediately and protects a newer share from an old STOP', () => {
