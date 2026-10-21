@@ -23,11 +23,19 @@ test('screen-share presence protocol accepts only complete versioned snapshots',
   assert.equal(parseScreenShareSignal(JSON.stringify({ version: 1, sessionId: 'share-1', status: 'unknown' })), null);
 });
 
-test('sender implementation publishes STOP after removeTrack and increments its version', () => {
+test('sender implementation immediately publishes STOP before asynchronous removeTrack cleanup', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/lib/useJitsiMeeting.ts'), 'utf8');
-  assert.match(source, /room\.removeTrack\(desktopTrack\)/);
-  assert.match(source, /version: \+\+localScreenShareVersionRef\.current, status: 'stopped'/);
-  assert.match(source, /publishScreenShareSignal\(\{ \.\.\.activeSignal/);
+  const stopStart = source.indexOf('const stopScreenShareInternal = useCallback');
+  const stopEnd = source.indexOf('const toggleScreenShare = useCallback', stopStart);
+  const stopImplementation = source.slice(stopStart, stopEnd);
+  const stopSignal = stopImplementation.indexOf("status: 'stopped'");
+  const clearLocalStream = stopImplementation.indexOf('setLocalScreenStream(null)');
+  const removeTrack = stopImplementation.indexOf('room.removeTrack(desktopTrack)');
+  assert.ok(stopSignal !== -1 && clearLocalStream !== -1 && removeTrack !== -1);
+  assert.ok(stopSignal < removeTrack && clearLocalStream < removeTrack,
+    'a browser-toolbar stop must clear the local frame and notify viewers before a slow SDP removeTrack operation');
+  assert.match(stopImplementation, /version: \+\+localScreenShareVersionRef\.current, status: 'stopped'/);
+  assert.match(stopImplementation, /publishScreenShareSignal\(\{ \.\.\.activeSignal/);
   assert.match(source, /desktopStopCompletionRef/);
   assert.match(source, /await desktopStopCompletionRef\.current/);
   const waitForStop = source.indexOf('if (desktopStopInFlightRef.current) {', source.indexOf('const toggleScreenShare'));

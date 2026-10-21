@@ -1771,6 +1771,24 @@ export function useJitsiMeeting({
     try {
       const room = roomRef.current;
 
+      // The browser toolbar has already ended the native capture by the time this
+      // handler runs.  Do not keep rendering its final frame while Jitsi performs
+      // the (potentially slow) removeTrack SDP negotiation below.  Clearing the
+      // local view and publishing the terminal presence state first makes a native
+      // toolbar stop behave exactly like an immediate in-app stop for both this
+      // participant and receivers.  The completion barrier remains active until
+      // removeTrack/dispose finish, so a rapid new share cannot race this cleanup.
+      const activeSignal = localScreenShareSignalRef.current;
+      if (activeSignal && activeSignal.status === 'active') {
+        publishScreenShareSignal({ ...activeSignal, version: ++localScreenShareVersionRef.current, status: 'stopped' });
+      }
+      if (localDesktopTrackRef.current === desktopTrack) {
+        localDesktopTrackRef.current = null;
+      }
+      setIsScreenSharing(false);
+      setLocalScreenStream(null);
+      void applyMediaQualityPolicy();
+
       if (room) {
         try {
           // A bounded remove prevents a signaling stall from trapping the UI on the old
@@ -1786,26 +1804,6 @@ export function useJitsiMeeting({
       }
 
       await stopDesktopShareAudio();
-
-      // Do not make remote cleanup depend on TRACK_REMOVED or the receiver's native track.
-      // Publish the terminal snapshot even when removeTrack timed out/failed: the browser has
-      // already stopped producing the source, and this presence update is the authoritative
-      // instruction for every receiver (including a late joiner).
-      const activeSignal = localScreenShareSignalRef.current;
-      if (activeSignal && activeSignal.status === 'active') {
-        // STOP gets its own monotonic version.  Reusing the START version would allow a delayed
-        // START presence update for this same session to revive an already-stopped share.
-        publishScreenShareSignal({ ...activeSignal, version: ++localScreenShareVersionRef.current, status: 'stopped' });
-      }
-
-      // Only clear the ref if it still points at THIS track -- a newer share (started while this
-      // stop was in flight) must not have its own track ripped out from under it.
-      if (localDesktopTrackRef.current === desktopTrack) {
-        localDesktopTrackRef.current = null;
-      }
-      setIsScreenSharing(false);
-      setLocalScreenStream(null);
-      void applyMediaQualityPolicy();
 
       // Dispose only after the conference-level removal has been attempted (success or not --
       // the local capture is ending either way), never before, so a slow removeTrack can't race

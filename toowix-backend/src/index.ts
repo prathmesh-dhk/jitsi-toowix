@@ -87,7 +87,14 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/contacts', contactRoutes);
 // Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
-app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot()));
+// Avatar URLs are included in Jitsi participant identity and may be rendered by the meeting
+// frontend from a different local development origin (for example :5173 -> backend :4000).
+// Helmet's default `Cross-Origin-Resource-Policy: same-origin` makes Chromium block that image
+// with ERR_BLOCKED_BY_RESPONSE.NotSameOrigin.  This is intentionally scoped to public avatar
+// files only; API responses and the other upload routes keep Helmet's default policy.
+app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot(), {
+  setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+}));
 app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot()));
 app.use('/api/uploads/chat-audios', express.static(getChatAudioUploadRoot()));
 // Content-Disposition: attachment makes the browser download these rather than try to render

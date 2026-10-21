@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth';
+import type { ToowixAuthenticatedRequest } from '../../middleware/requireToowixAuth';
 import * as accountService from './account.service';
 import type { IRequestMeta } from './account.service';
 
@@ -22,6 +23,29 @@ function requestMeta(req: Request): IRequestMeta {
  */
 export const loginGateHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const result = await accountService.evaluateLoginGate(req.firebaseUid, req.firebaseEmail, req.firebaseEmailVerified, requestMeta(req));
+  res.status(result.httpStatus).json(result.body);
+};
+
+/**
+ * POST /api/auth/keycloak-session
+ * Keycloak-authenticated counterpart to /login-gate. Mounted behind requireToowixAuth (see
+ * auth.routes.ts), which has already verified the Authorization: Bearer token's signature,
+ * issuer, audience and expiry before this ever runs -- `sub` here is always the VERIFIED claim
+ * (req.toowixUser.sub), never anything a client could supply in the request body/query. Local/
+ * dev-only prototype alongside the rest of the Keycloak path -- see KEYCLOAK_INTEGRATION.md.
+ */
+export const keycloakSessionHandler = async (req: ToowixAuthenticatedRequest, res: Response): Promise<void> => {
+  const sub = typeof req.toowixUser?.sub === 'string' ? req.toowixUser.sub : null;
+
+  if (!sub) {
+    // requireToowixAuth should already have rejected a request with no verified sub -- this is
+    // a safety net, not the primary check.
+    res.status(401).json({ status: 'INVALID_CREDENTIALS', error: 'Keycloak authentication is required.' });
+    return;
+  }
+
+  const result = await accountService.evaluateKeycloakLoginGate(sub, requestMeta(req));
+
   res.status(result.httpStatus).json(result.body);
 };
 

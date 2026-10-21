@@ -188,6 +188,7 @@ test-results
 /toowix-web-app/src/pages/AuthSilentCallback.tsx
 /toowix-backend/src/middleware/requireToowixAuth.ts
 /toowix-backend/src/middleware/requireMeetEntitlementRemote.ts
+/toowix-backend/src/middleware/requireMeetEntitlementForAccount.ts
 /toowix-backend/src/lib/tenantAdminClient.ts
 /toowix-backend/src/config/tenantAdmin.ts
 /KEYCLOAK_INTEGRATION.md

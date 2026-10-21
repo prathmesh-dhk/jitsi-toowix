@@ -7,6 +7,7 @@ import { getFirebaseAuth } from '../../config/firebase';
 import { parseUserAgent } from '../../utils/parseUserAgent';
 import { sendEmailAsync } from '../../email/sender';
 import { emailConfig } from '../../config/email';
+import { resolveTenantFromKeycloakSub } from '../../lib/meetEntitlement';
 
 // All business rules for the account auth lifecycle (signup, login gate, email verification,
 // password reset) live here as plain functions -- no `req`/`res` anywhere in this file.
@@ -75,14 +76,17 @@ const recordSession = async (userId: any, meta: IRequestMeta): Promise<string> =
  */
 const finalizeLogin = async (
   user: IUserDocument,
-  firebaseUid: string,
+  // null for the Keycloak login path -- there's no fresh Firebase token in that request to sync
+  // claims against, so claims sync is skipped entirely (see syncClaims below); session issuance
+  // (recordSession) and lastActiveAt still happen exactly the same either way.
+  firebaseUid: string | null,
   claims: Record<string, unknown> | null,
   meta: IRequestMeta
 ): Promise<string> => {
   user.lastActiveAt = new Date();
 
   const syncClaims = async (): Promise<void> => {
-    if (!claims) return;
+    if (!claims || !firebaseUid) return;
     try {
       const auth = getFirebaseAuth();
       await auth.setCustomUserClaims(firebaseUid, claims);
@@ -135,7 +139,9 @@ export async function evaluateLoginGate(
       };
     }
 
-    // 2. Check Email Verification
+    // 2. Check Email Verification -- Firebase-specific (Keycloak logins skip this entirely; see
+    // evaluateKeycloakLoginGate below, which only runs the SHARED eligibility checks this calls
+    // into at the bottom).
     if (!firebaseEmailVerified && !user.emailVerifiedAt) {
       return { body: { status: 'UNVERIFIED', error: 'Please verify your email address before signing in', email: user.email }, httpStatus: 403 };
     }
@@ -146,104 +152,207 @@ export async function evaluateLoginGate(
       await user.save();
     }
 
-    // 3. Check User Status
-    if (user.status !== 'ACTIVE') {
-      return { body: { status: 'SUSPENDED_USER', error: 'Your user account has been suspended by an administrator' }, httpStatus: 403 };
+    return evaluateResolvedUserLoginGate(user, meta, firebaseUid);
+  } catch (error: any) {
+    console.error('[Login Gate] Error evaluating login gate:', error.message);
+    return { body: { error: 'Internal server error evaluating login gate' }, httpStatus: 500 };
+  }
+}
+
+/**
+ * The SHARED tail of the login gate -- user/tenant eligibility checks (status, forced reset,
+ * company lifecycle) plus session issuance -- factored out of evaluateLoginGate so the Keycloak
+ * session-exchange path (evaluateKeycloakLoginGate, below) enforces the EXACT same rules instead
+ * of a second, hand-duplicated copy that could silently drift out of sync with this one. Only
+ * Firebase-specific concerns (locating the user by firebaseUid, the email-verification check,
+ * Firebase custom-claims sync) stay outside this function, in each caller.
+ *
+ * `claimsSyncFirebaseUid`: when set, the issued session also syncs Firebase custom claims for
+ * that uid (the normal Firebase login path). When null (the Keycloak path), claims sync is
+ * skipped entirely -- there is no fresh Firebase token in a Keycloak-authenticated request to
+ * attach claims to, and this is a pure convenience sync, not an authorization source: the actual
+ * authorization decision below (user.status, company.status) is always re-checked fresh from the
+ * database regardless of whatever claims a past Firebase login last set.
+ */
+async function evaluateResolvedUserLoginGate(
+    user: IUserDocument,
+    meta: IRequestMeta,
+    claimsSyncFirebaseUid: string | null,
+): Promise<IServiceResult> {
+  // 3. Check User Status
+  if (user.status !== 'ACTIVE') {
+    return { body: { status: 'SUSPENDED_USER', error: 'Your user account has been suspended by an administrator' }, httpStatus: 403 };
+  }
+
+  // 4. Check Forced Password Reset
+  if (user.forcePasswordReset) {
+    return { body: { status: 'FORCE_PASSWORD_RESET', error: 'You must reset your password before continuing' }, httpStatus: 403 };
+  }
+
+  // 5. Super Admin Bypass for Independent Admin Accounts
+  let company: ICompanyDocument | null = null;
+
+  if (user.role === 'SUPER_ADMIN') {
+    // Super Admin has global access
+    const sessionToken = await finalizeLogin(
+      user, claimsSyncFirebaseUid, claimsSyncFirebaseUid ? { role: 'SUPER_ADMIN', companyId: null } : null, meta
+    );
+
+    return { body: { status: 'ACTIVE', user, company: null, sessionToken }, httpStatus: 200 };
+  }
+
+  // 6. Check Company Association & Lifecycle Status
+  if (!user.companyId) {
+    // Check if a company exists with matching domain
+    const domain = user.email ? user.email.split('@')[1]?.toLowerCase() : '';
+    if (
+      domain &&
+      domain !== 'gmail.com' &&
+      domain !== 'yahoo.com' &&
+      domain !== 'outlook.com' &&
+      domain !== 'hotmail.com'
+    ) {
+      const matchedCompany = await Company.findOne({
+        allowedDomains: domain,
+      });
+      if (matchedCompany) {
+        user.companyId = matchedCompany._id as any;
+        await user.save();
+      }
+    }
+  }
+
+  if (!user.companyId) {
+    // Standalone user without company workspace — issue direct active token
+    const sessionToken = await finalizeLogin(user, claimsSyncFirebaseUid, null, meta);
+
+    return { body: { status: 'ACTIVE', user, company: null, sessionToken }, httpStatus: 200 };
+  }
+
+  company = await Company.findById(user.companyId);
+
+  if (!company) {
+    return { body: { status: 'INVALID_CREDENTIALS', error: 'Associated company workspace not found' }, httpStatus: 404 };
+  }
+
+  if (company.status === 'PENDING') {
+    return {
+      body: {
+        status: 'PENDING',
+        error: 'Your company registration is pending Super Admin review and approval',
+        company: { id: company._id, name: company.name, slug: company.slug, status: company.status },
+      },
+      httpStatus: 403,
+    };
+  }
+
+  if (company.status === 'REJECTED') {
+    return {
+      body: {
+        status: 'REJECTED',
+        error: 'Your company registration was rejected by the administrator',
+        rejectionReason: company.rejectionReason || null,
+        company: { name: company.name, status: company.status },
+      },
+      httpStatus: 403,
+    };
+  }
+
+  if (company.status === 'SUSPENDED') {
+    return {
+      body: {
+        status: 'SUSPENDED_COMPANY',
+        error: 'Your company workspace has been suspended',
+        company: { name: company.name, status: company.status },
+      },
+      httpStatus: 403,
+    };
+  }
+
+  // 7. All checks passed: issue an application session. Meeting tokens require admission.
+  console.log(`[Login Gate PASS] ${user.email} logged in successfully for company ${company.name}`);
+
+  const sessionToken = await finalizeLogin(
+    user, claimsSyncFirebaseUid,
+    claimsSyncFirebaseUid ? { role: user.role, companyId: String(company._id), companyStatus: company.status } : null,
+    meta
+  );
+
+  return { body: { status: 'ACTIVE', user, company, sessionToken }, httpStatus: 200 };
+}
+
+export type KeycloakLoginDenialReason = 'KEYCLOAK_NOT_LINKED';
+
+/**
+ * The Keycloak-authenticated counterpart to evaluateLoginGate. The caller (keycloakSessionHandler)
+ * has ALREADY verified the Keycloak access token's signature/issuer/audience/expiry via
+ * requireToowixAuth before this ever runs -- this function trusts the verified `sub` it's given,
+ * never a client-supplied one.
+ *
+ * Deliberately does NOT auto-provision or auto-link by email -- resolveTenantFromKeycloakSub
+ * (src/lib/meetEntitlement.ts) only ever trusts an explicit link already created by
+ * scripts/link-keycloak-sub.ts (run by an administrator). An unlinked sub is a real "this
+ * Keycloak identity has not been provisioned in Toowix yet" state, returned as a stable
+ * KEYCLOAK_NOT_LINKED reason code, not silently matched by email.
+ */
+export async function evaluateKeycloakLoginGate(verifiedKeycloakSub: string, meta: IRequestMeta): Promise<IServiceResult> {
+  try {
+    const identity = await resolveTenantFromKeycloakSub(verifiedKeycloakSub);
+
+    if (!identity) {
+      return {
+        body: {
+          status: 'KEYCLOAK_NOT_LINKED',
+          error: 'This Keycloak account is not linked to a Toowix Meet user yet. Ask an administrator to link it.',
+        },
+        httpStatus: 403,
+      };
     }
 
-    // 4. Check Forced Password Reset
-    if (user.forcePasswordReset) {
-      return { body: { status: 'FORCE_PASSWORD_RESET', error: 'You must reset your password before continuing' }, httpStatus: 403 };
+    const user = await User.findById(identity.userId);
+
+    if (!user) {
+      // The link pointed at a user that no longer exists -- same stable code as "never linked";
+      // the caller has no reason to be told the difference.
+      return {
+        body: {
+          status: 'KEYCLOAK_NOT_LINKED',
+          error: 'This Keycloak account is not linked to a Toowix Meet user yet. Ask an administrator to link it.',
+        },
+        httpStatus: 403,
+      };
     }
 
-    // 5. Super Admin Bypass for Independent Admin Accounts
-    let company: ICompanyDocument | null = null;
+    // No email-verification gate here (Keycloak already asserts the identity; Toowix's own
+    // emailVerifiedAt flag governs the Firebase signup flow specifically, not this path) --
+    // every other eligibility rule (user status, forced reset, company lifecycle) is identical,
+    // via the same shared function the Firebase path uses.
+    const result = await evaluateResolvedUserLoginGate(user, meta, null);
 
-    if (user.role === 'SUPER_ADMIN') {
-      // Super Admin has global access
-      const sessionToken = await finalizeLogin(user, firebaseUid, { role: 'SUPER_ADMIN', companyId: null }, meta);
-
-      return { body: { status: 'ACTIVE', user, company: null, sessionToken }, httpStatus: 200 };
-    }
-
-    // 6. Check Company Association & Lifecycle Status
-    if (!user.companyId) {
-      // Check if a company exists with matching domain
-      const domain = user.email ? user.email.split('@')[1]?.toLowerCase() : '';
-      if (
-        domain &&
-        domain !== 'gmail.com' &&
-        domain !== 'yahoo.com' &&
-        domain !== 'outlook.com' &&
-        domain !== 'hotmail.com'
-      ) {
-        const matchedCompany = await Company.findOne({
-          allowedDomains: domain,
-        });
-        if (matchedCompany) {
-          user.companyId = matchedCompany._id as any;
-          await user.save();
-        }
+    // Bridge into a REAL Firebase session, not just the opaque Toowix session token. Every other
+    // authenticated route in this app (verifyFirebaseToken, used almost everywhere) requires a
+    // live Firebase ID token on EVERY request, in addition to the Toowix session token -- the
+    // session token alone was never sufficient, even for Firebase logins. A Keycloak sign-in has
+    // no such token because the browser never talked to Firebase. Firebase's own supported fix
+    // for exactly this "external IdP signs the user in" case is a custom token: mint one here for
+    // this user's EXISTING firebaseUid (required on every User doc -- see models/User.ts), and the
+    // frontend calls signInWithCustomToken with it. That gives the browser a real `auth.currentUser`
+    // and working getIdToken(), so every existing Firebase-gated route keeps working completely
+    // unmodified -- this does not touch, weaken, or bypass verifyFirebaseToken in any way, it just
+    // uses Firebase's own federation mechanism to satisfy what that middleware already requires.
+    if (result.body?.status === 'ACTIVE') {
+      try {
+        const auth = getFirebaseAuth();
+        result.body.firebaseCustomToken = await auth.createCustomToken(user.firebaseUid);
+      } catch (tokenError: any) {
+        console.error('[Keycloak Login Gate] Could not mint Firebase custom token:', tokenError.message);
+        return { body: { status: 'INVALID_CREDENTIALS', error: 'Could not establish a secure session. Please try again.' }, httpStatus: 503 };
       }
     }
 
-    if (!user.companyId) {
-      // Standalone user without company workspace — issue direct active token
-      const sessionToken = await finalizeLogin(user, firebaseUid, null, meta);
-
-      return { body: { status: 'ACTIVE', user, company: null, sessionToken }, httpStatus: 200 };
-    }
-
-    company = await Company.findById(user.companyId);
-
-    if (!company) {
-      return { body: { status: 'INVALID_CREDENTIALS', error: 'Associated company workspace not found' }, httpStatus: 404 };
-    }
-
-    if (company.status === 'PENDING') {
-      return {
-        body: {
-          status: 'PENDING',
-          error: 'Your company registration is pending Super Admin review and approval',
-          company: { id: company._id, name: company.name, slug: company.slug, status: company.status },
-        },
-        httpStatus: 403,
-      };
-    }
-
-    if (company.status === 'REJECTED') {
-      return {
-        body: {
-          status: 'REJECTED',
-          error: 'Your company registration was rejected by the administrator',
-          rejectionReason: company.rejectionReason || null,
-          company: { name: company.name, status: company.status },
-        },
-        httpStatus: 403,
-      };
-    }
-
-    if (company.status === 'SUSPENDED') {
-      return {
-        body: {
-          status: 'SUSPENDED_COMPANY',
-          error: 'Your company workspace has been suspended',
-          company: { name: company.name, status: company.status },
-        },
-        httpStatus: 403,
-      };
-    }
-
-    // 7. All checks passed: issue an application session. Meeting tokens require admission.
-    console.log(`[Login Gate PASS] ${user.email} logged in successfully for company ${company.name}`);
-
-    const sessionToken = await finalizeLogin(
-      user, firebaseUid, { role: user.role, companyId: String(company._id), companyStatus: company.status }, meta
-    );
-
-    return { body: { status: 'ACTIVE', user, company, sessionToken }, httpStatus: 200 };
+    return result;
   } catch (error: any) {
-    console.error('[Login Gate] Error evaluating login gate:', error.message);
+    console.error('[Keycloak Login Gate] Error evaluating login gate:', error.message);
     return { body: { error: 'Internal server error evaluating login gate' }, httpStatus: 500 };
   }
 }
