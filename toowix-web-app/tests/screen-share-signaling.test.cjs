@@ -28,6 +28,8 @@ test('sender implementation publishes STOP after removeTrack and increments its 
   assert.match(source, /room\.removeTrack\(desktopTrack\)/);
   assert.match(source, /version: \+\+localScreenShareVersionRef\.current, status: 'stopped'/);
   assert.match(source, /publishScreenShareSignal\(\{ \.\.\.activeSignal/);
+  assert.match(source, /desktopStopCompletionRef/);
+  assert.match(source, /await desktopStopCompletionRef\.current/);
 });
 
 test('receiver uses live Jitsi desktop tracks immediately and protects a newer share from an old STOP', () => {

@@ -620,6 +620,12 @@ export function useJitsiMeeting({
   // lib-jitsi-meet as another LOCAL_TRACK_STOPPED), which would otherwise re-enter the stop path
   // while the first call is still in flight.
   const desktopStopInFlightRef = useRef(false);
+  // A toolbar stop clears the local desktop ref before dispose() finishes so the UI can update
+  // promptly. Keep a completion barrier for the small interval that follows: a second toolbar
+  // click must not begin a new addTrack while the previous removeTrack/dispose is still completing.
+  // Without it, the second share can be announced while Jitsi is still retiring the first desktop
+  // source, leaving existing receivers with no synchronized source until they rejoin.
+  const desktopStopCompletionRef = useRef<Promise<void>>(Promise.resolve());
   // Guards the START path the same way desktopStopInFlightRef guards the stop path.
   // createLocalTracks({ devices: ['desktop'] }) awaits the OS share picker before resolving, and
   // localDesktopTrackRef.current isn't set until AFTER that resolves -- so a rapid double
@@ -1757,6 +1763,11 @@ export function useJitsiMeeting({
       return;
     }
     desktopStopInFlightRef.current = true;
+    let resolveStopCompletion!: () => void;
+    const stopCompletion = new Promise<void>((resolve) => {
+      resolveStopCompletion = resolve;
+    });
+    desktopStopCompletionRef.current = stopCompletion;
     try {
       const room = roomRef.current;
 
@@ -1818,12 +1829,13 @@ export function useJitsiMeeting({
       // stopping a share turns up again, look there first before reintroducing a reconnect here.
     } finally {
       desktopStopInFlightRef.current = false;
+      resolveStopCompletion();
     }
   }, [ publishScreenShareSignal, stopDesktopShareAudio ]);
 
   const toggleScreenShare = useCallback(async () => {
     const JitsiMeetJS = window.JitsiMeetJS;
-    const room = roomRef.current;
+    let room = roomRef.current;
 
     if (!JitsiMeetJS || !room) {
       return;
@@ -1833,6 +1845,19 @@ export function useJitsiMeeting({
       await stopScreenShareInternal(localDesktopTrackRef.current);
 
       return;
+    }
+
+    // The Stop button deliberately clears localDesktopTrackRef before final disposal so it can
+    // immediately reflect the stopped state.  If the participant presses Share again during that
+    // final cleanup window, wait for the old desktop source to be fully retired before obtaining
+    // and adding the next one.  This is intentionally local to desktop lifecycle operations and
+    // does not alter camera, audio, or the receiver-side frozen-frame cleanup.
+    if (desktopStopInFlightRef.current) {
+      await desktopStopCompletionRef.current;
+      room = roomRef.current;
+      if (!room) {
+        return;
+      }
     }
 
     // See desktopStartInFlightRef's comment above: without this, a second call landing while the
