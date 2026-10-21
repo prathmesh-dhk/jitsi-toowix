@@ -537,7 +537,6 @@ export function useJitsiMeeting({
   const [ connectionStats, setConnectionStats ] = useState<Record<string, any>>({});
   const [ isLocked, setIsLocked ] = useState(false);
   const [ shareAudioActive, setShareAudioActive ] = useState(false);
-  const shareAudioTrackRef = useRef<any>(null);
   // JVB accepts one outbound audio source for a participant. Screen audio is therefore carried on
   // the existing microphone sender (via a setEffect()-based DesktopAudioMixEffect) instead of
   // being added as a second Jitsi audio track -- see that file's own comment for the confirmed
@@ -1350,7 +1349,6 @@ export function useJitsiMeeting({
       setConnectionStats({});
       setIsLocked(false);
       setShareAudioActive(false);
-      shareAudioTrackRef.current = null;
       const desktopAudioMix = desktopShareAudioMixRef.current;
 
       desktopShareAudioMixRef.current = null;
@@ -2738,35 +2736,28 @@ export function useJitsiMeeting({
   }, []);
 
   // Share audio (stock Jitsi's "Share audio"): captures ONLY a tab/system audio source (the
-  // video track from getDisplayMedia is immediately stopped, never published) and adds it as an
-  // extra audio track alongside the mic -- distinct from screen share, which publishes video.
+  // video track from getDisplayMedia is immediately stopped, never published).
+  //
+  // CONFIRMED BUG, same root cause already diagnosed and fixed for screen share's own "Share
+  // audio" checkbox (see the DesktopAudioMixEffect comment further down in this file): this used
+  // to create a SECOND Jitsi audio track and room.addTrack() it alongside the already-published
+  // microphone track. The JVB permits only one outbound audio source per endpoint -- locally
+  // room.addTrack() resolved without error (so nothing here looked broken), but the bridge never
+  // announced/forwarded that second source, so nobody else in the call ever heard it. This mirrors
+  // that same fix: mix the shared audio into the EXISTING microphone sender via setEffect(),
+  // reusing stopDesktopShareAudio/desktopShareAudioMixRef exactly as the screen-share path does,
+  // instead of ever adding a second room audio track.
   const toggleShareAudio = useCallback(async () => {
-    const JitsiMeetJS = window.JitsiMeetJS;
     const room = roomRef.current;
 
-    if (!JitsiMeetJS || !room) {
+    if (!room) {
       return;
     }
 
-    // If this is audio mixed into an active presentation, the More-menu control means "stop
-    // sharing audio" without ending the screen share itself.
+    // Stop sharing audio -- whether it was started here, or as the audio half of an active
+    // screen share's "Share audio" checkbox. Same underlying state either way.
     if (desktopShareAudioMixRef.current) {
       await stopDesktopShareAudio();
-      return;
-    }
-
-    if (shareAudioTrackRef.current) {
-      const track = shareAudioTrackRef.current;
-
-      shareAudioTrackRef.current = null;
-      setShareAudioActive(false);
-      try {
-        await room.removeTrack(track);
-      } catch {
-        // best-effort
-      }
-      track.dispose();
-
       return;
     }
 
@@ -2783,25 +2774,26 @@ export function useJitsiMeeting({
         throw new Error('The selected source has no audio to share.');
       }
 
-      const [ jitsiTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
-        { stream: new MediaStream([ audioTrack ]), mediaType: 'audio' }
-      ]);
+      const microphoneJitsiTrack = localAudioTrackRef.current;
 
-      shareAudioTrackRef.current = jitsiTrack;
+      if (!microphoneJitsiTrack) {
+        audioTrack.stop();
+        throw new Error('An active microphone is required to share audio.');
+      }
+
+      const mixEffect = new DesktopAudioMixEffect(audioTrack);
+
+      await microphoneJitsiTrack.setEffect(mixEffect);
+      desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect };
       audioTrack.addEventListener('ended', () => {
         // User stopped sharing via the browser's own picker/bar, not our button.
-        if (shareAudioTrackRef.current === jitsiTrack) {
-          shareAudioTrackRef.current = null;
-          setShareAudioActive(false);
-          room.removeTrack(jitsiTrack).catch(() => {});
-          jitsiTrack.dispose();
-        }
+        if (!desktopShareAudioMixRef.current) return;
+        void stopDesktopShareAudio();
       });
-      await room.addTrack(jitsiTrack);
       setShareAudioActive(true);
     } catch {
-      // user cancelled the picker, or the source had no audio -- no-op, matches screen share's
-      // own silent-cancel behavior.
+      // user cancelled the picker, the source had no audio, or no mic is active to carry it --
+      // no-op, matches screen share's own silent-cancel behavior.
     }
   }, [ stopDesktopShareAudio ]);
 

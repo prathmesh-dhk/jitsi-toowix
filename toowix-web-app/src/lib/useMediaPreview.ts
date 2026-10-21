@@ -2,6 +2,33 @@ import { useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
+// CONFIRMED BUG, same class already diagnosed and fixed for the camera in useJitsiMeeting.ts's
+// own resolveExplicitDeviceId (see its comment: "Requesting getUserMedia with no deviceId at all
+// ... is what left the camera black on first join"): that fix only covers the FALLBACK path used
+// when there is no prejoin preview stream to adopt. This lobby preview -- the PRIMARY path used on
+// every normal join, since its exact live track is what the conference then adopts (see this
+// file's own ownership-transfer comments below) -- never got the matching fix. With no stored
+// device preference yet (a genuinely first-ever join on this browser/profile), audioId is '' and
+// the mic request below fell through to a bare `getUserMedia({audio:true})`: the browser's own
+// "pick a default input" resolution, which the camera bug already proved can silently resolve to
+// a track that technically exists but is wrong/dead, while asking for a SPECIFIC resolved deviceId
+// -- exactly what a manual reselect from the device menu does -- works reliably. Resolving one
+// explicitly up front, the same way the camera fallback does, gives a first-ever join the same
+// treatment a manual reselect already gets.
+async function resolveExplicitAudioDeviceId(preferredId: string): Promise<string | undefined> {
+  if (preferredId) {
+    return preferredId;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const match = devices.find((d) => d.kind === 'audioinput' && d.deviceId);
+
+    return match?.deviceId || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function getMediaErrorMessage(kind: 'Microphone' | 'Camera', error: unknown): string {
   if (!(error instanceof Error)) {
     return `${kind} is unavailable.`;
@@ -123,15 +150,18 @@ export function useMediaPreview(
     const startAudio = async () => {
       try {
         let media: MediaStream;
-        const constraints: MediaTrackConstraints = audioId
-          ? { deviceId: { ideal: audioId } }
+        const explicitAudioId = await resolveExplicitAudioDeviceId(audioId);
+        const constraints: MediaTrackConstraints = explicitAudioId
+          ? { deviceId: { ideal: explicitAudioId } }
           : {};
+
+        if (!active) return;
 
         try {
           media = await navigator.mediaDevices.getUserMedia({ audio: Object.keys(constraints).length ? constraints : true });
         } catch (err: any) {
           // If ideal device failed, fallback to any default audio
-          if (audioId && err?.name === 'OverconstrainedError') {
+          if (explicitAudioId && err?.name === 'OverconstrainedError') {
             media = await navigator.mediaDevices.getUserMedia({ audio: true });
           } else {
             throw err;

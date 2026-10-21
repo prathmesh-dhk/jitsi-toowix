@@ -25,8 +25,12 @@ import { MeetingParticipantCard } from '../MeetingParticipantCard';
 
 // Keep this in lockstep with the mobile CSS in MeetingRoomPage.tsx. A coarse-pointer landscape
 // phone can be wider than the portrait breakpoint, so it needs its own clause rather than falling
-// back to the desktop gallery calculator after rotation.
-const MOBILE_GALLERY_MEDIA_QUERY = '(max-width: 768px), (max-width: 1024px) and (pointer: coarse) and (orientation: landscape)';
+// back to the desktop gallery calculator after rotation. 1366px covers the widest common tablet
+// landscape viewport (iPad Pro 12.9"); past that is genuinely laptop/desktop territory, where the
+// flexible full-fill engine (not the paginated uniform grid) is the right choice. Reported bug:
+// on a tablet in landscape, the desktop engine's cards ran past the visible stage sideways --
+// this widened clause routes tablets into the same proven paginated grid phones already use.
+const MOBILE_GALLERY_MEDIA_QUERY = '(max-width: 768px), (max-width: 1366px) and (pointer: coarse) and (orientation: landscape)';
 const GALLERY_SWIPE_MIN_DISTANCE_PX = 48;
 const GALLERY_GAP = 12;
 
@@ -284,10 +288,17 @@ export function ParticipantGallery({
   // MeetingParticipantCard's own comment) -- mobile intentionally stopped trying to force/crop a
   // phone's camera into any particular shape, so whatever the camera actually delivers is shown
   // in full, letterboxed if needed, matching stock Jitsi Meet's own behavior rather than cropping
-  // to fill the cell. `forceColumns: 2` is kept for the paginated 4+ case specifically (see
-  // calculateMeetingLayout's own comment: an unconstrained area-maximizing search can legitimately
-  // pick ONE full-width column on a narrow viewport, which is the single-column "stacking" bug
-  // this prevents); 1-3 participants keep the existing unconstrained auto-fit search.
+  // to fill the cell. A fixed 2-column/2-row constraint is kept for the paginated 4+ case
+  // specifically (see calculateMeetingLayout's own comment: an unconstrained area-maximizing
+  // search can legitimately pick ONE full-width column/row, which is the "stacking"/"running off
+  // the edge" bug this prevents); 1-3 participants keep the existing unconstrained auto-fit
+  // search. Which axis gets fixed follows the STAGE's actual measured shape, not the device type:
+  // a portrait-taller-than-wide stage (phone, or a tablet rotated to portrait) fixes 2 columns, a
+  // landscape-wider-than-tall stage (a tablet in landscape) fixes 2 rows instead -- forcing columns
+  // on a wide-but-short stage is exactly what produced tiles running past the visible stage
+  // sideways. Falls back to forceColumns on an exact square (width === height) since that's the
+  // pre-existing, already-correct behavior for every non-tablet device this ran on before.
+  const mobileForceRows = mobileGalleryPaged && galleryStageSize.width > galleryStageSize.height;
   const uniformLayout = useStableMeetingLayout({
     participantCount: galleryCellKeys.length,
     width: Math.max(1, galleryStageSize.width),
@@ -295,7 +306,8 @@ export function ParticipantGallery({
     mode: 'gallery',
     sidePanelOpen: Boolean(activePanel),
     gap: GALLERY_GAP,
-    forceColumns: mobileGalleryPaged ? 2 : undefined,
+    forceColumns: mobileGalleryPaged && !mobileForceRows ? 2 : undefined,
+    forceRows: mobileForceRows ? 2 : undefined,
   });
   const uniformPositions = calculateCellPositions(
     galleryCellKeys.length, uniformLayout, galleryStageSize.width, galleryStageSize.height, GALLERY_GAP,

@@ -21,6 +21,13 @@ export interface MeetingLayoutInput {
   // short last page (e.g. 1 tile left over after paginating) still gets 2-column sizing instead of
   // being treated as a lone "solo" tile.
   forceColumns?: number;
+  // Same idea as forceColumns, transposed: always lay out exactly this many rows (columns =
+  // ceil(participantCount / forceRows)), paginated the same way. Used on a wide-but-short stage
+  // (a tablet in landscape) where forceColumns:2 would produce exactly two narrow columns running
+  // the full height of the screen -- the "scrollable sideways" complaint this exists to prevent.
+  // Two fixed rows uses the stage's actual wide shape instead of fighting it. Mutually exclusive
+  // with forceColumns; the caller picks whichever matches the stage's current orientation.
+  forceRows?: number;
 }
 
 export interface MeetingLayoutResult {
@@ -122,6 +129,24 @@ function calculateForcedColumnLayout(
 }
 
 /**
+ * The forceColumns transpose: fixes `rows`, computes columns = ceil(count / rows). Same fluid
+ * geometry policy as calculateForcedColumnLayout (no aspect-ratio enforcement, exact division).
+ */
+function calculateForcedRowLayout(
+  count: number, rows: number, width: number, height: number, gap: number,
+): MeetingLayoutResult {
+  const columns = Math.ceil(count / rows);
+
+  return {
+    columns,
+    rows,
+    ratio: '16:9',
+    cardWidth: (width - (columns - 1) * gap) / columns,
+    cardHeight: (height - (rows - 1) * gap) / rows,
+  };
+}
+
+/**
  * Finds the equal-card layout that gives each person the largest visible area, with no memory of
  * any previous layout -- this is the "absolute best fit for this exact size" answer, which is
  * also exactly what produces flicker if called on its own every resize tick (the best answer
@@ -144,6 +169,12 @@ export function calculateMeetingLayout(input: MeetingLayoutInput): MeetingLayout
     // from ever asking for more rows than a single page is supposed to hold.
     return calculateForcedColumnLayout(
       Math.min(count, MOBILE_GALLERY_TILES_PER_PAGE), input.forceColumns, width, height, gap,
+    );
+  }
+
+  if (input.forceRows) {
+    return calculateForcedRowLayout(
+      Math.min(count, MOBILE_GALLERY_TILES_PER_PAGE), input.forceRows, width, height, gap,
     );
   }
 
@@ -203,12 +234,12 @@ export function chooseStableLayout(
   const height = Math.max(1, input.height);
   const best = calculateMeetingLayout(input);
 
-  // A forced column count is a hard constraint, not an aesthetic preference -- there is only one
-  // valid structure to choose (the hysteresis below exists to resist switching BETWEEN candidate
-  // structures when neither is clearly better, which doesn't apply here). Returning it directly
-  // also makes an orientation change or a mobile breakpoint crossing recalculate immediately
-  // instead of being held back by the area-improvement threshold.
-  if (input.forceColumns) return best;
+  // A forced column (or row) count is a hard constraint, not an aesthetic preference -- there is
+  // only one valid structure to choose (the hysteresis below exists to resist switching BETWEEN
+  // candidate structures when neither is clearly better, which doesn't apply here). Returning it
+  // directly also makes an orientation change or a mobile breakpoint crossing recalculate
+  // immediately instead of being held back by the area-improvement threshold.
+  if (input.forceColumns || input.forceRows) return best;
 
   if (!current) return best;
 
