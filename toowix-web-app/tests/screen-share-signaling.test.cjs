@@ -37,5 +37,6 @@ test('receiver uses live Jitsi desktop tracks immediately and protects a newer s
   assert.match(source, /signal\.status === 'stopped'/);
   assert.match(source, /remoteDesktopTracksRef\.current\[participantId\] = track/);
   assert.match(source, /if \(remoteDesktopTrackSessionsRef\.current\[participantId\] === signal\.sessionId\)/);
+  assert.match(source, /remoteDesktopTrackSessionsRef\.current\[participantId\] = signal\.sessionId/);
   assert.match(source, /clearRemoteDesktop\(participantId, signal\.sessionId\)/);
 });

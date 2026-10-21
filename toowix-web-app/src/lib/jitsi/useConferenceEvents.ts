@@ -474,7 +474,17 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
         }
       } else {
         if (import.meta.env.DEV) console.debug('[screen-share] receiver START', { participantId, sessionId: signal.sessionId });
-        promotePendingDesktop(participantId, signal);
+        // TRACK_ADDED may already have rendered this live share before its presence packet
+        // arrived.  Associate it now so the matching STOP packet can clear the stage promptly.
+        // Without this, the direct-track repeat-share fix left the session id undefined and a
+        // stopped share could remain as a frozen final frame until a participant reloaded.
+        const activeTrack = remoteDesktopTracksRef.current[participantId];
+        if (activeTrack && !activeTrack.isMuted() && isDesktopTrackUsable(activeTrack)) {
+          remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
+          recomputeRemoteScreenShare();
+        } else {
+          promotePendingDesktop(participantId, signal);
+        }
       }
       return;
     }
