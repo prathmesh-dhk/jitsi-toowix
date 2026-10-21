@@ -477,7 +477,23 @@ export function useJitsiMeeting({
   const offerAnswerRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [ localVideoMuted, setLocalVideoMuted ] = useState(startWithVideoMuted);
   const [ hasVideoTrack, setHasVideoTrack ] = useState(false);
-  const [ localCameraStream, setLocalCameraStream ] = useState<MediaStream | null>(null);
+  const [ localCameraStream, setLocalCameraStreamRaw ] = useState<MediaStream | null>(null);
+  // TEMPORARY diagnostic (self-view black-flash investigation, Oct 2026 -- remove once the root
+  // cause is confirmed live). Every call site below sets a BRAND NEW MediaStream wrapper around
+  // the local camera track, which forces every mounted self-view/PiP <video> element to drop its
+  // current decoded frame and re-decode from scratch -- the known mechanism for a black flash.
+  // This single wrapper traces every single call site (via a short stack capture) without having
+  // to hand-tag each of the ~10 places that call it, so a live production test can show exactly
+  // which one actually fired at the moment a flash was observed. Logs only a timestamp and a
+  // short source location, never stream/track content.
+  const setLocalCameraStream = useCallback((stream: MediaStream | null) => {
+    // eslint-disable-next-line no-console
+    console.info('[Toowix self-view] setLocalCameraStream called', {
+      t: Date.now(), hasStream: Boolean(stream), streamId: stream?.id,
+      caller: new Error().stack?.split('\n')[2]?.trim(),
+    });
+    setLocalCameraStreamRaw(stream);
+  }, []);
   const [ localScreenStream, setLocalScreenStream ] = useState<MediaStream | null>(null);
   const [ isScreenSharing, setIsScreenSharing ] = useState(false);
   const [ remoteParticipants, setRemoteParticipants ] = useState<Record<string, IRemoteParticipant>>({});

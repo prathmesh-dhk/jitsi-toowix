@@ -3386,6 +3386,14 @@ export function MeetingRoomPage() {
   // ref callback below) attaches on every mount directly, and this effect re-attaches
   // whenever the stream itself changes while a node is already mounted.
   useEffect(() => {
+    // TEMPORARY diagnostic (self-view black-flash investigation, Oct 2026 -- remove once the
+    // root cause is confirmed live). Not gated behind a debug flag: production is exactly where
+    // this needs to be observed. Logs only timestamps/booleans/track ids, never stream content.
+    // eslint-disable-next-line no-console
+    console.info('[Toowix self-view] reattach effect ran', {
+      t: Date.now(), hasNode: Boolean(inCallVideoRef.current), inCallVideo, hasStream: Boolean(inCallStream),
+      streamId: inCallStream?.id, trackId: inCallStream?.getVideoTracks?.()[0]?.id,
+    });
     if (inCallVideoRef.current) {
       if (inCallVideo && inCallStream) {
         inCallVideoRef.current.srcObject = inCallStream;
@@ -3398,6 +3406,11 @@ export function MeetingRoomPage() {
   }, [hasJoined, inCallVideo, inCallStream, cameraPermissionError]);
 
   const setInCallVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    // TEMPORARY diagnostic -- see the matching comment in the effect above. A mount/unmount here
+    // while inCallStream/inCallVideo stayed the same is exactly the "shared ref across three
+    // layouts" remount risk documented above; this proves whether that's actually happening.
+    // eslint-disable-next-line no-console
+    console.info('[Toowix self-view] setInCallVideoNode called', { t: Date.now(), node: node ? 'mount' : 'unmount' });
     inCallVideoRef.current = node;
     if (node && inCallVideo && inCallStream) {
       node.srcObject = inCallStream;

@@ -358,3 +358,4 @@ reports/benchmarks/
 # actual JVB/Jicofo/Prosody passwords. The .example template itself stays tracked.
 /staging/.env
 /staging/results/
+/Screen_Recording_2026-10-21_at_11.30.27_AM.mov
