@@ -275,7 +275,7 @@ async function createLocalTrackWithRetry(JitsiMeetJS: any, options: any, attempt
       await delay(thisBackoff);
     }
     try {
-      const [ track ] = await JitsiMeetJS.createLocalTracks(options);
+      const [track] = await JitsiMeetJS.createLocalTracks(options);
 
       if (deviceSwitchDiagnosticsEnabled) {
         console.info('[Toowix device-switch] getUserMedia acquired', {
@@ -336,10 +336,10 @@ async function resolveExplicitDeviceId(kind: 'audioinput' | 'videoinput', prefer
 // Audio and video are acquired/adopted INDEPENDENTLY of each other and never throw into one
 // another's path -- a camera failure must never prevent an audio-only join, and vice versa.
 async function acquireLocalTracks(
-    JitsiMeetJS: any,
-    existingStream: MediaStream | null | undefined,
-    audioDeviceId: string | undefined,
-    videoDeviceId: string | undefined
+  JitsiMeetJS: any,
+  existingStream: MediaStream | null | undefined,
+  audioDeviceId: string | undefined,
+  videoDeviceId: string | undefined
 ): Promise<ILocalTrackAcquisitionResult> {
   const liveAudio = existingStream?.getAudioTracks().find(t => t.readyState === 'live') || null;
   const liveVideo = existingStream?.getVideoTracks().find(t => t.readyState === 'live') || null;
@@ -354,8 +354,8 @@ async function acquireLocalTracks(
 
   if (liveAudio) {
     try {
-      const [ adopted ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
-        { stream: new MediaStream([ liveAudio ]), mediaType: 'audio' }
+      const [adopted] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+        { stream: new MediaStream([liveAudio]), mediaType: 'audio' }
       ]);
 
       result.audioTrack = adopted ?? null;
@@ -380,8 +380,8 @@ async function acquireLocalTracks(
       // library always has a valid ideal height/width to fall back to, and it also means the
       // library's own internal resolution bookkeeping reflects the real portrait/landscape
       // preference instead of whatever the live (possibly not-yet-settled) track dimensions are.
-      const [ adopted ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
-        { stream: new MediaStream([ liveVideo ]), mediaType: 'video', videoType: 'camera', constraints: getPreferredCameraCaptureConstraints() }
+      const [adopted] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+        { stream: new MediaStream([liveVideo]), mediaType: 'video', videoType: 'camera', constraints: getPreferredCameraCaptureConstraints() }
       ]);
 
       result.videoTrack = adopted ?? null;
@@ -397,7 +397,7 @@ async function acquireLocalTracks(
       const explicitAudioId = await resolveExplicitDeviceId('audioinput', audioDeviceId);
 
       result.audioTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
-        devices: [ 'audio' ],
+        devices: ['audio'],
         micDeviceId: explicitAudioId
       });
     } catch (err) {
@@ -410,7 +410,7 @@ async function acquireLocalTracks(
       const explicitVideoId = await resolveExplicitDeviceId('videoinput', videoDeviceId);
 
       result.videoTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
-        devices: [ 'video' ],
+        devices: ['video'],
         cameraDeviceId: explicitVideoId,
         constraints: { video: inCallVideoConstraints() }
       });
@@ -453,11 +453,11 @@ export function useJitsiMeeting({
   onForceMuted,
   existingStream
 }: IUseJitsiMeetingOptions) {
-  const [ connected, setConnected ] = useState(false);
-  const [ joined, setJoined ] = useState(false);
-  const [ error, setError ] = useState<string | null>(null);
-  const [ cameraError, setCameraError ] = useState<string | null>(null);
-  const [ localAudioMuted, setLocalAudioMuted ] = useState(startWithAudioMuted);
+  const [connected, setConnected] = useState(false);
+  const [joined, setJoined] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [localAudioMuted, setLocalAudioMuted] = useState(startWithAudioMuted);
   // Confirmed via direct Jicofo/JVB log inspection: neither room.removeTrack() nor
   // room.replaceTrack(track, null) actually notifies the server once the browser's native
   // "Stop sharing" bar has already ended the underlying track -- the bridge keeps believing the
@@ -465,7 +465,7 @@ export function useJitsiMeeting({
   // main connect effect (keyed on it below) to fully leave and rejoin the conference, which DOES
   // reliably give the server an accurate, current source list (verified: every fresh
   // session-initiate in the JVB logs correctly reflects only the joining client's real tracks).
-  const [ reconnectEpoch, setReconnectEpoch ] = useState(0);
+  const [reconnectEpoch, setReconnectEpoch] = useState(0);
   // Debounced so a quick re-share right after stopping isn't torn down by a reconnect meant for
   // the PREVIOUS stop -- cleared whenever a new share starts, scheduled fresh on every stop.
   const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -475,9 +475,9 @@ export function useJitsiMeeting({
   // an unstable browser or network from entering an endless leave/rejoin loop.
   const offerAnswerRecoveryRef = useRef({ windowStartedAt: 0, attempts: 0 });
   const offerAnswerRecoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [ localVideoMuted, setLocalVideoMuted ] = useState(startWithVideoMuted);
-  const [ hasVideoTrack, setHasVideoTrack ] = useState(false);
-  const [ localCameraStream, setLocalCameraStreamRaw ] = useState<MediaStream | null>(null);
+  const [localVideoMuted, setLocalVideoMuted] = useState(startWithVideoMuted);
+  const [hasVideoTrack, setHasVideoTrack] = useState(false);
+  const [localCameraStream, setLocalCameraStreamRaw] = useState<MediaStream | null>(null);
   // TEMPORARY diagnostic (self-view black-flash investigation, Oct 2026 -- remove once the root
   // cause is confirmed live). Every call site below sets a BRAND NEW MediaStream wrapper around
   // the local camera track, which forces every mounted self-view/PiP <video> element to drop its
@@ -494,24 +494,24 @@ export function useJitsiMeeting({
     });
     setLocalCameraStreamRaw(stream);
   }, []);
-  const [ localScreenStream, setLocalScreenStream ] = useState<MediaStream | null>(null);
-  const [ isScreenSharing, setIsScreenSharing ] = useState(false);
-  const [ remoteParticipants, setRemoteParticipants ] = useState<Record<string, IRemoteParticipant>>({});
-  const [ networkState, setNetworkState ] = useState<NetworkState>('GOOD');
-  const [ lowDataMode, setLowDataModeState ] = useState<LowDataMode>(readLowDataMode);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [remoteParticipants, setRemoteParticipants] = useState<Record<string, IRemoteParticipant>>({});
+  const [networkState, setNetworkState] = useState<NetworkState>('GOOD');
+  const [lowDataMode, setLowDataModeState] = useState<LowDataMode>(readLowDataMode);
   // This is sourced from the live conference role, rather than from the token that admitted
   // the user. It lets someone who is promoted during a meeting receive moderator controls
   // without having to leave and rejoin.
-  const [ isModerator, setIsModerator ] = useState(false);
-  const [ remoteScreenShare, setRemoteScreenShare ] = useState<{ stream: MediaStream; presenterName: string } | null>(null);
+  const [isModerator, setIsModerator] = useState(false);
+  const [remoteScreenShare, setRemoteScreenShare] = useState<{ stream: MediaStream; presenterName: string } | null>(null);
   // Every active remote screen share, newest first (last-in-first-out priority).
-  const [ remoteScreenShares, setRemoteScreenShares ] = useState<Array<{ id: string; stream: MediaStream; presenterName: string; startedAt: number }>>([]);
+  const [remoteScreenShares, setRemoteScreenShares] = useState<Array<{ id: string; stream: MediaStream; presenterName: string; startedAt: number }>>([]);
   const remoteDesktopStartedAtRef = useRef<Record<string, number>>({});
   // Native Jitsi/JVB-computed dominant speaker (real audio-level based detection, not a
   // client-side guess) -- 'local' when the local user is currently the loudest, a remote
   // participant id otherwise, or null before anyone has spoken. Drives speaker-view auto-follow.
-  const [ dominantSpeakerId, setDominantSpeakerId ] = useState<string | null>(null);
-  const [ localParticipantId, setLocalParticipantId ] = useState<string | null>(null);
+  const [dominantSpeakerId, setDominantSpeakerId] = useState<string | null>(null);
+  const [localParticipantId, setLocalParticipantId] = useState<string | null>(null);
   const localConferenceIdRef = useRef<string | null>(null);
   // Stable for this room in this browser tab, including a full page reload. It intentionally
   // differs in another tab/device, even for the same account, because those are real separate
@@ -523,20 +523,20 @@ export function useJitsiMeeting({
   // ever see. recordingSessionId is required by stopRecording(sessionID) -- calling stop
   // without it silently fails to send a clean stop signal to Jibri, which is what was producing
   // unplayable/corrupt recordings (Jibri needs a real stop to finalize the file).
-  const [ recording, setRecording ] = useState(false);
+  const [recording, setRecording] = useState(false);
   const recordingSessionIdRef = useRef<string | null>(null);
   // Shared-video (YouTube) state -- ported from jitsi-meet's react/features/shared-video
   // (SHARED_VIDEO XMPP command protocol, same command name/attribute shape, so this is wire
   // compatible with stock Jitsi). null when nobody is sharing. Mirrored into a ref because the
   // room-level command listener (registered once, at room setup) closes over stale state
   // otherwise -- same reasoning as the other refs in this hook.
-  const [ sharedVideo, setSharedVideo ] = useState<ISharedVideoState | null>(null);
+  const [sharedVideo, setSharedVideo] = useState<ISharedVideoState | null>(null);
   const sharedVideoRef = useRef<ISharedVideoState | null>(null);
   // Per-participant connection quality (resolution/framerate/bitrate/packet loss/quality %) --
   // 'local' key is our own stats. Backs the "Participants stats" panel.
-  const [ connectionStats, setConnectionStats ] = useState<Record<string, any>>({});
-  const [ isLocked, setIsLocked ] = useState(false);
-  const [ shareAudioActive, setShareAudioActive ] = useState(false);
+  const [connectionStats, setConnectionStats] = useState<Record<string, any>>({});
+  const [isLocked, setIsLocked] = useState(false);
+  const [shareAudioActive, setShareAudioActive] = useState(false);
   // JVB accepts one outbound audio source for a participant. Screen audio is therefore carried on
   // the existing microphone sender (via a setEffect()-based DesktopAudioMixEffect) instead of
   // being added as a second Jitsi audio track -- see that file's own comment for the confirmed
@@ -695,7 +695,7 @@ export function useJitsiMeeting({
   // doesn't inherit the previous instance's effect. Mute/unmute of the SAME track re-applies
   // automatically inside lib-jitsi-meet itself.
   const noiseSuppressionRef = useRef<{ effect: NoiseSuppressionEffect } | null>(null);
-  const [ noiseSuppressionEnabled, setNoiseSuppressionEnabled ] = useState(false);
+  const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(false);
 
   const applyNoiseSuppressionToTrack = useCallback(async (track: any) => {
     if (!noiseSuppressionRef.current || !track) {
@@ -895,7 +895,7 @@ export function useJitsiMeeting({
       }
     }
     await qualityChange;
-  }, [ applyMediaQualityPolicy ]);
+  }, [applyMediaQualityPolicy]);
 
   useNetworkQualityMonitor({
     joined, roomRef, applyMediaQualityPolicy, lowDataModeRef, networkMetricsRef, networkStateRef,
@@ -936,7 +936,7 @@ export function useJitsiMeeting({
     // re-insert a dead track here with nothing left to ever clear it -- a permanent frozen
     // frame on the viewer's side. Strip any already-ended entries before deciding what's active,
     // regardless of which event path let them in.
-    for (const [ participantId, track ] of Object.entries(remoteDesktopTracksRef.current)) {
+    for (const [participantId, track] of Object.entries(remoteDesktopTracksRef.current)) {
       if (!isDesktopTrackUsable(track)) {
         delete remoteDesktopTracksRef.current[participantId];
       }
@@ -954,7 +954,7 @@ export function useJitsiMeeting({
 
       return;
     }
-    for (const [ pid ] of entries) {
+    for (const [pid] of entries) {
       if (!remoteDesktopStartedAtRef.current[pid]) {
         remoteDesktopStartedAtRef.current[pid] = Date.now();
       }
@@ -965,7 +965,7 @@ export function useJitsiMeeting({
       }
     }
     const allShares = entries
-      .map(([ pid, t ]) => ({
+      .map(([pid, t]) => ({
         id: pid,
         stream: trackToStream(t),
         presenterName: remoteNamesRef.current[pid] || 'Participant',
@@ -979,7 +979,7 @@ export function useJitsiMeeting({
         ? prev
         : allShares
     ));
-    const [ id, track ] = allShares.length ? [ allShares[0].id, remoteDesktopTracksRef.current[allShares[0].id] ] : entries[entries.length - 1];
+    const [id, track] = allShares.length ? [allShares[0].id, remoteDesktopTracksRef.current[allShares[0].id]] : entries[entries.length - 1];
     const stream = trackToStream(track);
 
     setRemoteScreenShare(stream ? { stream, presenterName: remoteNamesRef.current[id] || 'Participant' } : null);
@@ -1121,7 +1121,7 @@ export function useJitsiMeeting({
         connection.connect();
 
         const { audioTrack, videoTrack, audioError, videoError } = await acquireLocalTracks(
-            JitsiMeetJS, existingStreamRef.current, audioDeviceId, videoDeviceId
+          JitsiMeetJS, existingStreamRef.current, audioDeviceId, videoDeviceId
         );
 
         if (isStale()) {
@@ -1235,7 +1235,7 @@ export function useJitsiMeeting({
           return false;
         };
 
-        ([ [ audioTrack, 'audio' ], [ videoTrack, 'video' ] ] as const).forEach(([ track, label ]) => {
+        ([[audioTrack, 'audio'], [videoTrack, 'video']] as const).forEach(([track, label]) => {
           if (!track) return;
           if (!tryAddTrack(track, label)) {
             const interval = setInterval(() => {
@@ -1365,7 +1365,7 @@ export function useJitsiMeeting({
       try { desktopAudioMix?.effect.stopEffect(); } catch { /* best-effort */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch ]);
+  }, [bindLocalAudioTrackState, enabled, jwt, roomName, jitsiDomain, reconnectEpoch]);
 
   // switchDevice is declared further below (after toggleAudio in source order) but toggleAudio
   // needs to call it for stale-mic recovery -- routed through a ref instead of a direct
@@ -1505,18 +1505,18 @@ export function useJitsiMeeting({
         void sender.setParameters(parameters).catch(() => undefined);
       });
     }
-  // Real reported bug: after a REMOTE participant stops screen sharing, the call looked "limited"
-  // and the shared content/camera could appear stuck. This effect is what tells the bridge how
-  // much video to send/receive (including the screenShareActive-driven height bump), but it only
-  // listed the LOCAL isScreenSharing flag in its deps -- screenShareActive itself also reads
-  // remote desktop tracks, so a remote-only share starting or stopping silently fell through
-  // without ever re-running this effect. The bridge then kept whatever receiver/sender constraint
-  // was set for the PREVIOUS screen-share state (e.g. still capped at the pre-share height, or
-  // still raised to the share height after the remote share already ended), which is what read as
-  // a stuck/limited connection until some unrelated re-render (network state change, participant
-  // count change) happened to also touch this effect. remoteScreenShares.length is real React
-  // state (unlike the remoteDesktopTracksRef map this reads), so it is a valid, reactive dep.
-  }, [ joined, lowDataMode, remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState ]);
+    // Real reported bug: after a REMOTE participant stops screen sharing, the call looked "limited"
+    // and the shared content/camera could appear stuck. This effect is what tells the bridge how
+    // much video to send/receive (including the screenShareActive-driven height bump), but it only
+    // listed the LOCAL isScreenSharing flag in its deps -- screenShareActive itself also reads
+    // remote desktop tracks, so a remote-only share starting or stopping silently fell through
+    // without ever re-running this effect. The bridge then kept whatever receiver/sender constraint
+    // was set for the PREVIOUS screen-share state (e.g. still capped at the pre-share height, or
+    // still raised to the share height after the remote share already ended), which is what read as
+    // a stuck/limited connection until some unrelated re-render (network state change, participant
+    // count change) happened to also touch this effect. remoteScreenShares.length is real React
+    // state (unlike the remoteDesktopTracksRef map this reads), so it is a valid, reactive dep.
+  }, [joined, lowDataMode, remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState]);
 
   // Backstop for the participant-card mic badge: normal mute/unmute changes arrive immediately
   // through TRACK_MUTE_CHANGED. This slower re-check only covers rare track-replacement or
@@ -1559,7 +1559,7 @@ export function useJitsiMeeting({
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [ joined ]);
+  }, [joined]);
 
   // Backstop for a remote screen share freezing on viewers: real reported bug -- clicking the
   // BROWSER'S OWN native "Stop sharing" bar (not the in-app button) stops the underlying native
@@ -1582,7 +1582,7 @@ export function useJitsiMeeting({
     }, 2000);
 
     return () => clearInterval(timer);
-  }, [ joined, recomputeRemoteScreenShare ]);
+  }, [joined, recomputeRemoteScreenShare]);
 
   const switchDeviceRef = useRef<typeof switchDevice | null>(null);
 
@@ -1692,7 +1692,7 @@ export function useJitsiMeeting({
         return;
       }
       const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
-        devices: [ 'video' ],
+        devices: ['video'],
         cameraDeviceId: deviceIdsRef.current.videoDeviceId || undefined,
         constraints: { video: inCallVideoConstraints() }
       });
@@ -1769,25 +1769,30 @@ export function useJitsiMeeting({
     });
     desktopStopCompletionRef.current = stopCompletion;
     try {
-      const room = roomRef.current;
-
-      // The browser toolbar has already ended the native capture by the time this
-      // handler runs.  Do not keep rendering its final frame while Jitsi performs
-      // the (potentially slow) removeTrack SDP negotiation below.  Clearing the
-      // local view and publishing the terminal presence state first makes a native
-      // toolbar stop behave exactly like an immediate in-app stop for both this
-      // participant and receivers.  The completion barrier remains active until
-      // removeTrack/dispose finish, so a rapid new share cannot race this cleanup.
-      const activeSignal = localScreenShareSignalRef.current;
-      if (activeSignal && activeSignal.status === 'active') {
-        publishScreenShareSignal({ ...activeSignal, version: ++localScreenShareVersionRef.current, status: 'stopped' });
-      }
+      // The browser toolbar has already ended the native capture by the time this handler runs
+      // (or this is an in-app Stop click, where it's about to). Do not keep rendering its final
+      // frame while Jitsi performs the (potentially slow) removeTrack SDP negotiation below --
+      // clear the local view and publish the terminal presence state FIRST, before any of the
+      // network-bound work, so a native toolbar stop behaves exactly like an immediate in-app
+      // stop for both this participant and receivers. The completion barrier (resolved in the
+      // finally block below) remains active the whole time, so a rapid new share cannot race
+      // this cleanup -- see toggleScreenShare's own await on desktopStopCompletionRef.
       if (localDesktopTrackRef.current === desktopTrack) {
         localDesktopTrackRef.current = null;
       }
       setIsScreenSharing(false);
       setLocalScreenStream(null);
-      void applyMediaQualityPolicy();
+
+      // Publish the terminal snapshot immediately so every receiver clears its screen-share tile,
+      // regardless of what status was last recorded locally -- a receiver still showing this
+      // share needs the stop announced either way.
+      const activeSignal = localScreenShareSignalRef.current;
+
+      publishScreenShareSignal({ ...activeSignal, sessionId: activeSignal?.sessionId || 'stopped', version: ++localScreenShareVersionRef.current, status: 'stopped' });
+
+      await stopDesktopShareAudio();
+
+      const room = roomRef.current;
 
       if (room) {
         try {
@@ -1799,11 +1804,10 @@ export function useJitsiMeeting({
         } catch (err) {
           // eslint-disable-next-line no-console
           console.error('[useJitsiMeeting] Failed to remove desktop track from the conference:', err);
-          setError('Could not stop screen sharing cleanly -- please try again.');
         }
       }
 
-      await stopDesktopShareAudio();
+      void applyMediaQualityPolicy();
 
       // Dispose only after the conference-level removal has been attempted (success or not --
       // the local capture is ending either way), never before, so a slow removeTrack can't race
@@ -1814,22 +1818,11 @@ export function useJitsiMeeting({
         // eslint-disable-next-line no-console
         console.error('[useJitsiMeeting] Failed to dispose desktop track:', err);
       }
-
-      // This used to force a full leave+rejoin ~1.5s after every stop, on the theory that
-      // removeTrack()/dispose() above weren't reliable enough at telling the server (and other
-      // participants) the share had ended, and a fresh join was the only sure way to clear a
-      // frozen last-frame on viewers. That reconnect is exactly what showed up as "I stop
-      // sharing and then get bounced out and back into the meeting." The actual freeze it was
-      // guarding against is now handled directly on the viewer's side instead (the dead-track
-      // purge in recomputeRemoteScreenShare, plus reacting to TRACK_REMOVED/TRACK_MUTE_CHANGED
-      // for the desktop track), so forcing every participant through a disruptive reconnect on
-      // every single stop is no longer worth the disruption. If a frozen remote tile after
-      // stopping a share turns up again, look there first before reintroducing a reconnect here.
     } finally {
       desktopStopInFlightRef.current = false;
       resolveStopCompletion();
     }
-  }, [ publishScreenShareSignal, stopDesktopShareAudio ]);
+  }, [publishScreenShareSignal, stopDesktopShareAudio]);
 
   const toggleScreenShare = useCallback(async () => {
     const JitsiMeetJS = window.JitsiMeetJS;
@@ -1912,9 +1905,9 @@ export function useJitsiMeeting({
       } catch {
         // Window/tab capture is still valid when a browser declines these optional limits.
       }
-      [ desktopTrack ] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
+      [desktopTrack] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
         {
-          stream: new MediaStream([ displayVideoTrack ]),
+          stream: new MediaStream([displayVideoTrack]),
           mediaType: 'video',
           videoType: 'desktop',
           constraints: {
@@ -1989,6 +1982,17 @@ export function useJitsiMeeting({
         });
       } catch { /* best-effort backstop; LOCAL_TRACK_STOPPED and the app's own button still cover the common paths */ }
 
+      // Direct listener on getDisplayMedia native video track as primary guarantee when clicking browser "Stop sharing"
+      try {
+        const displayVideoTrack = displayStream?.getVideoTracks()[0];
+        displayVideoTrack?.addEventListener?.('ended', () => {
+          if (import.meta.env.DEV) console.debug('[screen-share] displayVideoTrack ended detected');
+          if (localDesktopTrackRef.current === desktopTrack) {
+            void stopScreenShareInternal(desktopTrack);
+          }
+        });
+      } catch { /* best-effort */ }
+
       // Desktop is published as its own separate JVB source, alongside (never instead of) the
       // camera track -- this is how real Jitsi is designed to work (camera and desktop have
       // distinct videoTypes/source-names at the JVB level), and it's what makes the dedicated
@@ -2002,6 +2006,23 @@ export function useJitsiMeeting({
           nativeDesktopTrack.contentHint = 'detail';
         }
       } catch { /* hint is best-effort */ }
+
+      // Defensive cleanup: purge any stale desktop track that might linger in the room's local tracks
+      try {
+        const localTracks = room.getLocalTracks?.() || [];
+        for (const lt of localTracks) {
+          const vt = typeof lt.getVideoType === 'function' ? lt.getVideoType() : lt.videoType;
+          if (vt === 'desktop' && lt !== desktopTrack) {
+            try {
+              await runSerializedRoomOperation(() => room.removeTrack(lt));
+            } catch { /* best-effort remove */ }
+            try {
+              lt.dispose?.();
+            } catch { /* best-effort dispose */ }
+          }
+        }
+      } catch { /* best-effort stale track cleanup */ }
+
       await runSerializedRoomOperation(() => room.addTrack(desktopTrack));
       const displayAudioTrack = displayStream?.getAudioTracks()[0];
       if (displayAudioTrack) {
@@ -2098,7 +2119,7 @@ export function useJitsiMeeting({
     } finally {
       desktopStartInFlightRef.current = false;
     }
-  }, [ publishScreenShareSignal, stopDesktopShareAudio, stopScreenShareInternal ]);
+  }, [publishScreenShareSignal, stopDesktopShareAudio, stopScreenShareInternal]);
 
   // startRecording/stopRecording wrap the raw JitsiConference API correctly: stopRecording
   // REQUIRES the session id returned by startRecording (calling it with no id, as the previous
@@ -2131,7 +2152,7 @@ export function useJitsiMeeting({
   const switchDeviceInFlightRef = useRef<Record<string, boolean>>({});
 
   const switchDevice = useCallback(async (
-      kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string
+    kind: 'audioInput' | 'videoInput' | 'audioOutput', deviceId: string
   ): Promise<{ success: boolean; actualDeviceId?: string } | undefined> => {
     const JitsiMeetJS = window.JitsiMeetJS;
     const room = roomRef.current;
@@ -2173,7 +2194,7 @@ export function useJitsiMeeting({
 
     try {
       const newTrack = await createLocalTrackWithRetry(JitsiMeetJS, {
-        devices: [ isAudio ? 'audio' : 'video' ],
+        devices: [isAudio ? 'audio' : 'video'],
         micDeviceId: isAudio ? deviceId : undefined,
         cameraDeviceId: isAudio ? undefined : deviceId,
         constraints: isAudio ? undefined : { video: inCallVideoConstraints() }
@@ -2247,7 +2268,7 @@ export function useJitsiMeeting({
     } finally {
       switchDeviceInFlightRef.current[kind] = false;
     }
-  }, [ bindLocalAudioTrackState ]);
+  }, [bindLocalAudioTrackState]);
   switchDeviceRef.current = switchDevice;
 
   // Some browsers keep a conference connected after the operating system has ended the physical
@@ -2297,7 +2318,7 @@ export function useJitsiMeeting({
     const timer = window.setInterval(recoverEndedMicrophone, 5000);
 
     return () => window.clearInterval(timer);
-  }, [ joined, switchDevice ]);
+  }, [joined, switchDevice]);
 
   // Mobile browsers can silently take the microphone away when the tab is backgrounded --
   // switching apps, or another app briefly grabbing audio focus (a phone call, another app
@@ -2352,7 +2373,7 @@ export function useJitsiMeeting({
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('pageshow', onVisible);
     };
-  }, [ joined, switchDevice ]);
+  }, [joined, switchDevice]);
 
   // Real reported bug (iPhone 13, Chrome -- actually WebKit under the hood, like every iOS
   // browser): the camera came in landscape while held in portrait, and swapped to portrait once
@@ -2411,12 +2432,12 @@ export function useJitsiMeeting({
       window.removeEventListener('orientationchange', onOrientationChange);
       (screen as any)?.orientation?.removeEventListener?.('change', onOrientationChange);
     };
-  }, [ joined, switchDevice ]);
+  }, [joined, switchDevice]);
 
   // GO 3 give-up tier: shown when the performance governor turns the background effect off
   // because this device can't keep up on any available engine (see JitsiStreamBackgroundEffect's
   // onGiveUp). Same one-shot toast shape as timeLimitToast/participantToast above.
-  const [ backgroundGiveUpMessage, setBackgroundGiveUpMessage ] = useState<string | null>(null);
+  const [backgroundGiveUpMessage, setBackgroundGiveUpMessage] = useState<string | null>(null);
 
   // Restores the raw camera track and clears every effect-related ref -- exactly
   // setVirtualBackground's own `!config` removal path below, factored out so the give-up callback
@@ -2451,14 +2472,14 @@ export function useJitsiMeeting({
 
     setBackgroundGiveUpMessage(message);
     setTimeout(() => setBackgroundGiveUpMessage((current) => (current === message ? null : current)), 8000);
-  }, [ removeVirtualBackgroundEffect ]);
+  }, [removeVirtualBackgroundEffect]);
 
   // GO 3 hardening: visible-fallback-toast, so a fallback (a different/degraded engine than
   // requested, effect keeps running) is never silent -- previously only console.warn. Unlike
   // handleBackgroundGiveUp, this does NOT remove the effect; the background stays on, just on a
   // fallback engine. Same one-shot toast shape as the others; `reason` is logged (not shown
   // verbatim to the user -- it's an internal diagnostic string, e.g. a raw error message).
-  const [ backgroundFallbackMessage, setBackgroundFallbackMessage ] = useState<string | null>(null);
+  const [backgroundFallbackMessage, setBackgroundFallbackMessage] = useState<string | null>(null);
   const handleBackgroundFallback = useCallback((reason: string) => {
     // eslint-disable-next-line no-console
     console.warn('[VirtualBackground] fallback:', reason);
@@ -2561,7 +2582,7 @@ export function useJitsiMeeting({
     // step-up rate limit (same "previousTarget === null" bypass the periodic tick uses). Also
     // applies the matching sender ceiling immediately, for the same reason.
     const target = getTargetVideoHeight(
-        networkStateRef.current, callSizeHeightRef.current, networkMetricsRef.current.availableOutgoingBitrateKbps
+      networkStateRef.current, callSizeHeightRef.current, networkMetricsRef.current.availableOutgoingBitrateKbps
     );
 
     effectAppliedTargetRef.current = target;
@@ -2591,7 +2612,7 @@ export function useJitsiMeeting({
       setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };
-  }, [ handleBackgroundFallback, handleBackgroundGiveUp ]);
+  }, [handleBackgroundFallback, handleBackgroundGiveUp]);
 
   // Toggles mic noise suppression (RNNoise) on/off. Re-thrown to the caller on failure (e.g.
   // AudioWorklet unsupported) so the UI can show an error instead of silently doing nothing.
@@ -2743,7 +2764,7 @@ export function useJitsiMeeting({
 
       if (perParticipant) {
         constraints.constraints = Object.fromEntries(
-            Object.entries(perParticipant).map(([ id, h ]) => [ id, { maxHeight: h } ])
+          Object.entries(perParticipant).map(([id, h]) => [id, { maxHeight: h }])
         );
       }
       await room.setReceiverConstraints(constraints);
@@ -2819,7 +2840,7 @@ export function useJitsiMeeting({
       // user cancelled the picker, the source had no audio, or no mic is active to carry it --
       // no-op, matches screen share's own silent-cancel behavior.
     }
-  }, [ stopDesktopShareAudio ]);
+  }, [stopDesktopShareAudio]);
 
   // Pure, read-only: returns the deviceId MediaStreamTrack.getSettings() reports for the
   // CURRENTLY active local mic track, i.e. the real, in-use device -- not whatever the UI's

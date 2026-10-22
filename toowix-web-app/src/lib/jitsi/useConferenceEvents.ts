@@ -148,7 +148,7 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
   const clearRemoteDesktop = (participantId: string, sessionId?: string) => {
     // A late STOP for share #1 must never remove share #2.  Tracks are associated with the
     // authoritative property snapshot at the instant they are promoted to the visible map.
-    if (sessionId && remoteDesktopTrackSessionsRef.current[participantId] !== sessionId) {
+    if (sessionId && remoteDesktopTrackSessionsRef.current[participantId] && remoteDesktopTrackSessionsRef.current[participantId] !== sessionId) {
       return;
     }
     delete remoteDesktopTracksRef.current[participantId];
@@ -159,8 +159,19 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
   };
 
   const promotePendingDesktop = (participantId: string, signal: IScreenShareSignal) => {
-    const track = pendingRemoteDesktopTracksRef.current[participantId];
-    if (!track || track.isMuted() || !isDesktopTrackUsable(track)) return;
+    let track = pendingRemoteDesktopTracksRef.current[participantId];
+    if (!track || !isDesktopTrackUsable(track)) {
+      const participant = room.getParticipantById(participantId);
+      const tracks = participant?.getTracks?.() || [];
+      const usableTrack = tracks.find((t: any) => {
+        const vt = typeof t.getVideoType === 'function' ? t.getVideoType() : t.videoType;
+        return vt === 'desktop' && isDesktopTrackUsable(t);
+      });
+      if (usableTrack) {
+        track = usableTrack;
+      }
+    }
+    if (!track || !isDesktopTrackUsable(track)) return;
     remoteDesktopTracksRef.current[participantId] = track;
     remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
     delete pendingRemoteDesktopTracksRef.current[participantId];
@@ -248,8 +259,11 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
       // presentation -- Jitsi can deliver a track in a muted state before the first
       // real frame, and registering it here would present a black/frozen tile until
       // (if ever) it unmutes.
-      const signal = remoteScreenShareSignalsRef.current[participantId]
-        || parseScreenShareSignal(trackParticipant?.getProperty?.(SCREEN_SHARE_PROPERTY));
+      const propSignal = parseScreenShareSignal(trackParticipant?.getProperty?.(SCREEN_SHARE_PROPERTY));
+      const cachedSignal = remoteScreenShareSignalsRef.current[participantId];
+      const signal = (propSignal && (!cachedSignal || propSignal.version >= cachedSignal.version))
+        ? propSignal
+        : (cachedSignal || propSignal);
       if (signal) remoteScreenShareSignalsRef.current[participantId] = signal;
       // The Jitsi desktop track is the media authority.  Presence is only a lifecycle
       // backstop; it is delivered over a different path and can lag behind a second share
@@ -319,29 +333,24 @@ export function registerConferenceEventListeners(room: any, JitsiMeetJS: any, de
         }
       } else if (videoType === 'desktop') {
         // This is the real signal Jitsi uses to stop a screen share in many cases --
-        // muting the existing desktop track rather than immediately removing it. This
-        // listener used to ignore desktop entirely, which is why a stopped share left
-        // remoteDesktopTracksRef (and therefore the remote presentation view) pointing
-        // at a track that had stopped producing frames: the last frame froze on
-        // screen and never cleared.
-        if (track.isMuted() || !isDesktopTrackUsable(track)) {
+        // muting the existing desktop track rather than immediately removing it.
+        if (!isDesktopTrackUsable(track)) {
           if (remoteDesktopTracksRef.current[participantId] === track) {
             clearRemoteDesktop(participantId);
           } else if (pendingRemoteDesktopTracksRef.current[participantId] === track) {
             delete pendingRemoteDesktopTracksRef.current[participantId];
           }
         } else {
-          // An unmuted Jitsi desktop track is sufficient to render a presentation.  Do not
-          // wait for participant-property delivery here: that was the repeat-share race which
-          // left existing viewers blank until they rejoined the meeting.
-          remoteDesktopTracksRef.current[participantId] = track;
-          const signal = remoteScreenShareSignalsRef.current[participantId];
+          pendingRemoteDesktopTracksRef.current[participantId] = track;
+          const propSignal = parseScreenShareSignal(room.getParticipantById(participantId)?.getProperty?.(SCREEN_SHARE_PROPERTY));
+          const cachedSignal = remoteScreenShareSignalsRef.current[participantId];
+          const signal = (propSignal && (!cachedSignal || propSignal.version >= cachedSignal.version))
+            ? propSignal
+            : (cachedSignal || propSignal);
+
           if (signal?.status === 'active') {
-            remoteDesktopTrackSessionsRef.current[participantId] = signal.sessionId;
-          } else {
-            delete remoteDesktopTrackSessionsRef.current[participantId];
+            promotePendingDesktop(participantId, signal);
           }
-          delete pendingRemoteDesktopTracksRef.current[participantId];
         }
         recomputeRemoteScreenShare();
       } else {
