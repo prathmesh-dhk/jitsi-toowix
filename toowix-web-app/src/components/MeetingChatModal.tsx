@@ -25,6 +25,46 @@ interface IChatMessage {
 const initialsOf = (name: string) =>
   name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() || '').join('') || '?';
 
+// Same http(s) link detection as the live in-meeting chat (ChatPanel.tsx) -- trims trailing
+// sentence punctuation so it doesn't get swallowed into the link.
+const URL_PATTERN = /https?:\/\/[^\s<>"']+/g;
+const TRAILING_PUNCTUATION_PATTERN = /[.,!?)\]>'"]+$/;
+
+function linkifyText(text: string): Array<string | React.JSX.Element> {
+  const matches = text.match(URL_PATTERN);
+
+  if (!matches) return [text];
+
+  const parts: Array<string | React.JSX.Element> = [];
+  let lastIndex = 0;
+  let key = 0;
+
+  for (const rawMatch of matches) {
+    const matchIndex = text.indexOf(rawMatch, lastIndex);
+    const trailingPunctuation = rawMatch.match(TRAILING_PUNCTUATION_PATTERN)?.[0] || '';
+    const url = trailingPunctuation ? rawMatch.slice(0, -trailingPunctuation.length) : rawMatch;
+
+    if (!url) continue;
+    if (matchIndex > lastIndex) parts.push(text.slice(lastIndex, matchIndex));
+    parts.push(
+      <a
+        key={`link-${key++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: '#4F46E5', textDecoration: 'underline', wordBreak: 'break-all' }}
+      >
+        {url}
+      </a>
+    );
+    lastIndex = matchIndex + url.length;
+    if (trailingPunctuation) parts.push(trailingPunctuation);
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+
+  return parts;
+}
+
 export function MeetingChatModal({ isOpen, onClose, meeting, messages, loading, error }: IMeetingChatModalProps) {
   const [search, setSearch] = useState('');
   const [copied, setCopied] = useState(false);
@@ -340,7 +380,7 @@ export function MeetingChatModal({ isOpen, onClose, meeting, messages, loading, 
                         wordBreak: 'break-word',
                       }}
                     >
-                      {msg.text}
+                      {linkifyText(msg.text)}
                     </div>
                   )}
                 </div>

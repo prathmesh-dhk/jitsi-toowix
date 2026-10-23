@@ -34,6 +34,51 @@ export interface IChatMessage {
   edited?: boolean;
 }
 
+// Matches an http(s) URL inside a larger chat message so it can be rendered as a clickable link
+// instead of plain text. Stops at whitespace/quotes/angle-brackets and trims a handful of trailing
+// punctuation marks (.,!?)]>'" that are almost always sentence punctuation, not part of the URL
+// itself (e.g. "check this out: https://example.com." should not swallow the period into the link).
+const URL_PATTERN = /https?:\/\/[^\s<>"']+/g;
+const TRAILING_PUNCTUATION_PATTERN = /[.,!?)\]>'"]+$/;
+
+// Splits message text into plain strings and clickable <a> elements for every http(s) URL found.
+// Returns the original string unchanged (as a single-item array) when there is nothing to link.
+function linkifyText(text: string): Array<string | JSX.Element> {
+  const matches = text.match(URL_PATTERN);
+
+  if (!matches) return [text];
+
+  const parts: Array<string | JSX.Element> = [];
+  let lastIndex = 0;
+  let key = 0;
+
+  for (const rawMatch of matches) {
+    const matchIndex = text.indexOf(rawMatch, lastIndex);
+    const trailingPunctuation = rawMatch.match(TRAILING_PUNCTUATION_PATTERN)?.[0] || '';
+    const url = trailingPunctuation ? rawMatch.slice(0, -trailingPunctuation.length) : rawMatch;
+
+    if (!url) continue;
+    if (matchIndex > lastIndex) parts.push(text.slice(lastIndex, matchIndex));
+    parts.push(
+      <a
+        key={`link-${key++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: '#8AB4F8', textDecoration: 'underline', wordBreak: 'break-all' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {url}
+      </a>
+    );
+    lastIndex = matchIndex + url.length;
+    if (trailingPunctuation) parts.push(trailingPunctuation);
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+
+  return parts;
+}
+
 // Formats a byte count as a short human-readable size (e.g. "482 KB", "2.3 MB"), same convention
 // as the backend's own 5MB limit, for the download card's second line.
 function formatFileSize(bytes: number): string {
@@ -507,7 +552,7 @@ export function ChatPanel({
                     onTouchMove={cancelLongPress}
                     style={{ width: '100%', fontSize: '13px', color: '#FFFFFF', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'pre-wrap', textAlign: 'left', cursor: 'context-menu', userSelect: 'text' }}
                   >
-                    {msg.text}
+                    {linkifyText(msg.text)}
                   </div>
                 )
               )}
