@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { verifyIdentityToken, verifyFirebaseToken, AuthenticatedRequest } from '../middleware/auth';
-import { requireToowixAuth } from '../middleware/requireToowixAuth';
 import { authRateLimiter } from '../middleware/rateLimit';
 import {
   signupHandler,
@@ -8,7 +7,6 @@ import {
   loginGateHandler,
   forgotPasswordHandler,
   sendVerificationEmailHandler,
-  keycloakSessionHandler,
 } from '../auth/account/account.controller';
 
 const router = Router();
@@ -28,11 +26,6 @@ router.post('/send-verification-email', verifyIdentityToken, sendVerificationEma
 
 // Tue-BE-2: Login Gate
 router.post('/login-gate', authRateLimiter, verifyIdentityToken, loginGateHandler);
-
-// Keycloak-authenticated counterpart to /login-gate -- local/dev-only prototype, see
-// KEYCLOAK_INTEGRATION.md. requireToowixAuth verifies the Keycloak access token itself
-// (signature/issuer/audience/expiry) before keycloakSessionHandler ever runs.
-router.post('/keycloak-session', authRateLimiter, requireToowixAuth, keycloakSessionHandler);
 
 // Tue-BE-3: Forgot Password (public)
 router.post('/forgot-password', authRateLimiter, forgotPasswordHandler);

@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { optionalAccount, verifyFirebaseToken } from '../middleware/auth';
-import { requireMeetEntitlementForAccount } from '../middleware/requireMeetEntitlementForAccount';
 import { meetingAccessRateLimiter } from '../middleware/rateLimit';
 import {
   createMeetingHandler,
@@ -97,12 +96,7 @@ router.post('/:id/conversation/leave', verifyFirebaseToken, leaveConversationHan
 
 router.get('/', verifyFirebaseToken, listMeetingsHandler);
 router.get('/:id', verifyFirebaseToken, getMeetingHandler);
-// Meeting creation is the one clearly-identified "uses Meet capacity" action -- the central
-// Tenant Admin check applies here. It is a no-op for Firebase-only (non-Keycloak-linked)
-// accounts; see requireMeetEntitlementForAccount.ts. Other meeting-management actions below
-// (update/cancel/delete/invite) are intentionally left unchanged -- see Task 4 final report for
-// why extending central enforcement to them is an open policy question, not decided here.
-router.post('/', verifyFirebaseToken, requireMeetEntitlementForAccount, createMeetingHandler);
+router.post('/', verifyFirebaseToken, createMeetingHandler);
 router.patch('/:id', verifyFirebaseToken, updateMeetingHandler);
 router.post('/:id/cancel', verifyFirebaseToken, cancelMeetingHandler);
 router.delete('/:id', verifyFirebaseToken, deleteMeetingHandler);
