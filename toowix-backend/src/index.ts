@@ -95,15 +95,28 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/uploads/avatars', express.static(getAvatarUploadRoot(), {
   setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
 }));
-app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot()));
-app.use('/api/uploads/chat-audios', express.static(getChatAudioUploadRoot()));
+// Same cross-origin issue as avatars above (and the same fix) -- chat images/voice notes/files
+// are rendered inline in the meeting frontend exactly like avatars are, and were missed when that
+// fix was first made: CONFIRMED BUG, reported as a chat image uploading successfully (server logs
+// showed a clean 200 with the correct byte count) but never rendering -- the browser blocked the
+// already-fetched response with ERR_BLOCKED_BY_RESPONSE.NotSameOrigin because Helmet's default
+// Cross-Origin-Resource-Policy: same-origin applied to these routes too.
+app.use('/api/uploads/chat-images', express.static(getChatImageUploadRoot(), {
+  setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+}));
+app.use('/api/uploads/chat-audios', express.static(getChatAudioUploadRoot(), {
+  setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+}));
 // Content-Disposition: attachment makes the browser download these rather than try to render
 // them inline (a PDF or image would otherwise just open in a new tab) -- reliable regardless of
 // whether the frontend's own <a download> attribute is honored for a cross-origin URL. The
 // filename itself already comes from the URL path (chatFileStorage.ts stores each upload under
 // its own real original filename), so this only needs to flip the disposition, not restate it.
 app.use('/api/uploads/chat-files', express.static(getChatFileUploadRoot(), {
-  setHeaders: (res) => res.setHeader('Content-Disposition', 'attachment'),
+  setHeaders: (res) => {
+    res.setHeader('Content-Disposition', 'attachment');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  },
 }));
 
 // API Root Placeholder
