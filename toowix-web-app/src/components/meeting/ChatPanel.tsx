@@ -144,6 +144,9 @@ export function ChatPanel({
   // time, positioned at the pointer. null means closed.
   const [contextMenu, setContextMenu] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
+  // Click-to-enlarge image preview, same lightbox pattern as ConversationsPanel.tsx's dashboard
+  // chat -- opens the image bigger in an in-app overlay instead of a new browser tab.
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -438,19 +441,19 @@ export function ChatPanel({
             >
               {msg.imageUrl && (
                 <div style={{ position: 'relative', display: 'inline-block' }}>
-                  <a href={msg.uploading ? undefined : resolveChatImageUrl(msg.imageUrl)} target="_blank" rel="noreferrer">
-                    <img
-                      src={resolveChatImageUrl(msg.imageUrl)}
-                      alt="Shared attachment"
-                      style={{
-                        maxWidth: '220px',
-                        maxHeight: '220px',
-                        borderRadius: '8px',
-                        display: 'block',
-                        opacity: msg.uploading ? 0.65 : 1,
-                      }}
-                    />
-                  </a>
+                  <img
+                    src={resolveChatImageUrl(msg.imageUrl)}
+                    alt="Shared attachment"
+                    onClick={() => { if (!msg.uploading) setLightboxImage(resolveChatImageUrl(msg.imageUrl!)); }}
+                    style={{
+                      maxWidth: '220px',
+                      maxHeight: '220px',
+                      borderRadius: '8px',
+                      display: 'block',
+                      opacity: msg.uploading ? 0.65 : 1,
+                      cursor: msg.uploading ? 'default' : 'pointer',
+                    }}
+                  />
                   {msg.uploading && (
                     <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
                       Sending...
@@ -754,6 +757,33 @@ export function ChatPanel({
           }}
         >
           Copied to clipboard
+        </div>
+      )}
+      {lightboxImage && (
+        <div className="tm-image-lightbox-overlay" onClick={() => setLightboxImage(null)}>
+          <button
+            type="button"
+            className="tm-image-lightbox-close"
+            onClick={() => setLightboxImage(null)}
+            title="Close"
+          >
+            <X size={20} />
+          </button>
+          <a
+            href={lightboxImage}
+            download
+            className="tm-image-lightbox-download"
+            title="Download image"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Download size={18} />
+          </a>
+          <img
+            src={lightboxImage}
+            alt="Attachment"
+            className="tm-image-lightbox-img"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
     </div>

@@ -241,6 +241,21 @@ export function getCameraCaptureIdeal(): { frameRate: number; height: number; wi
 // "try hard to satisfy this, but never fail the whole request over it" -- the UA attempts it and
 // silently skips it if it can't be satisfied, instead of throwing OverconstrainedError the way a
 // bare non-ideal aspectRatio would for a camera that genuinely cannot do the requested shape.
+// Real reported bug: on some phones (device-dependent, not a specific brand), letting the browser
+// pick "the default" camera with no facingMode hint at all could resolve to the BACK camera
+// instead of the front one -- exactly the same class of "ask for something explicit instead of
+// trusting the browser's own default resolution" issue already fixed elsewhere for device IDs
+// (see useJitsiMeeting.ts's resolveExplicitDeviceId). `ideal` (not `exact`) so this never throws
+// OverconstrainedError on a camera that can't report a facingMode at all (most external/USB
+// webcams) -- it's a hint the UA tries to honor, not a hard requirement. Only applied for phone/
+// tablet, where "front vs back" is a real, meaningful distinction; a desktop webcam has no such
+// concept and this constraint is simply a harmless no-op there.
+function preferredFacingModeConstraint(): Pick<MediaTrackConstraints, 'facingMode'> {
+  const category = getCameraDeviceCategory();
+
+  return category === 'phone' || category === 'tablet' ? { facingMode: { ideal: 'user' } } : {};
+}
+
 export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
   const ideal = getCameraCaptureIdeal();
   const aspectRatio = getCameraCaptureOrientationPreference() === 'portrait' ? 9 / 16 : 16 / 9;
@@ -251,6 +266,7 @@ export function getPreferredCameraCaptureConstraints(): MediaTrackConstraints {
     frameRate: { ideal: ideal.frameRate },
     aspectRatio: { ideal: aspectRatio },
     advanced: [ { aspectRatio } ],
+    ...preferredFacingModeConstraint(),
   };
 }
 
@@ -264,6 +280,7 @@ export function getFallbackCameraCaptureConstraints(): MediaTrackConstraints {
   return {
     width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 },
     aspectRatio: { ideal: aspectRatio }, advanced: [ { aspectRatio } ],
+    ...preferredFacingModeConstraint(),
   };
 }
 

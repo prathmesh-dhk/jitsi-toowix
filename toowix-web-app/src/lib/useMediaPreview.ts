@@ -2,26 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getFallbackCameraCaptureConstraints, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
-// CONFIRMED BUG, same class already diagnosed and fixed for the camera in useJitsiMeeting.ts's
-// own resolveExplicitDeviceId (see its comment: "Requesting getUserMedia with no deviceId at all
-// ... is what left the camera black on first join"): that fix only covers the FALLBACK path used
-// when there is no prejoin preview stream to adopt. This lobby preview -- the PRIMARY path used on
-// every normal join, since its exact live track is what the conference then adopts (see this
-// file's own ownership-transfer comments below) -- never got the matching fix. With no stored
-// device preference yet (a genuinely first-ever join on this browser/profile), audioId is '' and
-// the mic request below fell through to a bare `getUserMedia({audio:true})`: the browser's own
-// "pick a default input" resolution, which the camera bug already proved can silently resolve to
-// a track that technically exists but is wrong/dead, while asking for a SPECIFIC resolved deviceId
-// -- exactly what a manual reselect from the device menu does -- works reliably. Resolving one
-// explicitly up front, the same way the camera fallback does, gives a first-ever join the same
-// treatment a manual reselect already gets.
-async function resolveExplicitAudioDeviceId(preferredId: string): Promise<string | undefined> {
+// CONFIRMED BUG, same class already diagnosed and fixed for the camera FALLBACK path in
+// useJitsiMeeting.ts's own resolveExplicitDeviceId (see its comment: "Requesting getUserMedia
+// with no deviceId at all ... is what left the camera black on first join"): that fix only
+// covered the path used when there is no prejoin preview stream to adopt. This lobby preview --
+// the PRIMARY path used on every normal join, since its exact live track is what the conference
+// then adopts (see this file's own ownership-transfer comments below) -- never got the matching
+// fix, for EITHER mic or camera. With no stored device preference yet (a genuinely first-ever
+// join on this browser/profile, or one where the device list has changed since the last join),
+// audioId/videoId is '' and the request below fell through to a bare `getUserMedia({audio:true})`
+// / `{video:true}`: the browser's own "pick a default input" resolution, which the camera bug
+// already proved can silently resolve to a track that technically exists but is wrong/dead,
+// while asking for a SPECIFIC resolved deviceId -- exactly what a manual reselect from the
+// device menu does -- works reliably. Resolving one explicitly up front, for BOTH kinds, gives a
+// first-ever join the same treatment a manual reselect already gets.
+async function resolveExplicitPreviewDeviceId(kind: 'audioinput' | 'videoinput', preferredId: string): Promise<string | undefined> {
   if (preferredId) {
     return preferredId;
   }
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const match = devices.find((d) => d.kind === 'audioinput' && d.deviceId);
+    const match = devices.find((d) => d.kind === kind && d.deviceId);
 
     return match?.deviceId || undefined;
   } catch {
@@ -150,7 +151,7 @@ export function useMediaPreview(
     const startAudio = async () => {
       try {
         let media: MediaStream;
-        const explicitAudioId = await resolveExplicitAudioDeviceId(audioId);
+        const explicitAudioId = await resolveExplicitPreviewDeviceId('audioinput', audioId);
         const constraints: MediaTrackConstraints = explicitAudioId
           ? { deviceId: { ideal: explicitAudioId } }
           : {};
@@ -277,8 +278,11 @@ export function useMediaPreview(
     const startVideo = async () => {
       try {
         let media: MediaStream;
-        const constraints: MediaTrackConstraints = videoId
-          ? { deviceId: { ideal: videoId } }
+        const explicitVideoId = await resolveExplicitPreviewDeviceId('videoinput', videoId);
+
+        if (!active) return;
+        const constraints: MediaTrackConstraints = explicitVideoId
+          ? { deviceId: { ideal: explicitVideoId } }
           : {};
 
         // Highest quality first, then progressively safer requests. A camera or driver that

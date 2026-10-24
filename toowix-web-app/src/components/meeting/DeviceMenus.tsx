@@ -79,7 +79,15 @@ export function MicDeviceButton({
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
             Microphone
           </div>
-          {audioDevices.filter((d) => d.kind === 'audioinput').map((d) => (
+          {/* Real reported bug: navigator.mediaDevices.enumerateDevices() does not guarantee a
+              stable order across calls -- the currently-selected mic's row could land in a
+              different spot in the list every time this menu was reopened, reading as the menu
+              itself "changing". Pin the active device to a fixed position (always first, right
+              below the header) so the list itself stays put; everything else keeps its natural
+              enumeration order below it. */}
+          {audioDevices.filter((d) => d.kind === 'audioinput')
+            .sort((a, b) => (a.deviceId === audioId ? -1 : b.deviceId === audioId ? 1 : 0))
+            .map((d) => (
             <button
               key={d.deviceId}
               onClick={() => onSelectAudioDevice(d.deviceId)}
@@ -198,7 +206,11 @@ export function CameraDeviceButton({
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
             Camera
           </div>
-          {videoDevices.filter((d) => d.kind === 'videoinput').map((d) => (
+          {/* Same fix as the microphone menu above -- pin the active camera to a fixed position
+              (always first) so the list doesn't reshuffle every time this menu reopens. */}
+          {videoDevices.filter((d) => d.kind === 'videoinput')
+            .sort((a, b) => (a.deviceId === videoId ? -1 : b.deviceId === videoId ? 1 : 0))
+            .map((d) => (
             <button
               key={d.deviceId}
               onClick={() => onSelectVideoDevice(d.deviceId)}
