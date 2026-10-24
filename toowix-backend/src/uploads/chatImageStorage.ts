@@ -8,9 +8,26 @@ import crypto from 'crypto';
 // Meeting document.
 const UPLOAD_ROOT = process.env.CHAT_IMAGE_UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'chat-images');
 
-const DATA_URI_PATTERN = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=]+)$/;
+// CONFIRMED BUG: this used to hard-reject any image MIME subtype outside png/jpeg/webp/gif
+// (reported as "an image which is not coming" -- e.g. bmp, svg, avif, ico, or a phone's heic
+// export would all silently fail to upload with "Unsupported image format"). Accept any
+// data:image/<subtype> the browser reports instead of a hardcoded allow-list.
+const DATA_URI_PATTERN = /^data:image\/([a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/;
 
-const EXT_BY_MIME: Record<string, string> = { png: 'png', jpg: 'jpg', jpeg: 'jpg', webp: 'webp', gif: 'gif' };
+// Keeps the stored file's extension (and therefore the Content-Type express.static infers when
+// serving it back from /api/uploads/chat-images) matched to what was actually uploaded, instead
+// of silently mislabeling an unrecognized subtype as .jpg -- which would serve real BMP/SVG/etc.
+// bytes under an image/jpeg Content-Type and fail to render in the receiver's browser.
+function extensionForImageMimeSubtype(subtype: string): string {
+  const normalized = subtype.toLowerCase();
+
+  if (normalized === 'jpeg') return 'jpg';
+  if (normalized === 'svg+xml') return 'svg';
+
+  const safe = normalized.replace(/[^a-z0-9]/g, '');
+
+  return safe || 'img';
+}
 
 const MAX_CHAT_IMAGE_BYTES = 3 * 1024 * 1024;
 
@@ -27,11 +44,11 @@ export async function persistChatImage(
   const match = DATA_URI_PATTERN.exec(dataUri || '');
 
   if (!match) {
-    throw new Error('Unsupported image format -- please use JPG, PNG, GIF, or WEBP.');
+    throw new Error('Unsupported image format.');
   }
 
   const [ , mime, base64Data ] = match;
-  const ext = EXT_BY_MIME[mime.toLowerCase()] || 'jpg';
+  const ext = extensionForImageMimeSubtype(mime);
   const buffer = Buffer.from(base64Data, 'base64');
 
   if (buffer.length > MAX_CHAT_IMAGE_BYTES) {

@@ -9,6 +9,16 @@
 import { ChevronUp, MicOff, Video, VideoOff } from 'lucide-react';
 import { MicLevelIcon } from '../MicLevelIcon';
 
+// Windows commonly reports the SAME physical device three times under different labels --
+// "Microphone (X)", "Default - Microphone (X)", "Communications - Microphone (X)" -- and
+// enumerateDevices() does not guarantee which one comes first, so the "Default" row could land
+// anywhere in the list and visibly jump around every time the menu reopened. Pin it to a fixed
+// LAST position instead (not first -- "Communications" and the real-model-name row are the ones
+// someone actually wants to pick between; "Default" is a fallback entry, not a destination).
+function isDefaultDeviceLabel(label: string): boolean {
+  return /^default\b/i.test(label);
+}
+
 export interface IMicDeviceButtonProps {
   inCallMuted: boolean | null;
   onToggleMic: () => void;
@@ -79,14 +89,10 @@ export function MicDeviceButton({
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
             Microphone
           </div>
-          {/* Real reported bug: navigator.mediaDevices.enumerateDevices() does not guarantee a
-              stable order across calls -- the currently-selected mic's row could land in a
-              different spot in the list every time this menu was reopened, reading as the menu
-              itself "changing". Pin the active device to a fixed position (always first, right
-              below the header) so the list itself stays put; everything else keeps its natural
-              enumeration order below it. */}
+          {/* isDefaultDeviceLabel's own comment above has the full story -- the "Default" row
+              is pinned to a fixed LAST position so it stops jumping around the list. */}
           {audioDevices.filter((d) => d.kind === 'audioinput')
-            .sort((a, b) => (a.deviceId === audioId ? -1 : b.deviceId === audioId ? 1 : 0))
+            .sort((a, b) => Number(isDefaultDeviceLabel(a.label)) - Number(isDefaultDeviceLabel(b.label)))
             .map((d) => (
             <button
               key={d.deviceId}
@@ -206,10 +212,10 @@ export function CameraDeviceButton({
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#9AA0A6', padding: '6px 10px', textTransform: 'uppercase' }}>
             Camera
           </div>
-          {/* Same fix as the microphone menu above -- pin the active camera to a fixed position
-              (always first) so the list doesn't reshuffle every time this menu reopens. */}
+          {/* Same fix as the microphone menu above -- pin the "Default" row to a fixed LAST
+              position so the list doesn't reshuffle every time this menu reopens. */}
           {videoDevices.filter((d) => d.kind === 'videoinput')
-            .sort((a, b) => (a.deviceId === videoId ? -1 : b.deviceId === videoId ? 1 : 0))
+            .sort((a, b) => Number(isDefaultDeviceLabel(a.label)) - Number(isDefaultDeviceLabel(b.label)))
             .map((d) => (
             <button
               key={d.deviceId}

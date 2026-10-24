@@ -276,7 +276,7 @@ export function ChatPanel({
     const caption = chatInput.trim();
 
     if (!file.type.startsWith('image/')) {
-      setChatImageError('Only image files (JPG, PNG, GIF, WEBP) can be attached.');
+      setChatImageError('Only image files can be attached here.');
       setTimeout(() => setChatImageError(null), 4000);
       if (chatImageInputRef.current) chatImageInputRef.current.value = '';
       return;
@@ -590,7 +590,7 @@ export function ChatPanel({
             <input
               ref={chatImageInputRef}
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
+              accept="image/*"
               style={{ display: 'none' }}
               onChange={(e) => void handleAttachChatImage(e.target.files?.[0])}
             />

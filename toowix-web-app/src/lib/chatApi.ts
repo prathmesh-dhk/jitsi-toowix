@@ -126,11 +126,11 @@ function readFileAsDataUri(file: File | Blob): Promise<string> {
 }
 
 /**
- * Uploads a chat image attachment (JPG/PNG/GIF/WEBP, max 3MB) and returns its fetchable URL.
+ * Uploads a chat image attachment (any image/* format, max 3MB) and returns its fetchable URL.
  */
 export async function uploadChatImage(roomId: string, file: File): Promise<string> {
   if (!file.type.startsWith('image/')) {
-    throw new Error('Only image files (JPG, PNG, GIF, WEBP) can be attached.');
+    throw new Error('Only image files can be attached here.');
   }
   if (file.size > MAX_CHAT_IMAGE_BYTES) {
     throw new Error('Image is too large -- the limit is 3MB.');
