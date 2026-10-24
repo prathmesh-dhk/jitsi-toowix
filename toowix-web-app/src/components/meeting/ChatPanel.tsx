@@ -131,7 +131,6 @@ export function ChatPanel({
   const chatImageInputRef = useRef<HTMLInputElement | null>(null);
   const [chatFileUploading, setChatFileUploading] = useState(false);
   const [chatFileError, setChatFileError] = useState<string | null>(null);
-  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
   // Edit mode: at most one message editable at a time, same as WhatsApp. editingText is a
   // separate draft from the message's own stored text, so Cancel can discard it cleanly without
   // ever having mutated chatMessages.
@@ -345,7 +344,7 @@ export function ChatPanel({
     if (file.size > MAX_CHAT_FILE_BYTES) {
       setChatFileError('File is too large -- the limit is 5MB.');
       setTimeout(() => setChatFileError(null), 4000);
-      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
       return;
     }
 
@@ -392,7 +391,7 @@ export function ChatPanel({
       setTimeout(() => setChatFileError(null), 4000);
     } finally {
       setChatFileUploading(false);
-      if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
     }
   };
 
@@ -585,19 +584,38 @@ export function ChatPanel({
         <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatFileError}</div>
       )}
       <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-        {attachmentsEnabled && (
+        {(attachmentsEnabled || fileAttachmentsEnabled) && (
           <>
             <input
               ref={chatImageInputRef}
               type="file"
-              accept="image/*"
+              // Images-only when file attachments aren't allowed at all; otherwise let the
+              // picker show everything -- which of the two upload paths actually handles the
+              // picked file is decided in onChange below, by its real MIME type, not by which
+              // button was clicked. A single button for both means an image picked here always
+              // gets the inline preview treatment, regardless of which policy flag let it through.
+              accept={fileAttachmentsEnabled ? undefined : 'image/*'}
               style={{ display: 'none' }}
-              onChange={(e) => void handleAttachChatImage(e.target.files?.[0])}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+
+                if (!file) return;
+                if (file.type.startsWith('image/') && attachmentsEnabled) {
+                  void handleAttachChatImage(file);
+                } else if (fileAttachmentsEnabled) {
+                  void handleAttachChatFile(file);
+                } else {
+                  // Neither condition applies (e.g. a non-image file picked while only image
+                  // attachments are allowed) -- reuse handleAttachChatImage's own file-type
+                  // validation to surface the right error message instead of silently no-op-ing.
+                  void handleAttachChatImage(file);
+                }
+              }}
             />
             <button
               type="button"
-              title="Attach an image (max 3MB)"
-              disabled={chatImageUploading}
+              title={fileAttachmentsEnabled ? 'Attach a file (images preview inline, max 5MB)' : 'Attach an image (max 3MB)'}
+              disabled={chatImageUploading || chatFileUploading}
               onClick={() => chatImageInputRef.current?.click()}
               style={{
                 backgroundColor: 'transparent',
@@ -609,42 +627,11 @@ export function ChatPanel({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: chatImageUploading ? 'wait' : 'pointer',
+                cursor: (chatImageUploading || chatFileUploading) ? 'wait' : 'pointer',
                 flexShrink: 0,
               }}
             >
               <Paperclip size={16} />
-            </button>
-          </>
-        )}
-        {fileAttachmentsEnabled && (
-          <>
-            <input
-              ref={chatFileInputRef}
-              type="file"
-              style={{ display: 'none' }}
-              onChange={(e) => void handleAttachChatFile(e.target.files?.[0])}
-            />
-            <button
-              type="button"
-              title="Attach a file (ZIP, PDF, DOCX, video, etc. -- max 5MB)"
-              disabled={chatFileUploading}
-              onClick={() => chatFileInputRef.current?.click()}
-              style={{
-                backgroundColor: 'transparent',
-                color: '#9AA0A6',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                borderRadius: '50%',
-                width: '36px',
-                height: '36px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: chatFileUploading ? 'wait' : 'pointer',
-                flexShrink: 0,
-              }}
-            >
-              <FileIcon size={16} />
             </button>
           </>
         )}
