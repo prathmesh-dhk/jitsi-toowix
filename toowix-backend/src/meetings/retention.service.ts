@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { Meeting } from '../models/Meeting';
 import { getChatFileUploadRoot, parseRoomSlugFromChatFileSubdir } from '../uploads/chatFileStorage';
+import { getChatImageUploadRoot, parseRoomSlugFromChatImageFilename } from '../uploads/chatImageStorage';
 
 // Immediate cases (cancelled; instant meetings ended via "End for everyone") are handled
 // event-driven at the point of action -- see cancelMeetingHandler in meetings.ts and
@@ -157,6 +158,44 @@ const sweepAdHocChatFiles = async (now: number): Promise<number> => {
   return deleted;
 };
 
+// Image uploads use a flat directory (unlike generic files, which have one directory per
+// upload). Apply the same ad-hoc-room retention rule to them now that instant rooms can use the
+// image preview path too. Saved-meeting images are deliberately retained with their conversation.
+const sweepAdHocChatImages = async (now: number): Promise<number> => {
+  const root = getChatImageUploadRoot();
+  let entries: string[];
+
+  try {
+    entries = await fs.readdir(root);
+  } catch {
+    return 0;
+  }
+
+  let deleted = 0;
+  for (const filename of entries) {
+    const filePath = path.join(root, filename);
+
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile() || now - stat.mtimeMs < ADHOC_CHAT_FILE_GRACE_MS) {
+        continue;
+      }
+
+      const roomSlug = parseRoomSlugFromChatImageFilename(filename);
+      if (!roomSlug || await Meeting.exists({ roomSlug })) {
+        continue;
+      }
+
+      await fs.unlink(filePath);
+      deleted++;
+    } catch {
+      // Best-effort -- one malformed or concurrently removed upload cannot stop retention.
+    }
+  }
+
+  return deleted;
+};
+
 export const runMeetingRetentionSweep = async () => {
   try {
     const now = Date.now();
@@ -165,6 +204,7 @@ export const runMeetingRetentionSweep = async () => {
     const recurring = await sweepRecurringSeries(now);
     const abandoned = await sweepAbandonedInstantMeetings(now);
     const adHocFiles = await sweepAdHocChatFiles(now);
+    const adHocImages = await sweepAdHocChatImages(now);
     const total = cancelled + scheduled + recurring + abandoned;
 
     if (total > 0) {
@@ -175,6 +215,9 @@ export const runMeetingRetentionSweep = async () => {
     }
     if (adHocFiles > 0) {
       console.log(`[Meetings] Retention sweep: deleted ${adHocFiles} ad-hoc chat file upload(s)`);
+    }
+    if (adHocImages > 0) {
+      console.log(`[Meetings] Retention sweep: deleted ${adHocImages} ad-hoc chat image upload(s)`);
     }
   } catch (error: any) {
     console.error('[Meetings] Retention sweep failed:', error.message);

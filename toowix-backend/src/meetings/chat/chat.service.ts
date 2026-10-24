@@ -250,7 +250,11 @@ export async function markRead(room: string, firebaseUid: string | undefined): P
 export async function uploadImage(room: string, dataUri: string, requestOrigin: string): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
 
-  if (!meeting) {
+  // An ad-hoc instant/shared-link room intentionally has no Meeting document, but its live
+  // chat already supports text and generic file attachments. Allow its image attachment through
+  // the same dedicated image path so recipients get the inline preview instead of a generic
+  // download card. The image is not persisted as chat history when `meeting` is absent.
+  if (!meeting && !room.startsWith('instant-') && !room.startsWith('twx-')) {
     return { body: { error: 'Image sharing is only available in meetings created from your dashboard.' }, httpStatus: 403 };
   }
 

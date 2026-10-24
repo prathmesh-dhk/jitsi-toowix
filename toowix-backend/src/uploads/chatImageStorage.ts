@@ -71,3 +71,14 @@ export async function persistChatImage(
 export function getChatImageUploadRoot(): string {
   return UPLOAD_ROOT;
 }
+
+// Matches persistChatImage's own filename format (`${safeRoom}-${16 hex chars}.${extension}`)
+// so retention can identify the originating room without relying on a database document. The
+// room part may contain hyphens, hence the greedy first capture.
+const IMAGE_FILENAME_PATTERN = /^(.+)-([0-9a-f]{16})\.[a-z0-9]+$/i;
+
+export function parseRoomSlugFromChatImageFilename(filename: string): string | null {
+  const match = IMAGE_FILENAME_PATTERN.exec(filename);
+
+  return match ? match[1] : null;
+}

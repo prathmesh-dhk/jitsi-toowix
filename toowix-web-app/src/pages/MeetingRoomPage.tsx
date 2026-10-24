@@ -6248,15 +6248,12 @@ export function MeetingRoomPage() {
                     displayName={displayName}
                     sessionId={sessionIdRef.current}
                     roomId={roomId}
-                    attachmentsEnabled={Boolean(meetingInfo?.persisted)}
-                    // Unlike image/voice attachments (unchanged -- dashboard-created meetings
-                    // only), generic file attachments are also allowed in an ad-hoc room (instant
-                    // meeting, or any shared link with no Meeting document): the file is written
-                    // to disk only, never the database, and gets swept away once the meeting's
-                    // gone (see sweepAdHocChatFiles in retention.service.ts and the matching
-                    // backend-side allowance in chat.service.ts's uploadFile) -- the same
-                    // "destroyed when the meeting ends" lifetime the rest of an ad-hoc
-                    // conversation already has.
+                    // Images use the same inline preview/upload path in an ad-hoc instant/shared
+                    // room as in a dashboard-created meeting. Their live chat is still ephemeral:
+                    // the backend only stores the uploaded file for the active room lifetime.
+                    attachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
+                    // Generic files use the same ad-hoc allowance as images; they are never
+                    // persisted as conversation history when the room has no Meeting document.
                     fileAttachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
                     postRoomSignal={postRoomSignal}
                   />
