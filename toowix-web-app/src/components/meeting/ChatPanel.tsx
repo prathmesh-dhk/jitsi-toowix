@@ -146,9 +146,23 @@ export function ChatPanel({
   // Click-to-enlarge image preview, same lightbox pattern as ConversationsPanel.tsx's dashboard
   // chat -- opens the image bigger in an in-app overlay instead of a new browser tab.
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  // A clipboard image waits here until the person explicitly presses Send, just like WhatsApp's
+  // compose preview. This is intentionally separate from an in-flight `uploading` message.
+  const [pastedImage, setPastedImage] = useState<{ file: File; previewUrl: string } | null>(null);
 
   const handleSendChatMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (pastedImage) {
+      const file = pastedImage.file;
+
+      URL.revokeObjectURL(pastedImage.previewUrl);
+      setPastedImage(null);
+      // handleAttachChatImage reads the current text as an optional image caption, adds the
+      // normal optimistic sending bubble, and then uploads only after this explicit Send click.
+      void handleAttachChatImage(file);
+
+      return;
+    }
     if (!chatInput.trim()) return;
     const text = chatInput.trim();
     const id = generateMessageId(sessionId);
@@ -330,6 +344,34 @@ export function ChatPanel({
       setChatImageUploading(false);
       if (chatImageInputRef.current) chatImageInputRef.current.value = '';
     }
+  };
+
+  // Clipboard screenshots and copied image files arrive as ClipboardItem entries rather than
+  // through the file input. Reuse the exact same upload/optimistic-preview path so a pasted
+  // image behaves identically to one selected with the paperclip. Text-only clipboard content
+  // is deliberately left alone, preserving normal copy/paste into the message field.
+  const handleChatInputPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!attachmentsEnabled || chatImageUploading) {
+      return;
+    }
+
+    const imageItem = Array.from(event.clipboardData?.items || [])
+      .find((item) => item.kind === 'file' && item.type.startsWith('image/'));
+    const imageFile = imageItem?.getAsFile();
+
+    if (!imageFile) {
+      return;
+    }
+
+    // Prevent a browser from putting an image's textual/data representation into the input in
+    // addition to the attachment. Keep any current message text as the optional image caption,
+    // and wait for the explicit Send click before uploading the image.
+    event.preventDefault();
+    setPastedImage((previous) => {
+      if (previous) URL.revokeObjectURL(previous.previewUrl);
+
+      return { file: imageFile, previewUrl: URL.createObjectURL(imageFile) };
+    });
   };
 
   // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 5MB) -- distinct from
@@ -583,6 +625,27 @@ export function ChatPanel({
       {chatFileError && (
         <div style={{ fontSize: '12px', color: '#F28B82', paddingBottom: '6px' }}>{chatFileError}</div>
       )}
+      {pastedImage && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', padding: '8px 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+          <img
+            src={pastedImage.previewUrl}
+            alt="Image ready to send"
+            style={{ width: '44px', height: '44px', objectFit: 'cover', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.16)' }}
+          />
+          <span style={{ flex: 1, minWidth: 0, color: '#DADCE0', fontSize: '12px' }}>Image ready to send</span>
+          <button
+            type="button"
+            title="Remove pasted image"
+            onClick={() => {
+              URL.revokeObjectURL(pastedImage.previewUrl);
+              setPastedImage(null);
+            }}
+            style={{ ...chatIconButtonStyle, color: '#F28B82' }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
       <form onSubmit={handleSendChatMessage} style={{ display: 'flex', gap: '8px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
         {(attachmentsEnabled || fileAttachmentsEnabled) && (
           <>
@@ -639,6 +702,7 @@ export function ChatPanel({
           type="text"
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
+          onPaste={handleChatInputPaste}
           placeholder="Send a message..."
           style={{
             flex: 1,
