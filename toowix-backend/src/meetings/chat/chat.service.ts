@@ -29,6 +29,7 @@ interface ISaveMessageParams {
   audioUrl?: string;
   firebaseUid?: string;
   imageUrl?: string;
+  imageSize?: number;
   mentions?: unknown[];
   senderId?: string;
   senderName?: string;
@@ -61,6 +62,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
   const senderId = typeof params.senderId === 'string' ? params.senderId.slice(0, 120) : null;
   const text = typeof params.text === 'string' ? params.text.slice(0, MAX_TEXT_LENGTH) : null;
   const imageUrl = typeof params.imageUrl === 'string' ? params.imageUrl.slice(0, 2000) : null;
+  const imageSize = typeof params.imageSize === 'number' ? params.imageSize : null;
   const audioUrl = typeof params.audioUrl === 'string' ? params.audioUrl.slice(0, 2000) : null;
   const audioDuration = typeof params.audioDuration === 'number' ? params.audioDuration : null;
   const fileUrl = typeof params.fileUrl === 'string' ? params.fileUrl.slice(0, 2000) : null;
@@ -80,6 +82,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
     senderId,
     text,
     imageUrl,
+    imageSize,
     audioUrl,
     audioDuration,
     fileUrl,
@@ -100,7 +103,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
         ...(imageUrl ? { sharedFiles: { $each: [ {
           name: `${senderName}-image-${Date.now()}`,
           url: imageUrl,
-          size: '',
+          size: imageSize ? `${Math.ceil(imageSize / 1024)} KB` : '',
           sharedBy: senderName,
           sharedAt: message.createdAt.toISOString(),
         } ] } } : {}),
@@ -259,8 +262,9 @@ export async function uploadImage(room: string, dataUri: string, requestOrigin: 
   }
 
   try {
-    const url = await persistChatImage(dataUri, room, requestOrigin);
-    return { body: { url }, httpStatus: 200 };
+    const { url, size } = await persistChatImage(dataUri, room, requestOrigin);
+
+    return { body: { url, size }, httpStatus: 200 };
   } catch (error: any) {
     return { body: { error: error.message || 'Failed to upload image' }, httpStatus: 400 };
   }
@@ -283,7 +287,7 @@ export async function uploadAudio(room: string, dataUri: string, requestOrigin: 
 }
 
 /**
- * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB) for a
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to the shared 10MB limit) for a
  * meeting conversation. Distinct from uploadImage/uploadAudio -- those keep their own existing
  * dedicated inline-preview paths; this is for everything else, rendered as a download card.
  */

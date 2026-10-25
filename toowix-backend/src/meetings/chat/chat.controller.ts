@@ -13,14 +13,25 @@ import * as chatService from './chat.service';
 export async function postChatMessageHandler(req: any, res: Response): Promise<void> {
   try {
     const room = String(req.params.roomSlug).toLowerCase();
+    // CONFIRMED BUG: fileUrl/fileName/fileSize/fileType were never forwarded here even though
+    // chatApi.ts's persistChatMessage already sends them -- a file attachment's live/just-sent
+    // bubble showed its name and size (from the local uploadChatFile response), but a page
+    // reload (which re-fetches persisted history) silently lost all of that, since saveMessage
+    // was never given it to save in the first place. imageSize is new alongside this fix, for
+    // the same reason images never carried a size at all (see chat.service.ts/chatImageStorage.ts).
     const result = await chatService.saveMessage(room, {
       firebaseUid: req.firebaseUid,
       senderName: req.body.senderName,
       senderId: req.body.senderId,
       text: req.body.text,
       imageUrl: req.body.imageUrl,
+      imageSize: req.body.imageSize,
       audioUrl: req.body.audioUrl,
       audioDuration: req.body.audioDuration,
+      fileUrl: req.body.fileUrl,
+      fileName: req.body.fileName,
+      fileSize: req.body.fileSize,
+      fileType: req.body.fileType,
       mentions: req.body.mentions,
       clientMessageId: req.body.clientMessageId,
     });
@@ -114,7 +125,7 @@ export async function uploadChatAudioHandler(req: any, res: Response): Promise<v
 
 /**
  * POST /api/meetings/room/:roomSlug/chat/file
- * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB).
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to the shared 10MB limit).
  */
 export async function uploadChatFileHandler(req: any, res: Response): Promise<void> {
   try {

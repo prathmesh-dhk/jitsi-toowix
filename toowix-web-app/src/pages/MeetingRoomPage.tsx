@@ -333,9 +333,19 @@ export function MeetingRoomPage() {
   const attendanceEntryIdRef = useRef<string | null>(null);
   const leavingRef = useRef(false);
 
-  // Device IDs -- restored from the last meeting on this device so returning here doesn't reset
-  // the microphone/camera/speaker choice back to "default" every single visit.
-  const [audioId, setAudioId] = useState(() => { try { return localStorage.getItem('toowix_audio_device') || ''; } catch { return ''; } });
+  // Real reported bug: the mic sometimes didn't work when joining a new meeting and needed a
+  // manual re-pick from the device menu to recover -- most visible with a Bluetooth headset in
+  // the mix. Root cause: audioId used to restore a SPECIFIC saved device id from the last
+  // meeting on this device, forever, including stale ones -- a Bluetooth mic that's paired but
+  // not actually connected right now very often still appears in enumerateDevices() with the
+  // SAME stable id, so the existing "drop a saved id that no longer exists" cleanup below
+  // (ids.has(audioId)) never catches it: the id is still "there", just not genuinely usable.
+  // Requesting it as the ideal device can then open a dead/silent reference instead of cleanly
+  // falling back. Always starting fresh with the true system default (no deviceId constraint at
+  // all) removes that stale state entirely -- a manual pick still applies for the rest of the
+  // current session exactly as before, it just never again carries a specific device choice into
+  // a brand new meeting.
+  const [audioId, setAudioId] = useState('');
   const [videoId, setVideoId] = useState(() => { try { return localStorage.getItem('toowix_video_device') || ''; } catch { return ''; } });
   const [outputId, setOutputId] = useState(() => { try { return localStorage.getItem('toowix_output_device') || ''; } catch { return ''; } });
 
@@ -378,9 +388,14 @@ export function MeetingRoomPage() {
     } catch {}
   }, []);
 
-  // Same idea for the on/off toggle itself -- if someone joined muted last time, don't silently
-  // turn their mic back on for them without asking.
-  const [micEnabled, setMicEnabled] = useState(() => { try { return localStorage.getItem('toowix_mic_enabled') !== '0'; } catch { return true; } });
+  // Real reported bug (same root cause and same fix as videoEnabled below): the mic silently
+  // started OFF on a brand new meeting (read as "default mic isn't connecting") whenever the
+  // person had muted in ANY past, unrelated meeting -- toowix_mic_enabled persisted that choice
+  // across every future session forever. Mic now always starts on for a fresh join, matching a
+  // brand new Google Meet call; it still stays off for the rest of the CURRENT session the
+  // moment the person mutes themselves, it just never again persists that choice into a future,
+  // unrelated meeting.
+  const [micEnabled, setMicEnabled] = useState(true);
   // Real reported bug: the camera silently started OFF on a brand new meeting (read as "camera
   // not detecting") whenever the person had turned it off in ANY past, unrelated meeting --
   // toowix_video_enabled persisted that choice across every future session forever, with no way
@@ -666,6 +681,7 @@ export function MeetingRoomPage() {
           time: new Date(m.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
           text: m.text || '',
           imageUrl: m.imageUrl || undefined,
+          imageSize: m.imageSize || undefined,
           fileUrl: m.fileUrl ? resolveChatFileUrl(m.fileUrl) : undefined,
           fileName: m.fileName || undefined,
           fileSize: m.fileSize || undefined,
@@ -2096,10 +2112,10 @@ export function MeetingRoomPage() {
   // Real-time media preview hook (cleaned up cleanly on joining)
   const media = useMediaPreview(hasJoined, micEnabled, videoEnabled, audioId, videoId);
 
-  // Persist every device/on-off choice as it's made, and drop a saved device id that no longer
-  // exists (unplugged headset, swapped phone) back to "default" instead of silently failing.
-  useEffect(() => { try { localStorage.setItem('toowix_mic_enabled', micEnabled ? '1' : '0'); } catch { /* storage unavailable */ } }, [micEnabled]);
-  useEffect(() => { try { if (audioId) localStorage.setItem('toowix_audio_device', audioId); else localStorage.removeItem('toowix_audio_device'); } catch { /* storage unavailable */ } }, [audioId]);
+  // Persist every device choice as it's made, and drop a saved device id that no longer exists
+  // (unplugged headset, swapped phone) back to "default" instead of silently failing. The mic/
+  // camera on-off toggles, and the mic's own specific device choice, are deliberately NOT
+  // persisted any more -- see micEnabled/videoEnabled/audioId's own comments for why.
   useEffect(() => { try { if (videoId) localStorage.setItem('toowix_video_device', videoId); else localStorage.removeItem('toowix_video_device'); } catch { /* storage unavailable */ } }, [videoId]);
   useEffect(() => { try { if (outputId) localStorage.setItem('toowix_output_device', outputId); else localStorage.removeItem('toowix_output_device'); } catch { /* storage unavailable */ } }, [outputId]);
   // Live mirrors of audioId/outputId for the bounded delayed Bluetooth-mic re-check below, which
@@ -2980,11 +2996,9 @@ export function MeetingRoomPage() {
   useEffect(() => {
     if (!deviceSwitchDiagnosticsEnabled) return;
     (window as any).__toowixMicStatus = () => {
-      let savedMicId: string | null = null;
       let savedSpeakerId: string | null = null;
 
       try {
-        savedMicId = localStorage.getItem('toowix_audio_device');
         savedSpeakerId = localStorage.getItem('toowix_output_device');
       } catch { /* storage unavailable */ }
       const realActiveMicId = jitsiMeeting.getActiveAudioInputDeviceId?.() ?? null;
@@ -2993,7 +3007,8 @@ export function MeetingRoomPage() {
       return {
         uiSelectedMicId: uiSelectedMicId ?? '(auto -- system default)',
         uiSelectedSpeakerId: outputId || '(auto -- system default)',
-        savedMicIdInLocalStorage: savedMicId,
+        // audioId is no longer persisted into a future meeting at all (see its own comment) --
+        // always starts '(auto -- system default)' on a fresh join now, by design.
         savedSpeakerIdInLocalStorage: savedSpeakerId,
         realActiveMicDeviceId: realActiveMicId ?? '(unavailable)',
         uiMatchesRealTrack: realActiveMicId == null ? 'unknown' : uiSelectedMicId === realActiveMicId,
@@ -4064,6 +4079,7 @@ export function MeetingRoomPage() {
         // rare chance both this and a working datachannel send arrive.
         const text = typeof payload?.text === 'string' ? payload.text : '';
         const imageUrl = typeof payload?.imageUrl === 'string' ? resolveChatImageUrl(payload.imageUrl) : undefined;
+        const imageSize = typeof payload?.imageSize === 'number' ? payload.imageSize : undefined;
         const fileUrl = typeof payload?.fileUrl === 'string' ? resolveChatFileUrl(payload.fileUrl) : undefined;
         const fileName = typeof payload?.fileName === 'string' ? payload.fileName : undefined;
         const fileSize = typeof payload?.fileSize === 'number' ? payload.fileSize : undefined;
@@ -4084,6 +4100,7 @@ export function MeetingRoomPage() {
             time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
             text,
             imageUrl,
+            imageSize,
             fileUrl,
             fileName,
             fileSize,

@@ -112,6 +112,14 @@ export function SecuritySection() {
         // forces a fresh sign-in everywhere. Being honest: this signs out *everywhere*,
         // not selectively "other" sessions.
         await signOut(auth);
+        // See DashboardPage.tsx's own handleSignOut -- every stale "logged in" localStorage
+        // signal must be cleared on sign-out, not just the Firebase session itself, or the next
+        // page load can still see a stale toowix_session_token and bounce around before landing
+        // on /login anyway.
+        localStorage.removeItem('toowix_user');
+        localStorage.removeItem('toowix_jitsi_jwt');
+        localStorage.removeItem('toowix_company');
+        localStorage.removeItem('toowix_session_token');
         window.location.href = '/login';
         return;
       }
@@ -142,6 +150,11 @@ export function SecuritySection() {
       await reauthenticateWithCredential(user, credential);
       await settingsApi.post('/security/deactivate');
       await signOut(auth);
+      // See the matching comment above (handleChangePassword's own sign-out-everywhere branch).
+      localStorage.removeItem('toowix_user');
+      localStorage.removeItem('toowix_jitsi_jwt');
+      localStorage.removeItem('toowix_company');
+      localStorage.removeItem('toowix_session_token');
       window.location.href = '/login';
     } catch (err: any) {
       setToast({ message: err.message || 'Could not deactivate account.', type: 'error' });

@@ -1,19 +1,18 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { MAX_CHAT_ATTACHMENT_BYTES } from './chatUploadLimits';
 
 // Generic chat file attachments (anything that isn't the existing dedicated image/audio paths --
-// PDF, DOCX, ZIP, video, or any other file type, up to 5MB). Same base64 data: URI convention as
-// chatImageStorage.ts/chatAudioStorage.ts, but stored one level deeper -- uploads/chat-files/
-// <randomId>/<original-filename> -- so the SAME URL both serves the file (via the existing
-// express.static mount) and carries the real original filename, which is what makes a plain
-// `<a href={url} download>` on the frontend offer a sensible downloaded filename (e.g.
+// PDF, DOCX, ZIP, video, or any other file type, up to the shared 10MB limit). Same base64 data:
+// URI convention as chatImageStorage.ts/chatAudioStorage.ts, but stored one level deeper --
+// uploads/chat-files/<randomId>/<original-filename> -- so the SAME URL both serves the file (via
+// the existing express.static mount) and carries the real original filename, which is what makes
+// a plain `<a href={url} download>` on the frontend offer a sensible downloaded filename (e.g.
 // "report.pdf", not a random hash) rather than needing a separate signed-download endpoint.
 const UPLOAD_ROOT = process.env.CHAT_FILE_UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'chat-files');
 
 const DATA_URI_PATTERN = /^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+)(?:;[a-zA-Z0-9=_-]+)*;base64,([A-Za-z0-9+/=]+)$/;
-
-export const MAX_CHAT_FILE_BYTES = 5 * 1024 * 1024;
 
 export interface IPersistedChatFile {
   url: string;
@@ -25,7 +24,8 @@ export interface IPersistedChatFile {
 /**
  * Decodes a base64 file data: URI (any MIME type) and writes it to disk under a random
  * subdirectory, preserving the ORIGINAL filename so the resulting URL downloads with a sensible
- * name. Throws if the value isn't a recognized data URI or exceeds the 5MB chat attachment limit.
+ * name. Throws if the value isn't a recognized data URI or exceeds the shared chat attachment
+ * size limit.
  */
 export async function persistChatFile(
     dataUri: string,
@@ -44,8 +44,8 @@ export async function persistChatFile(
   if (buffer.length === 0) {
     throw new Error('This file appears to be empty.');
   }
-  if (buffer.length > MAX_CHAT_FILE_BYTES) {
-    throw new Error('File is too large -- the limit is 5MB.');
+  if (buffer.length > MAX_CHAT_ATTACHMENT_BYTES) {
+    throw new Error('File is too large -- the limit is 10MB.');
   }
 
   // Strip any path separators and control characters a crafted filename could carry -- this

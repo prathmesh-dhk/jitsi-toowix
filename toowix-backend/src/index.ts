@@ -44,8 +44,14 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+// A chat attachment is sent as a base64 data URI inside this JSON body (see chatApi.ts /
+// chatUploadLimits.ts), which inflates the real 10MB file-size limit by ~33% on the wire, plus
+// some JSON/field overhead -- 10mb here would reject a file that's well under the actual
+// attachment limit before persistChatImage/File/Audio even gets to check it. 16mb covers the
+// 10MB limit with comfortable headroom. Must stay <= the reverse proxy's own
+// client_max_body_size (talk-proxy.conf) or that still rejects the request first.
+app.use(express.json({ limit: '16mb' }));
+app.use(express.urlencoded({ limit: '16mb', extended: true }));
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }

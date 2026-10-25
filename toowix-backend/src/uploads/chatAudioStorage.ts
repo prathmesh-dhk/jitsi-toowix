@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { MAX_CHAT_ATTACHMENT_BYTES } from './chatUploadLimits';
 
 const UPLOAD_ROOT = process.env.CHAT_AUDIO_UPLOAD_DIR || path.join(process.cwd(), 'uploads', 'chat-audios');
 
@@ -17,8 +18,6 @@ const EXT_BY_MIME: Record<string, string> = {
   aac: 'aac',
   mpeg: 'mp3',
 };
-
-const MAX_CHAT_AUDIO_BYTES = 10 * 1024 * 1024; // 10MB max for voice notes
 
 /**
  * Decodes a base64 audio data: URI, writes it to disk, and returns a URL path
@@ -39,7 +38,7 @@ export async function persistChatAudio(
       const ext = EXT_BY_MIME[mimePart] || 'webm';
       const buffer = Buffer.from(parts[1], 'base64');
 
-      if (buffer.length > MAX_CHAT_AUDIO_BYTES) {
+      if (buffer.length > MAX_CHAT_ATTACHMENT_BYTES) {
         throw new Error('Voice message is too large (max 10MB).');
       }
 
@@ -59,7 +58,7 @@ export async function persistChatAudio(
   const ext = EXT_BY_MIME[mime.toLowerCase()] || 'webm';
   const buffer = Buffer.from(base64Data, 'base64');
 
-  if (buffer.length > MAX_CHAT_AUDIO_BYTES) {
+  if (buffer.length > MAX_CHAT_ATTACHMENT_BYTES) {
     throw new Error('Voice message is too large (max 10MB).');
   }
 

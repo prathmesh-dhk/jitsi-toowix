@@ -365,10 +365,19 @@ export function DashboardPage() {
     } catch (e) {
       console.warn('Firebase signout warning:', e);
     }
+    // Real reported bug: after logging out, visiting the home page URL kept bouncing to /login
+    // instead of showing the public marketing page. Root cause: RootRoute (App.tsx) and
+    // AccountGuard both treat `toowix_session_token` as its own independent "is logged in"
+    // signal (alongside toowix_user), set at login (LoginPage.tsx) and sent as the X-Toowix-
+    // Session header on nearly every authenticated request -- but it was never cleared here.
+    // Visiting "/" after logout still saw that stale token, redirected straight to /dashboard,
+    // which then correctly found no real Firebase session and bounced to /login -- landing on
+    // /login regardless of what URL was actually requested.
     localStorage.removeItem('toowix_user');
     localStorage.removeItem('toowix_jitsi_jwt');
     localStorage.removeItem('toowix_company');
-    navigate('/login');
+    localStorage.removeItem('toowix_session_token');
+    navigate('/');
   };
 
   const handleStartInstantMeeting = async () => {

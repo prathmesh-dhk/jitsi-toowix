@@ -112,10 +112,14 @@ function SettingsShell() {
 
   const handleSignOut = async () => {
     try { await signOut(auth); } catch (e) { console.warn('Sign out warning:', e); }
+    // See the matching comment in DashboardPage.tsx's own handleSignOut -- toowix_session_token
+    // is its own independent "is logged in" signal (RootRoute/AccountGuard) and must be cleared
+    // here too, or the home page keeps bouncing back through /dashboard to /login after sign out.
     localStorage.removeItem('toowix_user');
     localStorage.removeItem('toowix_jitsi_jwt');
     localStorage.removeItem('toowix_company');
-    navigate('/login');
+    localStorage.removeItem('toowix_session_token');
+    navigate('/');
   };
 
   return (

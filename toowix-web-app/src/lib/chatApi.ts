@@ -2,9 +2,13 @@ import { auth } from './firebase';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-export const MAX_CHAT_IMAGE_BYTES = 3 * 1024 * 1024;
-export const MAX_CHAT_AUDIO_BYTES = 10 * 1024 * 1024;
-export const MAX_CHAT_FILE_BYTES = 5 * 1024 * 1024;
+// A single shared limit across every chat attachment type (image, voice note, generic file) --
+// these used to be three different numbers (3MB/10MB/5MB), which is exactly the kind of
+// inconsistency that makes "why did this one fail but that one worked" confusing. Must stay in
+// lockstep with the backend's own MAX_CHAT_ATTACHMENT_BYTES (chatUploadLimits.ts) and the proxy's
+// client_max_body_size, which has to be comfortably larger than this to account for base64
+// inflating the file by ~33% plus JSON overhead -- see talk-proxy.conf's own comment.
+export const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 // Resolves a generic file attachment's URL the same way resolveChatImageUrl/resolveChatAudioUrl
 // do (an older backend origin/host, a relative /api/uploads/... path, or an already-absolute
@@ -75,6 +79,7 @@ export async function persistChatMessage(
     senderId?: string | null;
     text?: string | null;
     imageUrl?: string | null;
+    imageSize?: number | null;
     audioUrl?: string | null;
     audioDuration?: number | null;
     fileUrl?: string | null;
@@ -126,14 +131,14 @@ function readFileAsDataUri(file: File | Blob): Promise<string> {
 }
 
 /**
- * Uploads a chat image attachment (any image/* format, max 3MB) and returns its fetchable URL.
+ * Uploads a chat image attachment (any image/* format, max 10MB) and returns its fetchable URL.
  */
-export async function uploadChatImage(roomId: string, file: File): Promise<string> {
+export async function uploadChatImage(roomId: string, file: File): Promise<{ url: string; size: number }> {
   if (!file.type.startsWith('image/')) {
     throw new Error('Only image files can be attached here.');
   }
-  if (file.size > MAX_CHAT_IMAGE_BYTES) {
-    throw new Error('Image is too large -- the limit is 3MB.');
+  if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+    throw new Error('Image is too large -- the limit is 10MB.');
   }
 
   const dataUri = await readFileAsDataUri(file);
@@ -148,14 +153,17 @@ export async function uploadChatImage(roomId: string, file: File): Promise<strin
     throw new Error(data?.error || 'Failed to upload image');
   }
 
-  return data.url as string;
+  // Prefer the server's own decoded-byte-count (authoritative); fall back to the original
+  // File's own size if the response is ever missing it (an older backend during a rolling
+  // deploy), rather than showing no size at all.
+  return { url: data.url as string, size: typeof data.size === 'number' ? data.size : file.size };
 }
 
 /**
  * Uploads a voice note audio recording and returns its fetchable URL.
  */
 export async function uploadChatAudio(roomId: string, audioBlob: Blob): Promise<string> {
-  if (audioBlob.size > MAX_CHAT_AUDIO_BYTES) {
+  if (audioBlob.size > MAX_CHAT_ATTACHMENT_BYTES) {
     throw new Error('Voice note is too large (max 10MB).');
   }
 
@@ -175,15 +183,15 @@ export async function uploadChatAudio(roomId: string, audioBlob: Blob): Promise<
 }
 
 /**
- * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 5MB) and
+ * Uploads a generic file attachment (ZIP, PDF, DOCX, video, or any other type, up to 10MB) and
  * returns its fetchable URL plus the metadata needed to render a download card in chat.
  */
 export async function uploadChatFile(
   roomId: string,
   file: File
 ): Promise<{ url: string; fileName: string; fileSize: number; fileType: string }> {
-  if (file.size > MAX_CHAT_FILE_BYTES) {
-    throw new Error('File is too large -- the limit is 5MB.');
+  if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+    throw new Error('File is too large -- the limit is 10MB.');
   }
 
   const dataUri = await readFileAsDataUri(file);
@@ -285,6 +293,7 @@ export interface ISavedChatMessage {
   senderId?: string | null;
   text?: string | null;
   imageUrl?: string | null;
+  imageSize?: number | null;
   audioUrl?: string | null;
   audioDuration?: number | null;
   fileUrl?: string | null;

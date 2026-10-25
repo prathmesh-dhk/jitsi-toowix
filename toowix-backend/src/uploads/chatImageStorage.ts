@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { MAX_CHAT_ATTACHMENT_BYTES } from './chatUploadLimits';
 
 // Chat images are sent to the backend as base64 data: URIs (same convention as avatarStorage.ts)
 // and written to disk here instead of embedded inline in the chat message/signal payload, which
@@ -29,18 +30,21 @@ function extensionForImageMimeSubtype(subtype: string): string {
   return safe || 'img';
 }
 
-const MAX_CHAT_IMAGE_BYTES = 3 * 1024 * 1024;
+export interface IPersistedChatImage {
+  url: string;
+  size: number;
+}
 
 /**
  * Decodes a base64 image data: URI, writes it to disk, and returns a real fetchable URL (rooted
- * at requestOrigin + '/api/uploads/chat-images/...'). Throws if the value isn't a recognized
- * image data URI or exceeds the 3MB chat attachment limit.
+ * at requestOrigin + '/api/uploads/chat-images/...') plus its real byte size. Throws if the value
+ * isn't a recognized image data URI or exceeds the shared chat attachment size limit.
  */
 export async function persistChatImage(
     dataUri: string,
     roomSlug: string,
     _requestOrigin: string
-): Promise<string> {
+): Promise<IPersistedChatImage> {
   const match = DATA_URI_PATTERN.exec(dataUri || '');
 
   if (!match) {
@@ -51,8 +55,8 @@ export async function persistChatImage(
   const ext = extensionForImageMimeSubtype(mime);
   const buffer = Buffer.from(base64Data, 'base64');
 
-  if (buffer.length > MAX_CHAT_IMAGE_BYTES) {
-    throw new Error('Image is too large (max 3MB).');
+  if (buffer.length > MAX_CHAT_ATTACHMENT_BYTES) {
+    throw new Error('Image is too large (max 10MB).');
   }
 
   const safeRoom = String(roomSlug || 'room').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 60) || 'room';
@@ -65,7 +69,7 @@ export async function persistChatImage(
 
   // Keep this same-origin so a development URL (localhost:4000) is never persisted into
   // a conversation that may later be opened through the deployed web app.
-  return `/api/uploads/chat-images/${filename}`;
+  return { url: `/api/uploads/chat-images/${filename}`, size: buffer.length };
 }
 
 export function getChatImageUploadRoot(): string {

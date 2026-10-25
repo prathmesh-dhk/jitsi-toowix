@@ -10,9 +10,10 @@
 import { useRef, useState } from 'react';
 import { Check, Copy, Download, File as FileIcon, Paperclip, Pencil, Send, X } from 'lucide-react';
 import {
-  persistChatMessage, editChatMessage, uploadChatImage, resolveChatImageUrl, MAX_CHAT_IMAGE_BYTES,
-  uploadChatFile, resolveChatFileUrl, MAX_CHAT_FILE_BYTES,
+  persistChatMessage, editChatMessage, uploadChatImage, resolveChatImageUrl,
+  uploadChatFile, resolveChatFileUrl, MAX_CHAT_ATTACHMENT_BYTES,
 } from '../../lib/chatApi';
+import { formatFileSize } from '../../lib/formatFileSize';
 
 export interface IChatMessage {
   id: string;
@@ -21,7 +22,8 @@ export interface IChatMessage {
   time: string;
   text: string;
   imageUrl?: string;
-  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 5MB) -- rendered as a
+  imageSize?: number;
+  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 10MB) -- rendered as a
   // download card (name + size + a Download button) rather than an inline preview, distinct from
   // imageUrl's own inline-image path.
   fileUrl?: string;
@@ -77,15 +79,6 @@ function linkifyText(text: string): Array<string | JSX.Element> {
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
 
   return parts;
-}
-
-// Formats a byte count as a short human-readable size (e.g. "482 KB", "2.3 MB"), same convention
-// as the backend's own 5MB limit, for the download card's second line.
-function formatFileSize(bytes: number): string {
-  if (!bytes || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Generates the id a message is known by for its entire lifetime: included in the live
@@ -294,8 +287,8 @@ export function ChatPanel({
       if (chatImageInputRef.current) chatImageInputRef.current.value = '';
       return;
     }
-    if (file.size > MAX_CHAT_IMAGE_BYTES) {
-      setChatImageError('Image is too large -- the limit is 3MB.');
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      setChatImageError('Image is too large -- the limit is 10MB.');
       setTimeout(() => setChatImageError(null), 4000);
       if (chatImageInputRef.current) chatImageInputRef.current.value = '';
       return;
@@ -316,23 +309,28 @@ export function ChatPanel({
         time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         text: caption,
         imageUrl: localPreviewUrl,
+        // The browser already knows the exact file size before any upload happens -- show it
+        // immediately rather than waiting on the round trip, same as the generic file-attachment
+        // path below already does.
+        imageSize: file.size,
         uploading: true,
       },
     ]);
     setChatInput('');
     setChatImageUploading(true);
     try {
-      const url = await uploadChatImage(roomId, file);
+      const { url, size } = await uploadChatImage(roomId, file);
       const resolvedUrl = resolveChatImageUrl(url);
 
-      setChatMessages((prev) => prev.map((m) => (m.id === id ? { ...m, imageUrl: resolvedUrl, uploading: false } : m)));
+      setChatMessages((prev) => prev.map((m) => (m.id === id ? { ...m, imageUrl: resolvedUrl, imageSize: size, uploading: false } : m)));
       URL.revokeObjectURL(localPreviewUrl);
-      void postRoomSignal('CHAT_MESSAGE', { id, text: caption, imageUrl: resolvedUrl });
+      void postRoomSignal('CHAT_MESSAGE', { id, text: caption, imageUrl: resolvedUrl, imageSize: size });
       void persistChatMessage(roomId, {
         senderName: displayName || 'You',
         senderId: sessionId,
         text: caption,
         imageUrl: resolvedUrl,
+        imageSize: size,
         clientMessageId: id,
       });
     } catch (err: any) {
@@ -374,7 +372,7 @@ export function ChatPanel({
     });
   };
 
-  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 5MB) -- distinct from
+  // Generic file attachment (ZIP, PDF, DOCX, video, or anything else up to 10MB) -- distinct from
   // handleAttachChatImage's dedicated inline-preview path above. No local preview is possible for
   // an arbitrary file type, so the bubble shows a "Sending..." download card immediately instead,
   // then swaps to the real hosted URL once uploadChatFile resolves.
@@ -383,8 +381,8 @@ export function ChatPanel({
     setChatFileError(null);
     const caption = chatInput.trim();
 
-    if (file.size > MAX_CHAT_FILE_BYTES) {
-      setChatFileError('File is too large -- the limit is 5MB.');
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      setChatFileError('File is too large -- the limit is 10MB.');
       setTimeout(() => setChatFileError(null), 4000);
       if (chatImageInputRef.current) chatImageInputRef.current.value = '';
       return;
@@ -481,24 +479,29 @@ export function ChatPanel({
               }}
             >
               {msg.imageUrl && (
-                <div style={{ position: 'relative', display: 'inline-block' }}>
-                  <img
-                    src={resolveChatImageUrl(msg.imageUrl)}
-                    alt="Shared attachment"
-                    onClick={() => { if (!msg.uploading) setLightboxImage(resolveChatImageUrl(msg.imageUrl!)); }}
-                    style={{
-                      maxWidth: '220px',
-                      maxHeight: '220px',
-                      borderRadius: '8px',
-                      display: 'block',
-                      opacity: msg.uploading ? 0.65 : 1,
-                      cursor: msg.uploading ? 'default' : 'pointer',
-                    }}
-                  />
-                  {msg.uploading && (
-                    <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
-                      Sending...
-                    </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ position: 'relative', display: 'inline-block' }}>
+                    <img
+                      src={resolveChatImageUrl(msg.imageUrl)}
+                      alt="Shared attachment"
+                      onClick={() => { if (!msg.uploading) setLightboxImage(resolveChatImageUrl(msg.imageUrl!)); }}
+                      style={{
+                        maxWidth: '220px',
+                        maxHeight: '220px',
+                        borderRadius: '8px',
+                        display: 'block',
+                        opacity: msg.uploading ? 0.65 : 1,
+                        cursor: msg.uploading ? 'default' : 'pointer',
+                      }}
+                    />
+                    {msg.uploading && (
+                      <span style={{ position: 'absolute', left: '8px', bottom: '8px', padding: '3px 7px', borderRadius: '10px', backgroundColor: 'rgba(0, 0, 0, 0.7)', color: '#FFFFFF', fontSize: '11px' }}>
+                        Sending...
+                      </span>
+                    )}
+                  </div>
+                  {typeof msg.imageSize === 'number' && (
+                    <div style={{ fontSize: '11px', color: '#9AA0A6' }}>{formatFileSize(msg.imageSize)}</div>
                   )}
                 </div>
               )}
@@ -677,7 +680,7 @@ export function ChatPanel({
             />
             <button
               type="button"
-              title={fileAttachmentsEnabled ? 'Attach a file (images preview inline, max 5MB)' : 'Attach an image (max 3MB)'}
+              title={fileAttachmentsEnabled ? 'Attach a file (images preview inline, max 10MB)' : 'Attach an image (max 10MB)'}
               disabled={chatImageUploading || chatFileUploading}
               onClick={() => chatImageInputRef.current?.click()}
               style={{

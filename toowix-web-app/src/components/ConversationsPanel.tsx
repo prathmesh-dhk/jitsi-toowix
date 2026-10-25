@@ -48,6 +48,7 @@ import {
   ISavedChatMessage,
   leaveConversation,
   markChatRead,
+  MAX_CHAT_ATTACHMENT_BYTES,
   persistChatMessage,
   resolveChatAudioUrl,
   resolveChatImageUrl,
@@ -57,6 +58,7 @@ import {
 } from '../lib/chatApi';
 import { auth } from '../lib/firebase';
 import { buildMeetingPath } from '../lib/meeting-id';
+import { formatFileSize } from '../lib/formatFileSize';
 
 interface IConversationsPanelProps {
   isDark: boolean;
@@ -952,6 +954,15 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
     const file = e.target.files?.[0];
     if (!file || !selectedConversation) return;
 
+    // Same client-side check ChatPanel.tsx (in-meeting chat) already does -- a fast, clear
+    // rejection before even starting the upload, instead of letting an oversized file fail only
+    // once the backend gets around to decoding it.
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      alert('Image is too large -- the limit is 10MB.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     // Show the actual picture being sent immediately via a local blob URL, rather than a bare
     // spinner, while the upload round-trip (and the real hosted URL) is still in flight.
     const localPreviewUrl = URL.createObjectURL(file);
@@ -960,12 +971,13 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
     setShowAttachMenu(false);
 
     try {
-      const uploadedUrl = await uploadChatImage(selectedConversation.roomSlug, file);
+      const { url: uploadedUrl, size: uploadedSize } = await uploadChatImage(selectedConversation.roomSlug, file);
       const optimisticMessage: ISavedChatMessage = {
         id: `msg-${Date.now()}`,
         senderName: currentUserName || 'You',
         senderId: auth.currentUser?.uid || null,
         imageUrl: uploadedUrl,
+        imageSize: uploadedSize,
         createdAt: new Date().toISOString(),
       };
 
@@ -987,6 +999,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
         senderName: currentUserName || 'You',
         senderId: auth.currentUser?.uid,
         imageUrl: uploadedUrl,
+        imageSize: uploadedSize,
       });
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to upload image');
@@ -1439,6 +1452,9 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
                                       <Download size={14} />
                                     </a>
                                   </div>
+                                  {typeof msg.imageSize === 'number' && (
+                                    <div style={{ fontSize: '11px', color: '#9AA0A6' }}>{formatFileSize(msg.imageSize)}</div>
+                                  )}
                                   <div className="tm-msg-status-time">
                                     <span>{formatMessageTime(msg.createdAt)}</span>
                                     <CheckCheck
@@ -1504,6 +1520,9 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
                                       <Download size={14} />
                                     </a>
                                   </div>
+                                )}
+                                {msg.imageUrl && typeof msg.imageSize === 'number' && (
+                                  <div style={{ fontSize: '11px', color: '#9AA0A6' }}>{formatFileSize(msg.imageSize)}</div>
                                 )}
                               </div>
                             </div>
@@ -1627,7 +1646,7 @@ export function ConversationsPanel({ isDark, initialConversationId, initialMessa
                                 setShowAttachMenu(false);
                               }}
                             >
-                              <Paperclip size={15} /> Upload Image (max 3MB)
+                              <Paperclip size={15} /> Upload Image (max 10MB)
                             </button>
                           </div>
                         )}
