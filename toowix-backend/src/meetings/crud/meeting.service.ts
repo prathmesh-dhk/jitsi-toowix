@@ -405,7 +405,18 @@ export async function createMeeting(params: ICreateMeetingParams): Promise<IServ
     }
 
     invalidateMeetingsListCache({ companyId: meeting.companyId, createdBy: meeting.createdBy });
-    return { body: { meeting: await meeting.populate('createdBy', 'fullName email avatarUrl') }, httpStatus: 201 };
+    // Real reported delay: creating a meeting (especially "Start an instant meeting", which
+    // blocks navigation on this call -- see DashboardPage.tsx's own comment on why that await
+    // can't just be dropped) used to end with meeting.populate('createdBy', ...), a SEPARATE
+    // round trip to MongoDB Atlas that re-fetches the exact same user document this function
+    // already loaded in full at the top (resolveUser, above) -- the populate exists only to put
+    // fullName/email/avatarUrl on the response in the same shape a real populate() would produce,
+    // which the already-in-memory `user` document can build directly with zero extra I/O.
+    const meetingResponse: any = meeting.toObject();
+
+    meetingResponse.createdBy = { _id: user._id, fullName: user.fullName, email: user.email, avatarUrl: user.avatarUrl };
+
+    return { body: { meeting: meetingResponse }, httpStatus: 201 };
   } catch (error: any) {
     if (error.code === 11000) {
       return { body: { error: 'A meeting with this room link already exists' }, httpStatus: 409 };
