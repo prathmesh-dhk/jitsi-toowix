@@ -5,3 +5,6 @@ export * from './Meeting';
 export * from './Recording';
 export * from './TeamInvite';
 export * from './Contact';
+export * from './DirectConversation';
+export * from './DirectMessage';
+export * from './DirectChatSettings';

@@ -109,7 +109,27 @@ export function LoginPage() {
       await handleBackendLoginGate(idToken, result.user);
     } catch (err: any) {
       console.error('[Google SSO] Sign in error:', err);
-      setErrorMessage(err.message || 'Google SSO sign in failed.');
+      // Plain-language reasons instead of Firebase's raw "(auth/...)" text, so a blocked or closed popup
+      // tells the person exactly what to do.
+      switch (err?.code) {
+        case 'auth/popup-blocked':
+          setErrorMessage('Your browser blocked the Google sign-in window. Allow pop-ups for this site (look for the blocked-pop-up icon in the address bar), then click "Sign in with Google" again.');
+          break;
+        case 'auth/popup-closed-by-user':
+          setErrorMessage('The Google sign-in window was closed before sign-in finished. Please try again.');
+          break;
+        case 'auth/cancelled-popup-request':
+          break;
+        case 'auth/network-request-failed':
+        case 'auth/internal-error':
+          setErrorMessage('Could not reach Google. Check your internet connection (or turn off any VPN or ad blocker for this site) and try again.');
+          break;
+        case 'auth/unauthorized-domain':
+          setErrorMessage('Google sign-in is not enabled for this web address. Please contact your administrator.');
+          break;
+        default:
+          setErrorMessage(err?.message || 'Google SSO sign in failed.');
+      }
     } finally {
       setIsLoading(false);
     }

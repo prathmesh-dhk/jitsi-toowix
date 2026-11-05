@@ -108,7 +108,7 @@ interface IUseJitsiMeetingOptions {
 // Moved to its own small module (ensureLibJitsiMeetLoaded.ts) so the dashboard's "Start an
 // instant meeting" flow can preload these scripts on click without pulling this whole file into
 // its own chunk. Re-exported here so every existing import of it from this file is unaffected.
-import { ensureLibJitsiMeetLoaded } from './jitsi/ensureLibJitsiMeetLoaded';
+import { ensureLibJitsiMeetLoaded, jitsiHttpScheme, jitsiWsScheme } from './jitsi/ensureLibJitsiMeetLoaded';
 export { ensureLibJitsiMeetLoaded };
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -601,6 +601,14 @@ export function useJitsiMeeting({
   const poorSampleCountRef = useRef(0);
   const degradedSampleCountRef = useRef(0);
   const goodSinceRef = useRef<number | null>(null);
+  // Set the moment a local high-bitrate track (a screen share) starts -- see
+  // isBitrateOnlyPoorSignal's own comment in networkQuality.ts for why the browser's bandwidth
+  // estimate is specifically unreliable for a few seconds right after this, confirmed via a real
+  // call's own JVB logs (BandwidthAllocator/ProbeController both showed a stale/ramping-up
+  // estimate in exactly this window). useNetworkQuality.ts uses this to grace-period ONLY the
+  // bitrate-based POOR signal during that window -- real RTT/packet-loss signals are never
+  // suppressed, since those are reliable immediately regardless of this timing.
+  const recentHighBitrateTrackStartAtRef = useRef<number | null>(null);
   // True only while Toowix has an explicit low-data policy active. In normal mode, Jitsi/WebRTC
   // owns adaptation (simulcast layer selection, TCC, and receiver feedback) without our app
   // repeatedly pushing competing sender/receiver limits.
@@ -900,7 +908,7 @@ export function useJitsiMeeting({
   useNetworkQualityMonitor({
     joined, roomRef, applyMediaQualityPolicy, lowDataModeRef, networkMetricsRef, networkStateRef,
     previousVideoStatsRef, previousPacketStatsRef, poorSampleCountRef, degradedSampleCountRef,
-    goodSinceRef, setNetworkState,
+    goodSinceRef, setNetworkState, recentHighBitrateTrackStartAtRef,
   });
 
   // When presenter A stops and presenter B starts right after, A's TRACK_REMOVED fires (which
@@ -1033,6 +1041,19 @@ export function useJitsiMeeting({
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;
+
+        // This deployment's own config.js hardcodes its bosh/websocket URLs to its public
+        // hostname (e.g. meet.toowix.com) rather than the host we actually reached it on, and
+        // assumes TLS even when jitsiDomain is a plain-HTTP port (80, no TLS listener). Rewrite
+        // both the scheme and host:port of those two URLs to match jitsiDomain -- the one we
+        // loaded config.js from and can actually route to -- without touching the server. A
+        // no-op when they already match (e.g. a prototype whose PUBLIC_URL already agrees).
+        if (config.bosh) {
+          config.bosh = config.bosh.replace(/^https?:\/\/[^/]+/, `${jitsiHttpScheme(jitsiDomain)}://${jitsiDomain}`);
+        }
+        if (config.websocket) {
+          config.websocket = config.websocket.replace(/^wss?:\/\/[^/]+/, `${jitsiWsScheme(jitsiDomain)}://${jitsiDomain}`);
+        }
 
         JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.ERROR);
         JitsiMeetJS.init({ disableAudioLevels: false });
@@ -2086,6 +2107,7 @@ export function useJitsiMeeting({
       }
       room.setDesktopSharingFrameRate?.(desktopPolicy.desktopFps);
       void applyMediaQualityPolicy();
+      recentHighBitrateTrackStartAtRef.current = Date.now();
       setIsScreenSharing(true);
       setLocalScreenStream(trackToStream(desktopTrack));
     } catch (err: any) {

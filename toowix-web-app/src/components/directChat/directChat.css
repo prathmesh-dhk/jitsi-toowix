@@ -1,0 +1,260 @@
+/* Direct chat (1:1) -- WhatsApp-style layout in the Toowix palette (indigo on slate, same colours as the rest of
+   the dashboard). Colours are CSS variables so dark and light share one stylesheet. */
+.dc-root {
+  --dc-accent: #4f46e5;
+  --dc-tick: #38bdf8;
+  --dc-danger: #f87171;
+  display: grid;
+  grid-template-columns: minmax(300px, 400px) 1fr;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--dc-bg);
+  color: var(--dc-text);
+  font-family: inherit;
+  position: relative;
+}
+.dc-dark {
+  --dc-bg: #0b1120; --dc-panel: #131b2e; --dc-hover: #1e293b; --dc-border: #1e293b; --dc-text: #f1f5f9;
+  --dc-muted: #94a3b8; --dc-in: #1e293b; --dc-out: #4f46e5; --dc-out-text: #ffffff; --dc-wall: #0a0f1d; --dc-input: #1e293b;
+  --dc-day: #131b2e; --dc-badge-text: #ffffff; --dc-accent-text: #818cf8; --dc-shadow: rgba(0, 0, 0, 0.4); --dc-dot: rgba(255, 255, 255, 0.035);
+}
+.dc-light {
+  --dc-bg: #ffffff; --dc-panel: #f8f9fd; --dc-hover: #f3f4f6; --dc-border: #e5e7eb; --dc-text: #141b2b;
+  --dc-muted: #64748b; --dc-in: #ffffff; --dc-out: #4f46e5; --dc-out-text: #ffffff; --dc-wall: #eef0f8; --dc-input: #ffffff;
+  --dc-day: #ffffff; --dc-badge-text: #ffffff; --dc-accent-text: #4f46e5; --dc-shadow: rgba(20, 27, 43, 0.12); --dc-dot: rgba(79, 70, 229, 0.06);
+}
+.dc-root * { box-sizing: border-box; }
+.dc-root button { font-family: inherit; }
+/* The dashboard has a global rule (.dark .dashboard-tab-panel input/textarea { background/border ... !important }) that
+   would paint its own box inside our search and message fields. Doubling the class beats its specificity. */
+.dc-root.dc-root .dc-search input,
+.dc-root.dc-root .dc-composer textarea {
+  appearance: none; -webkit-appearance: none; background: transparent !important; background-color: transparent !important;
+  border: 0 !important; border-color: transparent !important; box-shadow: none !important; outline: 0 !important;
+  color: var(--dc-text) !important; border-radius: 0;
+}
+.dc-root.dc-root .dc-search input { padding: 0; }
+.dc-root .dc-search input::-webkit-search-cancel-button,
+.dc-root .dc-search input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
+
+/* ---------- left column ---------- */
+.dc-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--dc-bg); border-right: 1px solid var(--dc-border); }
+.dc-sidebar-header { display: flex; align-items: center; justify-content: space-between; height: 59px; padding: 0 16px; background: var(--dc-panel); flex-shrink: 0; }
+.dc-title { margin: 0; font-size: 19px; font-weight: 700; }
+.dc-conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dc-muted); }
+.dc-conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dc-accent-text); }
+.dc-conn-dot.dc-off { background: #f59e0b; animation: dc-pulse 1.2s ease-in-out infinite; }
+@keyframes dc-pulse { 50% { opacity: 0.35; } }
+
+.dc-search-wrap { padding: 8px 12px; flex-shrink: 0; }
+.dc-search { display: flex; align-items: center; gap: 12px; height: 35px; padding: 0 12px; border-radius: 8px; background: var(--dc-panel); color: var(--dc-muted); }
+.dc-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--dc-accent) 55%, transparent); }
+.dc-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--dc-text); font-size: 14px; }
+.dc-search input::placeholder { color: var(--dc-muted); }
+.dc-icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--dc-muted); cursor: pointer; flex-shrink: 0; }
+.dc-icon-btn:hover { background: var(--dc-hover); }
+.dc-icon-btn:focus-visible, .dc-item:focus-visible, .dc-send:focus-visible, .dc-retry:focus-visible { outline: 2px solid var(--dc-accent); outline-offset: -2px; }
+
+.dc-banner { display: flex; align-items: center; gap: 10px; margin: 4px 12px 8px; padding: 10px 12px; border-radius: 8px; background: var(--dc-panel); font-size: 13px; line-height: 1.35; }
+.dc-banner button { margin-left: auto; border: 0; background: transparent; color: var(--dc-accent-text); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.dc-banner.dc-error { color: var(--dc-danger); }
+
+.dc-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.dc-section { padding: 14px 16px 6px; font-size: 13px; font-weight: 600; color: var(--dc-accent-text); }
+.dc-item { display: flex; align-items: center; gap: 13px; width: 100%; padding: 0 16px 0 14px; height: 72px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.dc-item:hover { background: var(--dc-hover); }
+.dc-item.dc-active { background: var(--dc-panel); }
+.dc-item-body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 3px; height: 100%; border-bottom: 1px solid var(--dc-border); }
+.dc-item-top, .dc-item-bottom { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 400; }
+.dc-time { flex-shrink: 0; font-size: 12px; color: var(--dc-muted); }
+.dc-time.dc-unread-time { color: var(--dc-accent-text); }
+.dc-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--dc-muted); display: flex; align-items: center; gap: 3px; }
+.dc-preview span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-preview.dc-unread-preview { color: var(--dc-text); }
+.dc-badge { flex-shrink: 0; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--dc-accent); color: var(--dc-badge-text); font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+.dc-hint { padding: 28px 24px; text-align: center; font-size: 14px; color: var(--dc-muted); line-height: 1.5; }
+
+.dc-avatar { flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 600; overflow: hidden; user-select: none; }
+.dc-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.dc-skeleton { display: flex; align-items: center; gap: 13px; height: 72px; padding: 0 16px 0 14px; }
+.dc-skeleton i { display: block; border-radius: 8px; background: var(--dc-panel); animation: dc-pulse 1.4s ease-in-out infinite; }
+
+/* ---------- right column ---------- */
+.dc-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--dc-wall); position: relative; }
+.dc-empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 24px; text-align: center; background: var(--dc-panel); border-bottom: 6px solid var(--dc-accent); }
+.dc-empty h3 { margin: 6px 0 0; font-size: 30px; font-weight: 300; }
+.dc-empty p { margin: 0; max-width: 420px; font-size: 14px; line-height: 1.5; color: var(--dc-muted); }
+.dc-empty-icon { width: 92px; height: 92px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--dc-accent) 22%, transparent); color: var(--dc-accent-text); }
+
+.dc-chat-header { display: flex; align-items: center; gap: 12px; height: 59px; padding: 0 16px 0 10px; background: var(--dc-panel); flex-shrink: 0; }
+.dc-chat-header .dc-back { display: none; }
+.dc-chat-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.dc-chat-title strong { font-size: 16px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-chat-title small { font-size: 13px; color: var(--dc-muted); }
+
+.dc-scroll { position: relative; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 6% 10px; background-color: var(--dc-wall); background-image: radial-gradient(var(--dc-dot) 1.2px, transparent 1.3px); background-size: 22px 22px; }
+.dc-day { display: flex; justify-content: center; margin: 12px 0 10px; }
+.dc-day span { padding: 5px 12px; border-radius: 8px; background: var(--dc-day); color: var(--dc-muted); font-size: 12.5px; box-shadow: 0 1px 0.5px var(--dc-shadow); }
+.dc-older { display: flex; justify-content: center; margin: 4px 0 10px; font-size: 12.5px; color: var(--dc-muted); }
+
+.dc-row { display: flex; margin-bottom: 2px; }
+.dc-row.dc-tail { margin-top: 8px; }
+.dc-row.dc-out { justify-content: flex-end; }
+.dc-bubble { position: relative; max-width: min(65%, 560px); padding: 6px 7px 6px 9px; border-radius: 8px; font-size: 14.2px; line-height: 19px; box-shadow: 0 1px 0.5px var(--dc-shadow); background: var(--dc-in); color: var(--dc-text); }
+.dc-out .dc-bubble { background: var(--dc-out); color: var(--dc-out-text); }
+.dc-in.dc-tail .dc-bubble { border-top-left-radius: 0; }
+.dc-out.dc-tail .dc-bubble { border-top-right-radius: 0; }
+.dc-tail .dc-bubble::before { content: ''; position: absolute; top: 0; width: 8px; height: 13px; background: inherit; }
+.dc-in.dc-tail .dc-bubble::before { left: -8px; clip-path: polygon(100% 0, 0 0, 100% 100%); }
+.dc-out.dc-tail .dc-bubble::before { right: -8px; clip-path: polygon(0 0, 100% 0, 0 100%); }
+.dc-text { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+/* The invisible filler reserves room at the end of the LAST line, so the time never overlaps the text. */
+.dc-text::after { content: ''; display: inline-block; width: 74px; height: 1px; }
+/* Time + ticks float to the right of the last line and sit in its bottom-right corner (like WhatsApp). The 5px top
+   margin drops the 15px-high meta to the bottom of the 19px text line; it must NOT be pulled up with a negative margin. */
+.dc-meta { float: right; display: inline-flex; align-items: center; gap: 3px; margin: 5px -2px 0 8px; font-size: 11px; color: var(--dc-muted); line-height: 15px; user-select: none; }
+.dc-out .dc-meta { color: rgba(255, 255, 255, 0.74); }
+.dc-tick-read { color: var(--dc-tick); }
+.dc-out .dc-tick-read { color: #7dd3fc; }
+.dc-failed .dc-bubble { box-shadow: 0 0 0 1px var(--dc-danger); }
+.dc-retry { display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 0 0; padding: 0; border: 0; background: transparent; color: var(--dc-danger); font-size: 11.5px; font-weight: 600; cursor: pointer; }
+
+.dc-jump { position: absolute; right: 24px; bottom: 82px; display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 0; border-radius: 999px; background: var(--dc-panel); color: var(--dc-text); box-shadow: 0 2px 8px var(--dc-shadow); font-size: 13px; cursor: pointer; z-index: 3; }
+.dc-jump b { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--dc-accent); color: var(--dc-badge-text); font-size: 11px; line-height: 18px; text-align: center; }
+
+.dc-composer-wrap { flex-shrink: 0; background: var(--dc-panel); }
+.dc-send-error { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 13px; color: var(--dc-danger); }
+.dc-send-error button { margin-left: auto; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.dc-composer { display: flex; align-items: flex-end; gap: 10px; padding: 8px 14px 10px; }
+.dc-input-box { flex: 1; min-width: 0; display: flex; flex-direction: column; border-radius: 8px; background: var(--dc-input); }
+.dc-composer textarea { width: 100%; max-height: 120px; padding: 9px 12px; border: 0; outline: 0; resize: none; background: transparent; color: var(--dc-text); font: inherit; font-size: 15px; line-height: 20px; }
+.dc-composer textarea::placeholder { color: var(--dc-muted); }
+.dc-count { padding: 0 12px 4px; text-align: right; font-size: 11px; color: var(--dc-muted); }
+.dc-count.dc-over { color: var(--dc-danger); }
+.dc-send { flex-shrink: 0; display: grid; place-items: center; width: 42px; height: 42px; border: 0; border-radius: 50%; background: var(--dc-accent); color: #fff; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+.dc-send:disabled { opacity: 0.45; cursor: not-allowed; }
+.dc-send:not(:disabled):active { transform: scale(0.94); }
+
+/* ---------- toasts for chats that are not open ---------- */
+.dc-toasts { position: fixed; right: 18px; bottom: 18px; z-index: 1200; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 36px)); }
+.dc-toast { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--dc-border); border-radius: 12px; background: var(--dc-panel); color: var(--dc-text); box-shadow: 0 8px 24px var(--dc-shadow); text-align: left; cursor: pointer; animation: dc-toast-in 0.22s ease-out; }
+.dc-toast-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dc-toast-body strong { font-size: 14px; }
+.dc-toast-body span { font-size: 13px; color: var(--dc-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@keyframes dc-toast-in { from { opacity: 0; transform: translateY(12px); } }
+
+/* sidebar entry in the dashboard menu */
+.dc-nav-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #4f46e5; color: #fff; font-size: 12px; font-weight: 600; line-height: 20px; text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-toast, .dc-conn-dot.dc-off, .dc-skeleton i { animation: none; }
+}
+
+/* ---------- phones: the list and the chat take turns ---------- */
+@media (max-width: 768px) {
+  .dc-root { grid-template-columns: 1fr; }
+  .dc-root .dc-main { display: none; }
+  .dc-root.dc-has-active .dc-sidebar { display: none; }
+  .dc-root.dc-has-active .dc-main { display: flex; }
+  .dc-chat-header .dc-back { display: inline-grid; }
+  .dc-scroll { padding: 12px 10px 8px; }
+  .dc-bubble { max-width: 82%; }
+  .dc-jump { right: 12px; }
+  .dc-toasts { right: 10px; bottom: 10px; }
+}
+
+/* ---------- header actions: video / voice / three-dot menu ---------- */
+.dc-header-actions { position: relative; display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.dc-action { width: 38px; height: 38px; color: var(--dc-text); }
+.dc-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.dc-action:disabled:hover { background: transparent; }
+.dc-muted-icon { flex-shrink: 0; color: var(--dc-muted); }
+.dc-badge.dc-badge-muted { background: var(--dc-muted); }
+.dc-menu { position: absolute; top: 44px; right: 0; z-index: 30; min-width: 228px; padding: 6px 0; border: 1px solid var(--dc-border); border-radius: 10px; background: var(--dc-panel); box-shadow: 0 10px 28px var(--dc-shadow); animation: dc-toast-in 0.12s ease-out; }
+.dc-menu button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; border: 0; background: transparent; color: var(--dc-text); font-size: 14px; text-align: left; cursor: pointer; }
+.dc-menu button:hover:not(:disabled), .dc-menu button:focus-visible { background: var(--dc-hover); outline: 0; }
+.dc-menu button:disabled { opacity: 0.5; cursor: not-allowed; }
+.dc-menu button svg { color: var(--dc-muted); flex-shrink: 0; }
+.dc-menu button.dc-danger, .dc-menu button.dc-danger svg { color: var(--dc-danger); }
+.dc-menu-chevron { margin-left: auto; transition: transform 0.15s; }
+.dc-menu-chevron.dc-open { transform: rotate(90deg); }
+.dc-menu-sep { height: 1px; margin: 6px 0; background: var(--dc-border); }
+.dc-submenu { padding: 2px 0 4px; background: var(--dc-hover); }
+.dc-submenu button { padding-left: 45px; }
+
+/* ---------- confirm dialog ---------- */
+.dc-modal-backdrop { position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgba(2, 6, 23, 0.55); }
+.dc-modal { width: min(400px, 100%); padding: 22px; border: 1px solid var(--dc-border); border-radius: 14px; background: var(--dc-panel); color: var(--dc-text); box-shadow: 0 16px 40px var(--dc-shadow); }
+.dc-modal h3 { margin: 0 0 8px; font-size: 17px; }
+.dc-modal p { margin: 0 0 18px; font-size: 14px; line-height: 1.45; color: var(--dc-muted); }
+.dc-modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.dc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 16px; border: 1px solid var(--dc-border); border-radius: 18px; background: transparent; color: var(--dc-accent-text); font-size: 14px; font-weight: 600; cursor: pointer; }
+.dc-btn:hover:not(:disabled) { background: var(--dc-hover); }
+.dc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.dc-btn.dc-btn-danger { border-color: transparent; background: #dc2626; color: #fff; }
+.dc-btn.dc-btn-danger:hover:not(:disabled) { background: #b91c1c; }
+
+/* ---------- search inside a chat ---------- */
+.dc-find { display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--dc-panel); border-top: 1px solid var(--dc-border); border-bottom: 1px solid var(--dc-border); color: var(--dc-muted); flex-shrink: 0; }
+.dc-root.dc-root .dc-find input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; appearance: none; -webkit-appearance: none; background: var(--dc-input) !important; background-color: var(--dc-input) !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; color: var(--dc-text) !important; font-size: 14px; }
+.dc-root .dc-find input::-webkit-search-cancel-button, .dc-root .dc-find input::-webkit-search-decoration { -webkit-appearance: none; display: none; }
+.dc-find-count { min-width: 64px; font-size: 12px; text-align: center; }
+.dc-find .dc-icon-btn:disabled { opacity: 0.35; cursor: default; }
+.dc-text mark { background: #fde047; color: #1e1b4b; border-radius: 2px; padding: 0 1px; }
+.dc-hit .dc-bubble { box-shadow: 0 0 0 2px #facc15; }
+
+/* ---------- call entries in the chat ---------- */
+.dc-callline { display: flex; align-items: center; gap: 10px; padding: 2px 4px 2px 2px; min-width: 220px; }
+.dc-callline-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: rgba(148, 163, 184, 0.2); flex-shrink: 0; }
+.dc-callline-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.dc-callline-text strong { font-size: 14px; font-weight: 600; }
+.dc-callline-text small { font-size: 12px; opacity: 0.75; }
+.dc-callline-missed .dc-callline-icon { background: rgba(248, 113, 113, 0.2); color: var(--dc-danger); }
+.dc-callline-missed strong { color: var(--dc-danger); }
+.dc-callback { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid currentColor; border-radius: 14px; background: transparent; color: inherit; font-size: 12px; font-weight: 600; cursor: pointer; opacity: 0.9; }
+.dc-callback:hover:not(:disabled) { background: rgba(148, 163, 184, 0.2); }
+.dc-callback:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---------- blocked bar (replaces the message box) ---------- */
+.dc-blocked { display: flex; align-items: center; gap: 10px; padding: 12px 16px; font-size: 13.5px; color: var(--dc-muted); }
+.dc-blocked span { flex: 1; min-width: 0; }
+
+/* ---------- contact info side sheet ---------- */
+.dc-info { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; width: min(340px, 100%); display: flex; flex-direction: column; background: var(--dc-panel); border-left: 1px solid var(--dc-border); box-shadow: -8px 0 24px var(--dc-shadow); animation: dc-info-in 0.18s ease-out; }
+@keyframes dc-info-in { from { transform: translateX(24px); opacity: 0; } }
+.dc-info header { display: flex; align-items: center; gap: 12px; height: 59px; padding: 0 14px; flex-shrink: 0; }
+.dc-info-body { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 22px; overflow-y: auto; }
+.dc-info-body h3 { margin: 0; font-size: 20px; }
+.dc-info-body dl { width: 100%; margin: 0; display: grid; gap: 12px; }
+.dc-info-body dl div { padding-top: 12px; border-top: 1px solid var(--dc-border); }
+.dc-info-body dt { font-size: 12px; color: var(--dc-muted); }
+.dc-info-body dd { margin: 2px 0 0; font-size: 14px; }
+.dc-info-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+/* ---------- incoming / outgoing call cards (mounted at dashboard level) ---------- */
+.dc-call-layer { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1300; display: flex; flex-direction: column; align-items: center; gap: 10px; width: min(420px, calc(100vw - 24px)); pointer-events: none; }
+.dc-call-layer > * { pointer-events: auto; }
+.dc-call-card { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px 16px; border: 1px solid var(--dc-border); border-radius: 16px; background: var(--dc-panel); color: var(--dc-text); box-shadow: 0 16px 40px var(--dc-shadow); animation: dc-toast-in 0.2s ease-out; }
+.dc-call-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+.dc-call-text small { font-size: 12px; color: var(--dc-muted); }
+.dc-call-text strong { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-call-buttons { display: flex; gap: 10px; }
+.dc-call-btn { display: grid; place-items: center; width: 48px; height: 48px; border: 0; border-radius: 50%; color: #fff; cursor: pointer; }
+.dc-call-btn.dc-accept { background: #16a34a; animation: dc-ring 1.4s ease-in-out infinite; }
+.dc-call-btn.dc-decline { background: #dc2626; }
+.dc-call-btn:focus-visible { outline: 2px solid #818cf8; outline-offset: 2px; }
+@keyframes dc-ring { 0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); } 50% { box-shadow: 0 0 0 10px rgba(22, 163, 74, 0); } }
+.dc-call-notice { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--dc-border); border-radius: 12px; background: var(--dc-panel); color: var(--dc-text); font-size: 14px; box-shadow: 0 8px 24px var(--dc-shadow); }
+.dc-call-notice button { border: 0; background: transparent; color: var(--dc-muted); cursor: pointer; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-call-btn.dc-accept, .dc-menu, .dc-info, .dc-call-card { animation: none; }
+}
+@media (max-width: 768px) {
+  .dc-action { width: 36px; height: 36px; }
+  .dc-callline { min-width: 190px; }
+}

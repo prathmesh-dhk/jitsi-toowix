@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import { connectDatabase, disconnectDatabase, pingDatabase } from './db/connection';
+import { connectDatabaseWithRetry, disconnectDatabase, pingDatabase } from './db/connection';
 import { getAvatarUploadRoot } from './uploads/avatarStorage';
 import { getChatImageUploadRoot } from './uploads/chatImageStorage';
 import { getChatAudioUploadRoot } from './uploads/chatAudioStorage';
@@ -82,6 +82,7 @@ import { startMeetingRetentionScheduler } from './meetings/retention.service';
 import { startRecordingRetentionScheduler } from './recordings/retention.service';
 import settingsRoutes from './routes/settings.routes';
 import contactRoutes from './routes/contact.routes';
+import directChatRoutes from './routes/directChat.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/companies', companyRoutes);
@@ -91,6 +92,7 @@ app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/contacts', contactRoutes);
+app.use('/api/direct-chat', directChatRoutes);
 // Served under /api/ so it flows through the same nginx proxy rule as the rest of the API,
 // with no extra reverse-proxy config needed -- see persistAvatarIfDataUri in avatarStorage.ts.
 // Avatar URLs are included in Jitsi participant identity and may be rendered by the meeting
@@ -154,7 +156,7 @@ process.on('SIGTERM', shutdown);
 async function bootstrap() {
   console.log('[Toowix Backend] Initializing service...');
   try {
-    await connectDatabase();
+    await connectDatabaseWithRetry();
     app.listen(PORT, () => {
       console.log(`[Toowix Backend] Server running on http://localhost:${PORT}`);
       console.log(`[Toowix Backend] Health check available at http://localhost:${PORT}/health`);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
+import { jitsiHttpScheme, jitsiWsScheme } from './jitsi/ensureLibJitsiMeetLoaded';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
 // low-level library Jitsi's own web app is built on, used directly so real MediaStreamTracks
@@ -100,9 +101,10 @@ async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<void> {
     // Fetched in parallel, not serially -- lib-jitsi-meet.min.js doesn't read window.config
     // until this hook's caller actually uses it, not at load/parse time, so there's no reason
     // to make one script wait on the other.
+    const scheme = jitsiHttpScheme(jitsiDomain);
     scriptLoadPromise = Promise.all([
-      loadScript(`https://${jitsiDomain}/config.js`),
-      loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
+      loadScript(`${scheme}://${jitsiDomain}/config.js`),
+      loadScript(`${scheme}://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
     ]).then(() => undefined);
   }
 
@@ -161,6 +163,15 @@ export function useLibJitsiConference({
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;
+
+        // Same fixup as useJitsiMeeting.ts: the deployment's config.js hardcodes its own public
+        // hostname/scheme into bosh/websocket rather than the host:port we actually reached it on.
+        if (config.bosh) {
+          config.bosh = config.bosh.replace(/^https?:\/\/[^/]+/, `${jitsiHttpScheme(jitsiDomain)}://${jitsiDomain}`);
+        }
+        if (config.websocket) {
+          config.websocket = config.websocket.replace(/^wss?:\/\/[^/]+/, `${jitsiWsScheme(jitsiDomain)}://${jitsiDomain}`);
+        }
 
         JitsiMeetJS.setLogLevel(JitsiMeetJS.logLevels.ERROR);
         JitsiMeetJS.init({ disableAudioLevels: false });

@@ -282,6 +282,15 @@ export function MeetingRoomPage() {
     }
   });
 
+  // A voice-only call started from a 1:1 chat (?call=voice): camera stays off and video is not sent at all.
+  const [isVoiceCall] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('call') === 'voice';
+    } catch {
+      return false;
+    }
+  });
+
   const [participation, setParticipation] = useState<'guest' | 'account'>(() => {
     if (location.state?.participation === 'account') return 'account';
     try {
@@ -404,7 +413,7 @@ export function MeetingRoomPage() {
   // Google Meet call -- it still stays off for the REST of the current session the moment the
   // person turns it off themselves (this is still real React state, not reset on every render),
   // it just never again persists that choice into a future, unrelated meeting.
-  const [videoEnabled, setVideoEnabled] = useState(true);
+  const [videoEnabled, setVideoEnabled] = useState(!isVoiceCall);
   const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -2508,7 +2517,7 @@ export function MeetingRoomPage() {
       if ((!mediaReady && !isFromConversation) || autoRejoinStartedRef.current) return;
       autoRejoinStartedRef.current = true;
       if (timer) window.clearInterval(timer);
-      void handleJoinMeeting();
+      void handleJoinMeeting(isVoiceCall);
     };
 
     attemptRejoin();
@@ -2987,6 +2996,14 @@ export function MeetingRoomPage() {
       setTimeout(() => setParticipantToast((t) => (t === 'You have been muted by the host' ? null : t)), 5000);
     }
   });
+
+  // Voice-only call: once connected, stop receiving video too (audio-only), so it really is just a voice call.
+  const voiceCallAudioOnlyAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!isVoiceCall || !jitsiMeeting.connected || voiceCallAudioOnlyAppliedRef.current) return;
+    voiceCallAudioOnlyAppliedRef.current = true;
+    jitsiMeeting.setLowDataMode('audio-only').catch(() => { voiceCallAudioOnlyAppliedRef.current = false; });
+  }, [isVoiceCall, jitsiMeeting.connected]);
 
   // Dev-only live-diagnosis helper for the reported "AirPods mic doesn't auto-switch" issue.
   // Run window.__toowixMicStatus() in the console during a real test to see, in one place:

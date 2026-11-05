@@ -133,6 +133,16 @@ export function playChatMessageTone() {
   ]);
 }
 
+// One ring of an incoming (or outgoing) 1:1 call: two short pulses. Repeated every ~2.5s while ringing.
+export function playCallRingTone() {
+  playTone([
+    { freq: 660, startMs: 0, durationMs: 380, gain: 0.09 },
+    { freq: 880, startMs: 0, durationMs: 380, gain: 0.05 },
+    { freq: 660, startMs: 480, durationMs: 380, gain: 0.09 },
+    { freq: 880, startMs: 480, durationMs: 380, gain: 0.05 }
+  ]);
+}
+
 // A soft, low double-beep -- a gentle heads-up (time remaining), not an alert.
 export function playTimeWarningTone() {
   playTone([

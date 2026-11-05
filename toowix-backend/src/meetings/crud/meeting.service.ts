@@ -447,7 +447,8 @@ export async function listMeetings(firebaseUid: string | undefined): Promise<ISe
     let payload = cacheOn ? meetingsListCache.get(cacheKey) : undefined;
 
     if (!payload) {
-      const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+      // Call rooms behind 1:1 chat voice/video calls (purpose DIRECT_CALL) are not meetings anyone scheduled.
+      const filter = { ...(user.companyId ? { companyId: user.companyId } : { createdBy: user._id }), purpose: { $ne: 'DIRECT_CALL' } };
       const meetingDocuments = await Meeting.find(filter)
         .populate('createdBy', 'fullName email avatarUrl')
         .sort({ createdAt: -1 })
@@ -577,7 +578,7 @@ export async function listConversations(firebaseUid: string | undefined): Promis
       return { body: { error: 'User profile not found' }, httpStatus: 404 };
     }
 
-    const filter = user.companyId ? { companyId: user.companyId } : { createdBy: user._id };
+    const filter = { ...(user.companyId ? { companyId: user.companyId } : { createdBy: user._id }), purpose: { $ne: 'DIRECT_CALL' } };
     const meetingDocuments = await Meeting.find({ ...filter, 'chatMessages.0': { $exists: true } })
       .select('name roomSlug type scheduledAt actualStartedAt actualEndedAt endedAt createdAt chatMessages chatReadReceipts participants sharedFiles cancelledAt')
       .sort({ createdAt: -1 })

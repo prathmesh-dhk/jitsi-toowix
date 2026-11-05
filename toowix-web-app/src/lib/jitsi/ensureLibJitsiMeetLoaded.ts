@@ -1,5 +1,14 @@
 import { loadScript } from './mediaHelpers';
 
+// A jitsiDomain on port 80 has no TLS listener there -- plain http/ws, not https/wss. Every
+// other port (8443, talk.toowix.com's 443, etc.) is assumed to terminate TLS as before.
+export function jitsiHttpScheme(jitsiDomain: string): 'http' | 'https' {
+  return jitsiDomain.endsWith(':80') ? 'http' : 'https';
+}
+export function jitsiWsScheme(jitsiDomain: string): 'ws' | 'wss' {
+  return jitsiDomain.endsWith(':80') ? 'ws' : 'wss';
+}
+
 // Extracted out of useJitsiMeeting.ts (a large, meeting-room-only file lazy-loaded as its own
 // chunk) so the dashboard's "Start an instant meeting" flow can kick this download off the
 // moment the person clicks, without pulling that whole file -- and everything it in turn imports
@@ -27,9 +36,10 @@ export async function ensureLibJitsiMeetLoaded(jitsiDomain: string): Promise<voi
     // The browser library and the Jitsi deployment must still be the same release. A copied local
     // lib-jitsi-meet build had drifted from Jicofo/JVB and rejected valid simulcast SDP from a
     // third participant as duplicate SSRC lines. Always use the active server's own build.
+    const scheme = jitsiHttpScheme(jitsiDomain);
     scriptLoadPromise = Promise.all([
-      loadScript(`https://${jitsiDomain}/config.js`),
-      loadScript(`https://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
+      loadScript(`${scheme}://${jitsiDomain}/config.js`),
+      loadScript(`${scheme}://${jitsiDomain}/libs/lib-jitsi-meet.min.js`),
     ]).then(() => undefined);
   }
 

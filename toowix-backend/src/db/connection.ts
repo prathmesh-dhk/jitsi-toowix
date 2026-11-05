@@ -32,8 +32,47 @@ export const connectDatabase = async (customUri?: string): Promise<typeof mongoo
 
     return mongoose;
   } catch (error) {
-    console.error('[Database] Failed to connect to MongoDB:', error);
+    // One line, not the whole driver topology dump (which is huge and repeated on every retry); the
+    // caller that finally gives up logs the full error.
+    console.error('[Database] Failed to connect to MongoDB:', (error as Error)?.message || error);
     throw error;
+  }
+};
+
+export interface IConnectRetryOptions {
+  /** Total attempts before giving up (default MONGODB_CONNECT_ATTEMPTS or 6). */
+  attempts?: number;
+  /** First wait between attempts; doubles each time up to maxDelayMs. */
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  /** Test hooks. */
+  connect?: () => Promise<typeof mongoose>;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Connects to MongoDB, retrying with growing waits (1s, 2s, 4s, 8s, 15s...) before giving up, so a brief
+ * network drop or a slow first connection at startup does not kill the whole server. Only the STARTUP
+ * path uses this (src/index.ts); scripts keep the single-attempt connectDatabase. Once connected, the driver
+ * itself reconnects automatically if the connection later drops.
+ */
+export const connectDatabaseWithRetry = async (options: IConnectRetryOptions = {}): Promise<typeof mongoose> => {
+  const attempts = Math.max(1, options.attempts ?? (parseInt(process.env.MONGODB_CONNECT_ATTEMPTS || '6', 10) || 6));
+  const baseDelayMs = options.baseDelayMs ?? 1000;
+  const maxDelayMs = options.maxDelayMs ?? 15_000;
+  const connect = options.connect ?? (() => connectDatabase());
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await connect();
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      const wait = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
+
+      console.warn(`[Database] Attempt ${attempt}/${attempts} failed. Retrying in ${Math.round(wait / 100) / 10}s (check your network / the Atlas IP access list if this keeps happening)...`);
+      await sleep(wait);
+    }
   }
 };
 

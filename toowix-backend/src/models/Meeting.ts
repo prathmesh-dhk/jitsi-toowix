@@ -19,6 +19,10 @@ export interface IMeeting {
   name: string;
   roomSlug: string;
   type: MeetingType;
+  // 'DIRECT_CALL' marks the throwaway room behind a 1:1 chat voice/video call. It is kept out of every
+  // meetings / conversations list and removed automatically (callExpiresAt, TTL index) a day later.
+  purpose?: 'DIRECT_CALL' | null;
+  callExpiresAt?: Date | null;
   scheduledAt?: Date | null;
   durationMinutes?: number | null;
   cancelledAt?: Date | null;
@@ -265,6 +269,8 @@ const MeetingSchema = new Schema<IMeetingDocument>(
       default: [],
     },
     conversationAdminEmail: { type: String, default: null, trim: true, lowercase: true },
+    purpose: { type: String, enum: [ 'DIRECT_CALL' ], default: undefined },
+    callExpiresAt: { type: Date, default: undefined },
     waitingQueue: {
       type: [{
         id: { type: String, required: true },
@@ -302,6 +308,8 @@ const MeetingSchema = new Schema<IMeetingDocument>(
 MeetingSchema.index({ companyId: 1, createdAt: -1 });
 MeetingSchema.index({ createdBy: 1, createdAt: -1 });
 MeetingSchema.index({ 'recurrence.seriesId': 1 });
+// TTL: a 1:1 call room is deleted by MongoDB itself once callExpiresAt passes (only documents that have the field).
+MeetingSchema.index({ callExpiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const Meeting: Model<IMeetingDocument> =
   mongoose.models.Meeting || mongoose.model<IMeetingDocument>('Meeting', MeetingSchema);

@@ -219,7 +219,17 @@ function publishRoomSignal(room: string, signal: IRoomSignal): void {
  * EventSource cannot attach an Authorization header, therefore the browser supplies the same
  * token in its query string for SSE and the polling fallback. POST sends it in the JSON body.
  */
-function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response): boolean {
+interface IAttendanceClaim {
+  room: string;
+  moderator: boolean;
+  identity: { email: string; id: string; name: string };
+}
+
+// Signal types that only the real meeting moderator may broadcast -- a plain participant's
+// attendance token proves they're IN the room, not that they're allowed to act as its host.
+const MODERATOR_ONLY_SIGNAL_TYPES = new Set(['MEETING_ENDED_FOR_EVERYONE']);
+
+function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response): IAttendanceClaim | null {
   const rawToken = typeof req.body?.attendanceToken === 'string'
     ? req.body.attendanceToken
     : typeof req.query?.attendanceToken === 'string'
@@ -229,7 +239,7 @@ function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response):
 
   if (!rawToken) {
     res.status(401).json({ error: 'Meeting admission is required to use room signals.' });
-    return false;
+    return null;
   }
 
   try {
@@ -241,14 +251,14 @@ function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response):
 
     if (claim.purpose !== 'attendance' || claim.room !== room) {
       res.status(403).json({ error: 'This meeting token does not grant access to this room.' });
-      return false;
+      return null;
     }
+
+    return { room, moderator: !!claim.moderator, identity: claim.identity };
   } catch {
     res.status(401).json({ error: 'A valid meeting admission token is required to use room signals.' });
-    return false;
+    return null;
   }
-
-  return true;
 }
 
 /**
@@ -256,9 +266,16 @@ function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response):
  * Broadcast a real-time WebRTC signal (offer, answer, candidate, screen-share state).
  */
 export async function postSignalHandler(req: any, res: Response): Promise<void> {
-  if (!requireSignalAttendanceToken(req, res)) return;
+  const claim = requireSignalAttendanceToken(req, res);
+  if (!claim) return;
   const room = String(req.params.roomSlug).toLowerCase();
-  const { sender, type, payload, msgId, senderSessionId, targetSessionId } = req.body;
+  const { type, payload, msgId, senderSessionId, targetSessionId } = req.body;
+  const signalType = String(type || '');
+
+  if (MODERATOR_ONLY_SIGNAL_TYPES.has(signalType) && !claim.moderator) {
+    res.status(403).json({ error: 'Only the meeting host can send this signal.' });
+    return;
+  }
   if (!roomSignalsMap.has(room)) {
     roomSignalsMap.set(room, []);
   }
@@ -270,8 +287,11 @@ export async function postSignalHandler(req: any, res: Response): Promise<void> 
     msgId: typeof msgId === 'string' ? msgId.slice(0, 120) : undefined,
     senderSessionId: typeof senderSessionId === 'string' ? senderSessionId.slice(0, 120) : undefined,
     targetSessionId: typeof targetSessionId === 'string' ? targetSessionId.slice(0, 120) : null,
-    sender: String(sender || 'Anonymous'),
-    type: String(type || ''),
+    // Taken from the verified attendance token, never the request body -- the token's identity
+    // IS the display name the participant was admitted under, so this loses nothing legitimate
+    // while closing off sender spoofing/impersonation (e.g. claiming to be "the host").
+    sender: claim.identity?.name ? String(claim.identity.name).slice(0, 120) : 'Participant',
+    type: signalType,
     payload: payload || null,
     timestamp: Date.now(),
   };

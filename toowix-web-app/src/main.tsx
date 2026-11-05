@@ -9,10 +9,12 @@ import './index.css';
 // boots, since the domain itself never depends on which page the person is on.
 try {
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
+  // Port 80 has no TLS listener -- preconnecting https there just wastes a handshake attempt.
+  const scheme = jitsiDomain.endsWith(':80') ? 'http' : 'https';
   const preconnect = document.createElement('link');
 
   preconnect.rel = 'preconnect';
-  preconnect.href = `https://${jitsiDomain}`;
+  preconnect.href = `${scheme}://${jitsiDomain}`;
   preconnect.crossOrigin = 'anonymous';
   document.head.appendChild(preconnect);
 } catch {

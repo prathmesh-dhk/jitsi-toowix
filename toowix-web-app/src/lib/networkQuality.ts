@@ -36,24 +36,36 @@ export const NETWORK_THRESHOLDS = {
 
 const isNumber = (value: number | null): value is number => value !== null && Number.isFinite(value);
 
+// True for the signals that are reliable the instant they're observed -- an actually-broken ICE
+// transport, real measured RTT, or real measured packet loss. None of these depend on the
+// browser's own bandwidth estimator having had time to settle.
+export function isRttOrLossPoorSignal(metrics: INetworkMetrics): boolean {
+  return Boolean(metrics.connectionState) && ![ 'connected', 'completed' ].includes(metrics.connectionState!)
+    || (isNumber(metrics.rttMs) && metrics.rttMs > NETWORK_THRESHOLDS.poorRttMs)
+    || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent > NETWORK_THRESHOLDS.poorLossPercent);
+}
+
+// Edge may report 0 (or omit this field) for a healthy selected ICE pair. A non-positive estimate
+// is "unknown", not proof that the call is limited. The estimate is also only meaningful while we
+// are actually SENDING video: with the camera off (or no camera) the sender has nothing to probe
+// with, so Chrome leaves the estimate tiny even on a perfect ethernet link -- that read as a false
+// "Limited connection". CONFIRMED via a live call's own JVB logs (BandwidthAllocator/ProbeController):
+// this estimate is ALSO unreliable for several seconds right after a brand-new high-bitrate track
+// starts (most commonly: a 1080p screen share) -- the congestion controller hasn't re-probed
+// upward from whatever its last steady-state estimate was yet, so it can read as a real "Limited"
+// moment on an otherwise completely healthy network. Callers with timing context for a recent
+// high-bitrate track start should apply a grace period around this specific signal (see
+// useNetworkQuality.ts); this function only reports the raw signal, it doesn't know about timing.
+export function isBitrateOnlyPoorSignal(metrics: INetworkMetrics): boolean {
+  return isNumber(metrics.availableOutgoingBitrateKbps)
+    && isNumber(metrics.videoBitrateKbps)
+    && metrics.videoBitrateKbps > 20
+    && metrics.availableOutgoingBitrateKbps > 0
+    && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps;
+}
+
 export function classifyNetwork(metrics: INetworkMetrics): Exclude<NetworkState, 'RECOVERING'> {
-  if (metrics.connectionState && ![ 'connected', 'completed' ].includes(metrics.connectionState)) {
-    return 'POOR';
-  }
-  if (
-    (isNumber(metrics.rttMs) && metrics.rttMs > NETWORK_THRESHOLDS.poorRttMs)
-    || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent > NETWORK_THRESHOLDS.poorLossPercent)
-    // Edge may report 0 (or omit this field) for a healthy selected ICE pair.
-    // A non-positive estimate is "unknown", not proof that the call is limited.
-    // The estimate is also only meaningful while we are actually SENDING video: with the camera
-    // off (or no camera) the sender has nothing to probe with, so Chrome leaves the estimate
-    // tiny even on a perfect ethernet link -- that read as a false "Limited connection".
-    || (isNumber(metrics.availableOutgoingBitrateKbps)
-      && isNumber(metrics.videoBitrateKbps)
-      && metrics.videoBitrateKbps > 20
-      && metrics.availableOutgoingBitrateKbps > 0
-      && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps)
-  ) {
+  if (isRttOrLossPoorSignal(metrics) || isBitrateOnlyPoorSignal(metrics)) {
     return 'POOR';
   }
   if (
@@ -102,7 +114,9 @@ export function getMediaQualityPolicy(
   if (state === 'DEGRADED' || state === 'RECOVERING') {
     return {
       audioOnly: false,
-      desktopFps: 8,
+      // Was 8 -- noticeably choppier than Jitsi/Meet for motion content (scrolling, cursor,
+      // a shared video) even on a merely "degraded", not actually poor, network.
+      desktopFps: 15,
       desktopMaxHeight: 720,
       desktopMaxWidth: 1280,
       lastN: 2,
@@ -118,7 +132,11 @@ export function getMediaQualityPolicy(
 
   return {
     audioOnly: false,
-    desktopFps: 10,
+    // Was 10 -- far below the ~24-30fps a healthy connection can carry, and well below what
+    // Jitsi/Meet ask for by default. On a GOOD network there's no bandwidth reason to throttle
+    // motion (scrolling, cursor movement, a shared video) this hard; only POOR/DEGRADED still
+    // trade frame rate for headroom.
+    desktopFps: 24,
     desktopMaxHeight: 1080,
     desktopMaxWidth: 1920,
     lastN: normalLastN,

@@ -1,12 +1,19 @@
 import { useCallback, useEffect } from 'react';
 import {
   classifyNetwork,
+  isBitrateOnlyPoorSignal,
+  isRttOrLossPoorSignal,
   NETWORK_RECOVERY_STABLE_MS,
   NETWORK_STATS_INTERVAL_MS,
   type INetworkMetrics,
   type LowDataMode,
   type NetworkState,
 } from '../networkQuality';
+
+// How long after a local high-bitrate track (a screen share) starts the bitrate-only POOR signal
+// is distrusted -- see isBitrateOnlyPoorSignal's own comment for the confirmed root cause. Set
+// comfortably above the ~1-3s ramp-up window actually observed in a live call's JVB logs.
+const BWE_RAMP_UP_GRACE_MS = 8000;
 
 // Extracted from useJitsiMeeting.ts (Track 3, Phase 2, item 4): network-quality metrics collection
 // and state classification. Phase 1's original assessment called this "likely lower risk... more
@@ -54,6 +61,7 @@ export interface INetworkQualityDeps {
   degradedSampleCountRef: { current: number };
   goodSinceRef: { current: number | null };
   setNetworkState: (state: NetworkState) => void;
+  recentHighBitrateTrackStartAtRef: { current: number | null };
 }
 
 /**
@@ -66,13 +74,25 @@ export function useNetworkQualityMonitor(deps: INetworkQualityDeps): void {
   const {
     joined, roomRef, applyMediaQualityPolicy, lowDataModeRef, networkMetricsRef, networkStateRef,
     previousVideoStatsRef, previousPacketStatsRef, poorSampleCountRef, degradedSampleCountRef,
-    goodSinceRef, setNetworkState,
+    goodSinceRef, setNetworkState, recentHighBitrateTrackStartAtRef,
   } = deps;
 
   const updateNetworkStateFromMetrics = useCallback(async (metrics: INetworkMetrics) => {
     networkMetricsRef.current = metrics;
-    const observed = classifyNetwork(metrics);
     const now = Date.now();
+    // CONFIRMED BUG (reported: host sees "Limited connection" while screen sharing on a
+    // genuinely good network): a brand-new high-bitrate track's effect on
+    // availableOutgoingBitrateKbps is only trustworthy once the browser's own congestion
+    // controller has had a few seconds to re-probe upward -- see isBitrateOnlyPoorSignal's own
+    // comment for the live-call JVB log evidence. During that grace window, a bitrate-ONLY POOR
+    // reading (no real RTT/loss problem alongside it) is treated as an inconclusive sample
+    // instead of a real signal, so this specific false alarm can't fire; a genuine RTT/loss
+    // problem is never suppressed, grace window or not.
+    const inBweRampUpGrace = recentHighBitrateTrackStartAtRef.current !== null
+      && now - recentHighBitrateTrackStartAtRef.current < BWE_RAMP_UP_GRACE_MS;
+    const observed = inBweRampUpGrace && !isRttOrLossPoorSignal(metrics) && isBitrateOnlyPoorSignal(metrics)
+      ? classifyNetwork({ ...metrics, availableOutgoingBitrateKbps: null })
+      : classifyNetwork(metrics);
     const current = networkStateRef.current;
     let next = current;
 

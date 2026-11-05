@@ -27,6 +27,7 @@ import {
   Share2,
   Contact as ContactIcon,
   MessageSquare,
+  MessageCircle,
 } from 'lucide-react';
 import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { ConversationsPanel } from '../components/ConversationsPanel';
@@ -45,12 +46,17 @@ import { PeoplePanel } from '../components/PeoplePanel';
 import { TeamsPanel } from '../components/TeamsPanel';
 import { NotificationBell } from '../components/NotificationBell';
 import { NotificationToasts } from '../components/NotificationToasts';
+import { DirectChatPanel } from '../components/directChat/DirectChatPanel';
+import { DirectChatToasts } from '../components/directChat/DirectChatToasts';
+import { DirectChatCallOverlay } from '../components/directChat/DirectChatCallOverlay';
+import { useDirectChat } from '../lib/directChat/useDirectChat';
+import { badgeLabel } from '../lib/directChat/format';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const JITSI_DOMAIN = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
-type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams' | 'conversations';
-const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams', 'conversations'];
+type DashboardTab = 'home' | 'schedule' | 'upcoming' | 'past' | 'recordings' | 'contacts' | 'people' | 'teams' | 'conversations' | 'chats';
+const VALID_DASHBOARD_TABS: DashboardTab[] = ['home', 'schedule', 'upcoming', 'past', 'recordings', 'contacts', 'people', 'teams', 'conversations', 'chats'];
 
 interface IMeeting {
   id: string;
@@ -222,6 +228,16 @@ export function DashboardPage() {
     sessionStorage.setItem('toowix_dashboard_active_tab', tab);
     setSearchParams(tab === 'home' ? {} : { tab }, { replace: true });
   };
+
+  // Direct (1:1) chat lives at the dashboard level, not inside the Chats screen, so the live connection,
+  // the unread badge in the menu and the new-message toasts keep working on every dashboard tab.
+  const chat = useDirectChat({
+    enabled: Boolean(currentUser?.id),
+    meId: String(currentUser?.id || ''),
+    panelVisible: activeTab === 'chats',
+    // A 1:1 call that was answered (by either side) continues in a Toowix meeting room; voice calls start with the camera off.
+    onJoinCall: (roomSlug, mode) => navigate(`/meet/${encodeURIComponent(roomSlug)}?direct=1&call=${mode}`),
+  });
 
   // 2. Synchronize activeTab when URL searchParams change
   useEffect(() => {
@@ -520,8 +536,15 @@ export function DashboardPage() {
   const secondaryMeetings = spotlightMeetings.slice(1, 3);
 
   return (
-    <div className={`dashboard-layout ${activeTab === 'conversations' ? 'conversations-active-layout' : ''}`}>
+    <div className={`dashboard-layout ${activeTab === 'conversations' || activeTab === 'chats' ? 'conversations-active-layout' : ''}`}>
       <NotificationToasts />
+      <DirectChatCallOverlay chat={chat} isDark={isDark} />
+      <DirectChatToasts
+        toasts={chat.toasts}
+        isDark={isDark}
+        onOpen={(conversationId) => { chat.selectConversation(conversationId); setActiveTab('chats'); }}
+        onDismiss={chat.dismissToast}
+      />
 
       {/* Mobile Sidebar Backdrop Overlay */}
       <div
@@ -596,6 +619,7 @@ export function DashboardPage() {
             { key: 'upcoming', label: 'Upcoming', icon: <Clock size={18} />, action: () => { setActiveTab('upcoming'); setSidebarOpen(false); } },
             { key: 'past', label: 'Past Meetings', icon: <History size={18} />, action: () => { setActiveTab('past'); setSidebarOpen(false); } },
             { key: 'recordings', label: 'Recordings', icon: <Video size={18} />, action: () => { setActiveTab('recordings'); setSidebarOpen(false); } },
+            { key: 'chats', label: 'Chats', icon: <MessageCircle size={18} />, badge: chat.state.totalUnread, action: () => { setActiveTab('chats'); setSidebarOpen(false); } },
             { key: 'conversations', label: 'Conversations', icon: <MessageSquare size={18} />, action: () => { setActiveTab('conversations'); setSidebarOpen(false); } },
             { key: 'contacts', label: 'Contact book', icon: <ContactIcon size={18} />, action: () => { setActiveTab('contacts'); setSidebarOpen(false); } },
           ].map((item) => (
@@ -620,6 +644,7 @@ export function DashboardPage() {
             >
               {item.icon}
               <span>{item.label}</span>
+              {item.badge ? <span className="dc-nav-badge" role="status" aria-label={`${item.badge} unread chat messages`}>{badgeLabel(item.badge)}</span> : null}
             </button>
           ))}
 
@@ -963,7 +988,7 @@ export function DashboardPage() {
         {/* =========================================================================
             Dashboard Content Canvas
             ========================================================================= */}
-        <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}${activeTab === 'conversations' ? ' conversations-canvas' : ''}`}>
+        <div className={`dashboard-canvas${activeTab === 'home' ? '' : ' dashboard-tab-panel'}${activeTab === 'conversations' || activeTab === 'chats' ? ' conversations-canvas' : ''}`}>
           {activeTab === 'schedule' ? (
             <ScheduleCalendar
               meetings={allMeetings.map((meeting) => ({
@@ -988,6 +1013,13 @@ export function DashboardPage() {
             <ContactBookPanel />
           ) : activeTab === 'recordings' ? (
             <RecordingsPanel />
+          ) : activeTab === 'chats' ? (
+            <DirectChatPanel
+              chat={chat}
+              isDark={isDark}
+              meId={String(currentUser?.id || '')}
+              initialChatId={searchParams.get('chat') || undefined}
+            />
           ) : activeTab === 'conversations' ? (
             <ConversationsPanel
               isDark={isDark}

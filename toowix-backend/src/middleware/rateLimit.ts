@@ -100,3 +100,25 @@ export const contactsRateLimiter = rateLimit({
   keyGenerator: keyByUserOrIp,
   message: { error: 'Too many contact requests. Please slow down and try again shortly.' },
 });
+
+/** Direct (1:1) chat: sending, reading, the live stream's reconnects. Generous per-user limit (a
+ * fast typist plus read receipts is well under it) that still bounds a looping client. */
+export const directChatRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  message: { error: 'Too many chat requests. Please slow down and try again shortly.', code: 'RATE_LIMITED' },
+});
+
+/** Searching registered users is the one call that can enumerate accounts, so it gets its own,
+ * tighter per-user limit on top of the general chat limit. */
+export const directChatSearchRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: keyByUserOrIp,
+  message: { error: 'Too many searches. Please wait a moment and try again.', code: 'RATE_LIMITED' },
+});
