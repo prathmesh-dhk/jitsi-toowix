@@ -47,6 +47,7 @@ export interface IParticipantGalleryRemote {
   muted: boolean;
   video: boolean;
   raisedHand?: boolean;
+  away?: boolean;
   stream?: MediaStream | null;
 }
 
@@ -523,6 +524,7 @@ export function ParticipantGallery({
                   videoEnabled={remote.video}
                   muted={remote.muted}
                   raisedHand={remote.raisedHand}
+                  away={remote.away}
                   theme={getParticipantColorTheme(remote.name, idx + 1)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect

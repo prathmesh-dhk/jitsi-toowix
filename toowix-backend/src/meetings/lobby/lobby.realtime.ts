@@ -228,6 +228,14 @@ interface IAttendanceClaim {
 // Signal types that only the real meeting moderator may broadcast -- a plain participant's
 // attendance token proves they're IN the room, not that they're allowed to act as its host.
 const MODERATOR_ONLY_SIGNAL_TYPES = new Set(['MEETING_ENDED_FOR_EVERYONE']);
+// Every real payload here is small text/metadata (a chat message, a poll question, a boolean
+// away-status, an emoji) -- file/image attachments go through their own upload endpoints and are
+// referenced by URL, never embedded here. Confirmed via QA load testing (2026-11-06) that without
+// this cap the global body-size limit (16MB) was the only ceiling, letting a single signal's
+// payload occupy up to ~15MB x 100 stored signals (the per-room cap below) = over 1GB of server
+// RAM for one room alone, with no limit on how many rooms do this simultaneously. 32KB comfortably
+// covers even a very long chat message or a poll with many options.
+const MAX_SIGNAL_PAYLOAD_BYTES = 32 * 1024;
 
 function requireSignalAttendanceToken(req: AuthenticatedRequest, res: Response): IAttendanceClaim | null {
   const rawToken = typeof req.body?.attendanceToken === 'string'
@@ -274,6 +282,10 @@ export async function postSignalHandler(req: any, res: Response): Promise<void> 
 
   if (MODERATOR_ONLY_SIGNAL_TYPES.has(signalType) && !claim.moderator) {
     res.status(403).json({ error: 'Only the meeting host can send this signal.' });
+    return;
+  }
+  if (payload !== undefined && payload !== null && Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_SIGNAL_PAYLOAD_BYTES) {
+    res.status(413).json({ error: 'Signal payload is too large.' });
     return;
   }
   if (!roomSignalsMap.has(room)) {

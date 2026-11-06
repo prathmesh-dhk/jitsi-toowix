@@ -1,6 +1,6 @@
 import { auth } from '../lib/firebase';
 import { useMediaPreview } from '../lib/useMediaPreview';
-import { ensureLibJitsiMeetLoaded, useJitsiMeeting } from '../lib/useJitsiMeeting';
+import { ensureLibJitsiMeetLoaded, getRoomDeviceSessionId, useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
 import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
@@ -431,7 +431,7 @@ export function MeetingRoomPage() {
   const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
   const [remoteParticipants, setRemoteParticipants] = useState<
-    Array<{ id: string; name: string; avatarUrl?: string | null; moderator?: boolean; muted: boolean; video: boolean; raisedHand?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
+    Array<{ id: string; name: string; deviceSessionId?: string | null; avatarUrl?: string | null; moderator?: boolean; muted: boolean; video: boolean; raisedHand?: boolean; away?: boolean; stream?: MediaStream | null; audioStream?: MediaStream | null }>
   >([]);
   // Join order is the default for the speaker-view rail. It is deliberately independent from
   // transient audio levels so participant cards do not continuously move up and down.
@@ -578,6 +578,21 @@ export function MeetingRoomPage() {
   const [floatingEmojis, setFloatingEmojis] = useState<Array<{ id: number; emoji: string; left: number }>>([]);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [handRaisedToast, setHandRaisedToast] = useState<string | null>(null);
+  const [awayToast, setAwayToast] = useState<string | null>(null);
+  // A plain setTimeout(() => setAwayToast(null), 4000) per call is wrong here: a quick away-then-
+  // back (or back-then-away from a different participant) within that 4s window schedules a
+  // SECOND clear, and the FIRST one firing later unconditionally wipes out the newer toast early.
+  // Tracking (and cancelling) the previous timer makes only the most recent toast's own timer
+  // able to clear it.
+  const awayToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showAwayToast = useCallback((message: string) => {
+    if (awayToastTimeoutRef.current) clearTimeout(awayToastTimeoutRef.current);
+    setAwayToast(message);
+    awayToastTimeoutRef.current = setTimeout(() => {
+      awayToastTimeoutRef.current = null;
+      setAwayToast(null);
+    }, 4000);
+  }, []);
   const [pipHintToast, setPipHintToast] = useState<string | null>(null);
   // One-time "Enable Auto Picture-in-Picture" onboarding banner. Browsers reject a
   // script's PiP request that isn't backed by a real click (confirmed: NotAllowedError on
@@ -728,11 +743,13 @@ export function MeetingRoomPage() {
   const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [remotePresenterName, setRemotePresenterName] = useState<string | null>(null);
   const remotePresentationVideoRef = useRef<HTMLVideoElement | null>(null);
-  const sessionIdRef = useRef<string>(
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : Math.random().toString(36).substring(2, 11) + '-' + Date.now().toString(36)
-  );
+  // Deliberately the SAME stable per-tab id useJitsiMeeting already broadcasts to every other
+  // participant as the Jitsi `deviceSessionId` presence property (see getRoomDeviceSessionId) --
+  // not a separately generated random id. Sharing one id lets a signal's `senderSessionId` be
+  // matched back to the correct remote tile via `remote.deviceSessionId`, a value that can never
+  // collide between two participants the way a typed display name can (two people can both type
+  // "Jayesh"; they can never end up with the same browser-tab session id).
+  const sessionIdRef = useRef<string>(getRoomDeviceSessionId(roomId));
   const processedSignalIdsRef = useRef<Set<string>>(new Set());
   // Signal dedup cache is unbounded time and never cleared for the life of the call,
   // so a long meeting with active screen-share signaling would otherwise grow it forever.
@@ -3273,11 +3290,13 @@ export function MeetingRoomPage() {
         return {
           id: r.id,
           name: r.name,
+          deviceSessionId: r.deviceSessionId,
           avatarUrl: r.avatarUrl,
           moderator: r.isModerator,
           muted: r.muted,
           video: r.video,
           raisedHand: existing?.raisedHand || false,
+          away: existing?.away || false,
           stream: r.stream,
           audioStream: r.audioStream,
         } as any;
@@ -4030,6 +4049,61 @@ export function MeetingRoomPage() {
     } catch { }
   };
 
+  // Mobile browsers (iOS Safari especially) can silently drop a backgrounded tab's media when a
+  // real phone/WhatsApp call takes over -- some OS/browser combinations even discard the whole
+  // backgrounded tab under memory pressure, which is what shows up as "I answered a call and got
+  // kicked out of the meeting." Proactively releasing the mic/camera the instant the tab is
+  // backgrounded (instead of leaving it to the OS to grab mid-call) is the standard mitigation:
+  // it reduces the odds the tab gets discarded for being a heavy background resource user, and it
+  // tells every other participant why this person suddenly went silent, instead of them assuming
+  // a dropped connection. The call itself is left alone -- only the local tracks are muted, so
+  // coming back resumes in place rather than needing to rejoin.
+  const wasAwayAudioMutedRef = useRef(false);
+  const wasAwayVideoMutedRef = useRef(false);
+  const isAwayRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasJoined) return;
+
+    const goAway = () => {
+      if (isAwayRef.current) return;
+      isAwayRef.current = true;
+      // Remember only whether THIS transition muted them, so returning never flips a mute/camera
+      // state the person had already chosen on purpose before stepping away.
+      wasAwayAudioMutedRef.current = jitsiMeeting.localAudioMuted;
+      wasAwayVideoMutedRef.current = jitsiMeeting.localVideoMuted;
+      if (!jitsiMeeting.localAudioMuted) jitsiMeeting.toggleAudio();
+      if (!jitsiMeeting.localVideoMuted) jitsiMeeting.toggleVideo();
+      postRoomSignal('AWAY_STATUS', { away: true });
+    };
+
+    const comeBack = () => {
+      if (!isAwayRef.current) return;
+      isAwayRef.current = false;
+      if (!wasAwayAudioMutedRef.current && jitsiMeeting.localAudioMuted) jitsiMeeting.toggleAudio();
+      if (!wasAwayVideoMutedRef.current && jitsiMeeting.localVideoMuted) jitsiMeeting.toggleVideo();
+      postRoomSignal('AWAY_STATUS', { away: false });
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') goAway();
+      else comeBack();
+    };
+    // pagehide fires when the tab is about to be frozen/discarded -- earlier and more reliable
+    // than visibilitychange alone on iOS Safari, which can delay delivering it.
+    const onPageHide = () => goAway();
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', comeBack);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', comeBack);
+    };
+  }, [hasJoined, postRoomSignal, jitsiMeeting.localAudioMuted, jitsiMeeting.localVideoMuted, jitsiMeeting.toggleAudio, jitsiMeeting.toggleVideo]);
+
   // Screen sharing goes through lib-jitsi-meet's real JVB media path (replaceTrack swaps the
   // published camera track for a desktop track) -- not a separate STUN-only RTCPeerConnection
   // mesh. isScreenSharing is kept in sync from the hook's own state (set only after the OS
@@ -4070,14 +4144,21 @@ export function MeetingRoomPage() {
         const isRaised = Boolean(payload?.raised);
         const personName = payload?.name || sender || 'Participant';
         // Only ever update an EXISTING entry -- the real roster is driven entirely by
-        // jitsiMeeting.remoteParticipants (synced a few lines up). senderSessionId is this
-        // app's own HTTP-signaling id, unrelated to real Jitsi participant ids, so it can never
-        // legitimately match one; the old code's fallback branch used it to fabricate a brand
-        // new fake participant tile whenever no name matched yet (e.g. on a race where this
-        // signal arrives before the real Jitsi USER_JOINED/TRACK_ADDED data does), which is
-        // exactly what showed up as "raising a hand makes a new participant join."
+        // jitsiMeeting.remoteParticipants (synced a few lines up); the old code's fallback
+        // branch used to fabricate a brand new fake participant tile whenever no match was
+        // found yet (e.g. on a race where this signal arrives before the real Jitsi
+        // USER_JOINED/TRACK_ADDED data does), which is exactly what showed up as "raising a
+        // hand makes a new participant join."
+        //
+        // Matched primarily by `senderSessionId` against each tile's `deviceSessionId` (the
+        // same stable per-tab id useJitsiMeeting broadcasts via Jitsi presence -- see
+        // sessionIdRef's own comment) rather than by display name: two participants can type
+        // the identical name, which previously meant this signal could update the WRONG
+        // person's tile. A tab-unique session id can never collide that way. Name match stays
+        // as a fallback only for the brief window before a tile's deviceSessionId has arrived.
         setRemoteParticipants((prev) => {
-          const matchIndex = prev.findIndex((p) => p.name === personName);
+          let matchIndex = senderSessionId ? prev.findIndex((p) => p.deviceSessionId && p.deviceSessionId === senderSessionId) : -1;
+          if (matchIndex === -1) matchIndex = prev.findIndex((p) => p.name === personName);
           if (matchIndex === -1) return prev;
           const next = [ ...prev ];
           next[matchIndex] = { ...next[matchIndex], raisedHand: isRaised };
@@ -4087,6 +4168,30 @@ export function MeetingRoomPage() {
           setHandRaisedToast(`${personName} raised their hand`);
           setTimeout(() => setHandRaisedToast(null), 4000);
         }
+      } else if (type === 'AWAY_STATUS') {
+        // Sent by the mobile-backgrounding effect below (on this SAME participant's device,
+        // broadcast to everyone else) when their tab is backgrounded -- e.g. they answered a
+        // real phone call or switched apps -- so every other participant sees why that
+        // person's mic/camera just went quiet instead of assuming a dropped connection.
+        const isAway = Boolean(payload?.away);
+        // `sender` is the backend's own server-verified identity for this signal (see
+        // lobby.realtime.ts's requireSignalAttendanceToken), unlike payload.* which is
+        // client-supplied and unchecked -- using it here (not payload.name) means a participant
+        // can never make this toast falsely claim someone ELSE just stepped away or came back.
+        const personName = sender || 'Participant';
+
+        // Same senderSessionId-first matching as HAND_TOGGLED above -- two participants can
+        // share a display name, but never a tab-unique deviceSessionId.
+        setRemoteParticipants((prev) => {
+          let matchIndex = senderSessionId ? prev.findIndex((p) => p.deviceSessionId && p.deviceSessionId === senderSessionId) : -1;
+          if (matchIndex === -1) matchIndex = prev.findIndex((p) => p.name === personName);
+          if (matchIndex === -1) return prev;
+          const next = [ ...prev ];
+          next[matchIndex] = { ...next[matchIndex], away: isAway };
+          return next;
+        });
+        showAwayToast(isAway ? `${personName} stepped away (on another call)` : `${personName} is back`);
+        if (isAway) playParticipantLeftTone(); else playParticipantJoinedTone();
       } else if (type === 'CHAT_MESSAGE') {
         // HTTP-delivered fallback for chat -- sendEndpointTextMessage (Jitsi's BridgeChannel
         // datachannel) has no delivery guarantee if the channel isn't initialized yet, and
@@ -4240,7 +4345,7 @@ export function MeetingRoomPage() {
       if (fallbackInterval !== null) window.clearInterval(fallbackInterval);
       handleIncomingSignalRef.current = null;
     };
-  }, [hasJoined, roomId, isScreenSharing, postRoomSignal, jitsiMeeting.localParticipantId]);
+  }, [hasJoined, roomId, isScreenSharing, postRoomSignal, jitsiMeeting.localParticipantId, showAwayToast]);
 
   // Apply a device change to the live conference via lib-jitsi-meet's own replaceTrack --
   // updating only React state here would leave the UI showing one device while the conference
@@ -5397,6 +5502,7 @@ export function MeetingRoomPage() {
                     videoEnabled={remote.video}
                     muted={remote.muted}
                     raisedHand={remote.raisedHand}
+                    away={remote.away}
                     theme={rTheme}
                     compact
                     style={{ width: '100%', aspectRatio: '1 / 1' }}
@@ -5499,6 +5605,27 @@ export function MeetingRoomPage() {
                           }}
                         >
                           <Hand size={14} color="#FFFFFF" />
+                        </div>
+                      )}
+                      {/* Remote away (on another call / backgrounded) indicator */}
+                      {remote.away && (
+                        <div
+                          title={`${remote.name} stepped away (on another call)`}
+                          style={{
+                            position: 'absolute',
+                            top: '8px',
+                            left: remote.raisedHand ? '40px' : '8px',
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '50%',
+                            backgroundColor: '#F59E0B',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                          }}
+                        >
+                          <Phone size={14} color="#FFFFFF" />
                         </div>
                       )}
                       {/* Remote Mute indicator */}
@@ -6004,6 +6131,7 @@ export function MeetingRoomPage() {
                           videoEnabled={p.video}
                           muted={p.muted}
                           raisedHand={p.raisedHand}
+                          away={p.away}
                           theme={t}
                           compact
                           style={{ width: '100%', aspectRatio: '1 / 1' }}
@@ -6418,6 +6546,22 @@ export function MeetingRoomPage() {
                                 }}
                               >
                                 <Hand size={14} color="#FFFFFF" />
+                              </div>
+                            )}
+                            {p.away && (
+                              <div
+                                title={`${p.name} stepped away (on another call)`}
+                                style={{
+                                  width: '24px',
+                                  height: '24px',
+                                  borderRadius: '50%',
+                                  backgroundColor: '#F59E0B',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <Phone size={14} color="#FFFFFF" />
                               </div>
                             )}
                             {p.muted ? <MicOff size={15} color="#EA4335" /> : <Mic size={15} color="#8AB4F8" />}
@@ -7991,8 +8135,8 @@ export function MeetingRoomPage() {
           </div>
         )}
 
-        {/* Floating Toast Notification (Raise Hand, Recording, Participant Join/Leave, Time Limit, PiP Hint, Background Fallback/Give-up) */}
-        {(handRaisedToast || recordingToast || participantToast || timeLimitToast || pipHintToast || jitsiMeeting.backgroundFallbackMessage || jitsiMeeting.backgroundGiveUpMessage) && (
+        {/* Floating Toast Notification (Raise Hand, Away/Back, Recording, Participant Join/Leave, Time Limit, PiP Hint, Background Fallback/Give-up) */}
+        {(handRaisedToast || awayToast || recordingToast || participantToast || timeLimitToast || pipHintToast || jitsiMeeting.backgroundFallbackMessage || jitsiMeeting.backgroundGiveUpMessage) && (
           <div
             style={{
               position: 'fixed',
@@ -8031,6 +8175,23 @@ export function MeetingRoomPage() {
                   <Hand size={14} color="#FFFFFF" />
                 </div>
                 <span>{handRaisedToast}</span>
+              </>
+            ) : awayToast ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#F59E0B',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Phone size={14} color="#FFFFFF" />
+                </div>
+                <span>{awayToast}</span>
               </>
             ) : recordingToast ? (
               <>

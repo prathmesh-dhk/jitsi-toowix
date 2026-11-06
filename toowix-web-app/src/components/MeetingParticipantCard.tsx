@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { Hand, Mic, MicOff, Pin } from 'lucide-react';
+import { Hand, Mic, MicOff, Phone, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
 import { useSpeaking } from '../lib/speakingStore';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
@@ -21,6 +21,7 @@ export interface MeetingParticipantCardProps {
   videoEnabled: boolean;
   muted: boolean;
   raisedHand?: boolean;
+  away?: boolean;
   theme: ParticipantCardTheme;
   style?: React.CSSProperties;
   compact?: boolean;
@@ -80,7 +81,7 @@ export interface MeetingParticipantCardProps {
 
 /** Shared visual card used by gallery, pin and presentation participant layouts. */
 export function MeetingParticipantCard({
-  participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, theme, style,
+  participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, away, theme, style,
   compact = false, mirrored = false, speaking = false, isPinned = false, onPin,
   onDoubleClick, onMute, onVideoElement, adaptiveAspect = false, onAspectRatioChange,
   layoutFit = 'adaptive', videoBoundaryMode = 'none', cardWidth, cardHeight,
@@ -227,6 +228,12 @@ export function MeetingParticipantCard({
         width: compact ? '24px' : '32px', height: compact ? '24px' : '32px', borderRadius: '50%', background: '#1A73E8',
         display: 'grid', placeItems: 'center', boxShadow: '0 2px 8px rgba(0,0,0,.35)', zIndex: 2,
       }}><Hand size={compact ? 13 : 18} color="#FFFFFF" /></div>}
+      {away && <div title={`${name} stepped away (on another call)`} style={{
+        position: 'absolute', top: compact ? '8px' : '16px',
+        left: `${(compact ? 8 : 16) + ((onPin ? 1 : 0) + (raisedHand ? 1 : 0)) * (compact ? 32 : 40)}px`,
+        width: compact ? '24px' : '32px', height: compact ? '24px' : '32px', borderRadius: '50%', background: '#F59E0B',
+        display: 'grid', placeItems: 'center', boxShadow: '0 2px 8px rgba(0,0,0,.35)', zIndex: 2,
+      }}><Phone size={compact ? 13 : 18} color="#FFFFFF" /></div>}
       {onMute && !muted ? <button type="button" title={`Mute ${name}`} onClick={(event) => { event.stopPropagation(); onMute(); }} style={{
         position: 'absolute', top: compact ? '8px' : '16px', right: compact ? '8px' : '16px', zIndex: 2,
         width: compact ? '24px' : '32px', height: compact ? '24px' : '32px', borderRadius: '50%', display: 'grid', placeItems: 'center',

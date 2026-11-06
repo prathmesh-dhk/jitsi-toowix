@@ -125,7 +125,7 @@ function createDeviceSessionId(): string {
 // the id per room lets remote clients recognise the new Jitsi presence as the same browser/tab
 // while the old presence is still awaiting the server-side disconnect timeout. A new tab gets its
 // own sessionStorage and therefore remains a legitimately separate participant.
-function getRoomDeviceSessionId(roomName: string): string {
+export function getRoomDeviceSessionId(roomName: string): string {
   const key = `toowix_jitsi_device_session:${roomName.toLowerCase()}`;
   const fallback = createDeviceSessionId();
 
