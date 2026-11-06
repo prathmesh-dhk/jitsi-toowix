@@ -62,7 +62,7 @@ import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } fro
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
 import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
-import { getNetworkStatusLabel } from '../lib/networkQuality';
+import { getNetworkStatusLabel, isMobileBrowser } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
 import {
   playChatMessageTone,
@@ -4063,7 +4063,12 @@ export function MeetingRoomPage() {
   const isAwayRef = useRef(false);
 
   useEffect(() => {
-    if (!hasJoined) return;
+    // Mobile-only, deliberately. On desktop, backgrounding the tab (alt-tabbing to check
+    // something, a second monitor, a notification popup) is completely normal and happens
+    // constantly during an ordinary call -- muting mic/camera and broadcasting "stepped away"
+    // every time would make desktop unusable. The actual problem this feature exists for (a real
+    // phone/OS-level call yanking media out from under the page) is a mobile-only scenario.
+    if (!hasJoined || !isMobileBrowser()) return;
 
     const goAway = () => {
       if (isAwayRef.current) return;
@@ -8292,6 +8297,83 @@ export function MeetingRoomPage() {
                 <span>{pipHintToast}</span>
               </>
             )}
+          </div>
+        )}
+
+        {/* "You're muted" nudge (Google-Meet-style) -- shown when speaking into a muted mic.
+        Its own banner, not the shared non-interactive toast above, since it needs a real
+        clickable "Unmute" action. */}
+        {jitsiMeeting.mutedButSpeaking && (
+          <div
+            style={{
+              position: 'fixed',
+              bottom: '140px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              backgroundColor: '#202124',
+              color: '#FFFFFF',
+              padding: '10px 12px 10px 16px',
+              borderRadius: '24px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              zIndex: 251,
+              fontSize: '13px',
+              fontWeight: 500,
+              animation: 'fadeIn 0.2s ease',
+            }}
+          >
+            <div
+              style={{
+                width: '24px',
+                height: '24px',
+                borderRadius: '50%',
+                backgroundColor: '#EA4335',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <MicOff size={14} color="#FFFFFF" />
+            </div>
+            <span>You're muted</span>
+            <button
+              type="button"
+              onClick={() => {
+                jitsiMeeting.dismissMutedSpeakingNudge();
+                jitsiMeeting.toggleAudio();
+              }}
+              style={{
+                background: '#8AB4F8',
+                color: '#202124',
+                border: 'none',
+                borderRadius: '16px',
+                padding: '6px 14px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Unmute
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => jitsiMeeting.dismissMutedSpeakingNudge()}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#9AA0A6',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+              }}
+            >
+              <X size={16} />
+            </button>
           </div>
         )}
 

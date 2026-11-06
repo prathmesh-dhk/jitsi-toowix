@@ -145,7 +145,7 @@ export function getMediaQualityPolicy(
   };
 }
 
-const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+export const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // Real reported bug: on macOS Chrome, the camera came in portrait/narrow on the FIRST join of a
 // meeting, but correctly landscape after leaving and rejoining. Root cause -- the prejoin lobby

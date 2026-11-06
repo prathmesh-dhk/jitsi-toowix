@@ -458,6 +458,13 @@ export function useJitsiMeeting({
   const [error, setError] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [localAudioMuted, setLocalAudioMuted] = useState(startWithAudioMuted);
+  // Mirrors localAudioMuted for toggleAudio's own synchronous read -- see that function's comment
+  // on why track.isMuted() cannot be trusted while an audio-mix effect is attached. Kept current
+  // by every code path below that calls setLocalAudioMuted, not just toggleAudio itself.
+  const localAudioMutedRef = useRef(startWithAudioMuted);
+  useEffect(() => {
+    localAudioMutedRef.current = localAudioMuted;
+  }, [localAudioMuted]);
   // Confirmed via direct Jicofo/JVB log inspection: neither room.removeTrack() nor
   // room.replaceTrack(track, null) actually notifies the server once the browser's native
   // "Stop sharing" bar has already ended the underlying track -- the bridge keeps believing the
@@ -540,8 +547,9 @@ export function useJitsiMeeting({
   // JVB accepts one outbound audio source for a participant. Screen audio is therefore carried on
   // the existing microphone sender (via a setEffect()-based DesktopAudioMixEffect) instead of
   // being added as a second Jitsi audio track -- see that file's own comment for the confirmed
-  // root cause of the bug this replaced (a non-existent .replaceTrack() call on JitsiLocalTrack)
-  // and why the effect carries ONLY the shared audio, never the mic.
+  // root cause of the bug this replaced (a non-existent .replaceTrack() call on JitsiLocalTrack),
+  // and for why the effect mixes BOTH the shared audio and the live mic, not the shared audio
+  // alone.
   const desktopShareAudioMixRef = useRef<{
     jitsiTrack: any;
     effect: DesktopAudioMixEffect;
@@ -1616,12 +1624,26 @@ export function useJitsiMeeting({
       if (!track) {
         return;
       }
-      if (track.isMuted()) {
+      // CONFIRMED (traced live): while a setEffect()-based effect is attached -- e.g.
+      // DesktopAudioMixEffect during "share audio" -- JitsiLocalTrack's mute()/unmute() route
+      // entirely through effect.setMuted() and never update the track's own internal muted
+      // flag. track.isMuted() then reports the SAME value forever, regardless of how many times
+      // mute()/unmute() is called -- every toggle re-entered this same branch, repeatedly
+      // calling mute() and never unmute(), which is exactly the reported bug ("my mic is
+      // getting off and staying off" while audio-sharing). Our own React-tracked intent
+      // (localAudioMutedRef, kept in sync below) is the reliable source of truth in that case;
+      // track.isMuted() is only trustworthy with no effect attached.
+      const wasMuted = desktopShareAudioMixRef.current ? localAudioMutedRef.current : track.isMuted();
+
+      if (wasMuted) {
         // On iOS Safari the OS can quietly kill the underlying hardware track while it sits
         // muted. unmute() on that dead JitsiLocalTrack succeeds but produces silence, so detect
-        // it and reacquire a fresh mic track instead of unmuting a corpse.
+        // it and reacquire a fresh mic track instead of unmuting a corpse. Skipped while an
+        // audio-mix effect is attached: reacquiring swaps the underlying mic stream out from
+        // under that effect's already-built Web Audio graph, which would silently break it.
         const nativeTrack = typeof track.getTrack === 'function' ? track.getTrack() : null;
-        const looksDead = !nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true;
+        const looksDead = !desktopShareAudioMixRef.current
+          && (!nativeTrack || nativeTrack.readyState === 'ended' || nativeTrack.muted === true);
 
         if (looksDead && switchDeviceRef.current && !switchDeviceInFlightRef.current.audioInput) {
           try {
@@ -1636,24 +1658,138 @@ export function useJitsiMeeting({
         }
         try {
           await Promise.resolve(track.unmute());
-        } catch { /* state is re-read from the track below */ }
+        } catch { /* state is re-read below */ }
       } else {
         selfInitiatedMuteRef.current++;
         try {
           await Promise.resolve(track.mute());
-        } catch { /* state is re-read from the track below */ }
+        } catch { /* state is re-read below */ }
         // Toggles are serialized and the mute event has fired by now, so nothing self-initiated
         // is pending; clearing avoids masking a later real moderator mute.
         selfInitiatedMuteRef.current = 0;
       }
-      // Always report what the track really is, not what the click intended.
-      setLocalAudioMuted(Boolean(localAudioTrackRef.current?.isMuted()));
+      // Also traced live: JitsiLocalTrack's internal effect.setMuted() routing only actually
+      // fires on mute(), never on unmute() -- confirmed by logging every call the library itself
+      // made to it. Relying on that routing alone left the mic permanently silenced in the mix
+      // after the FIRST mute during audio sharing, no matter how many times "unmute" was clicked
+      // afterward. Call it ourselves here instead, so the mic's own gain node is always driven by
+      // our own decision, never by however much of mute()/unmute()'s internal plumbing happens to
+      // forward to it.
+      if (desktopShareAudioMixRef.current) {
+        desktopShareAudioMixRef.current.effect.setMuted(!wasMuted);
+      }
+      // With no effect attached, track.isMuted() really is the source of truth -- report it, not
+      // what the click intended. With an audio-mix effect attached it is NOT reliable (see this
+      // function's own comment above), so report the toggle's own outcome instead.
+      const newMuted = desktopShareAudioMixRef.current ? !wasMuted : Boolean(localAudioTrackRef.current?.isMuted());
+
+      localAudioMutedRef.current = newMuted;
+      setLocalAudioMuted(newMuted);
     };
     const next = audioToggleChainRef.current.then(run, run);
 
     audioToggleChainRef.current = next.catch(() => undefined);
 
     return next;
+  }, []);
+
+  // "You're muted" nudge (Google-Meet-style): while muted, if the person is actually talking,
+  // tell them so they can unmute instead of talking into a muted mic without realizing it.
+  //
+  // Cannot reuse the already-published mic track for this: muting it (no effect attached) sets
+  // the underlying MediaStreamTrack's own `.enabled = false`, which silences it for every local
+  // consumer, not just the outbound sender -- an AnalyserNode on that same track would read
+  // silence the whole time it's muted, detecting nothing. A second, independent getUserMedia tap
+  // on the same device, opened only while muted and closed the instant it isn't, is the only way
+  // to keep observing real mic input without touching what's actually published.
+  const [mutedButSpeaking, setMutedButSpeaking] = useState(false);
+  const mutedSpeakingSuppressedRef = useRef(false);
+
+  useEffect(() => {
+    if (!localAudioMuted || !joined) {
+      setMutedButSpeaking(false);
+      mutedSpeakingSuppressedRef.current = false;
+
+      return;
+    }
+
+    let cancelled = false;
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let aboveThresholdStreak = 0;
+    let silentStreakAfterFlag = 0;
+
+    (async () => {
+      try {
+        const deviceId = deviceIdsRef.current.audioDeviceId;
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: deviceId ? { deviceId: { ideal: deviceId } } : true
+        });
+        if (cancelled) {
+          stream.getTracks().forEach(t => t.stop());
+
+          return;
+        }
+        const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+
+        ctx = new AudioContextCtor();
+        const source = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        const buffer = new Float32Array(1024);
+
+        analyser.fftSize = 1024;
+        source.connect(analyser);
+        timer = setInterval(() => {
+          analyser.getFloatTimeDomainData(buffer);
+          let sum = 0;
+
+          for (let i = 0; i < buffer.length; i++) {
+            sum += buffer[i] * buffer[i];
+          }
+          const level = Math.sqrt(sum / buffer.length);
+
+          if (level > 0.04) {
+            aboveThresholdStreak++;
+            silentStreakAfterFlag = 0;
+            // ~300ms of sustained real speech, not a single loud click/pop, before nudging.
+            if (aboveThresholdStreak >= 3 && !mutedSpeakingSuppressedRef.current) {
+              setMutedButSpeaking(true);
+            }
+          } else {
+            aboveThresholdStreak = 0;
+            if (mutedSpeakingSuppressedRef.current) {
+              silentStreakAfterFlag++;
+              // Re-arm only after a real pause, so one continuous muted ramble doesn't just
+              // trigger the nudge once and then never again for the rest of the meeting.
+              if (silentStreakAfterFlag >= 15) {
+                mutedSpeakingSuppressedRef.current = false;
+              }
+            }
+          }
+        }, 100);
+      } catch {
+        // No mic access / permission issue -- silently skip the nudge, never block muting.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      try {
+        stream?.getTracks().forEach(t => t.stop());
+        void ctx?.close().catch(() => { /* best-effort */ });
+      } catch { /* best-effort */ }
+    };
+  }, [localAudioMuted, joined]);
+
+  // Called when the person dismisses the nudge or clicks its "Unmute" action -- stops it from
+  // re-appearing for the rest of this muted stretch (still re-arms after a real pause, or the
+  // next time they mute again).
+  const dismissMutedSpeakingNudge = useCallback(() => {
+    mutedSpeakingSuppressedRef.current = true;
+    setMutedButSpeaking(false);
   }, []);
 
   // Doubles as the manual "retry camera" action when no video track exists yet (e.g. the
@@ -2074,7 +2210,7 @@ export function useJitsiMeeting({
           if (!microphoneJitsiTrack) {
             throw new Error('The active microphone cannot carry screen audio.');
           }
-          const mixEffect = new DesktopAudioMixEffect(displayAudioTrack);
+          const mixEffect = new DesktopAudioMixEffect(displayAudioTrack, microphoneJitsiTrack.isMuted());
 
           await microphoneJitsiTrack.setEffect(mixEffect);
           desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect };
@@ -2848,7 +2984,7 @@ export function useJitsiMeeting({
         throw new Error('An active microphone is required to share audio.');
       }
 
-      const mixEffect = new DesktopAudioMixEffect(audioTrack);
+      const mixEffect = new DesktopAudioMixEffect(audioTrack, microphoneJitsiTrack.isMuted());
 
       await microphoneJitsiTrack.setEffect(mixEffect);
       desktopShareAudioMixRef.current = { jitsiTrack: microphoneJitsiTrack, effect: mixEffect };
@@ -2879,6 +3015,8 @@ export function useJitsiMeeting({
     error,
     cameraError,
     localAudioMuted,
+    mutedButSpeaking,
+    dismissMutedSpeakingNudge,
     getActiveAudioInputDeviceId,
     localVideoMuted,
     hasVideoTrack,
