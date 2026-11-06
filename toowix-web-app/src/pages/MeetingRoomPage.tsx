@@ -242,6 +242,7 @@ const MeetingDurationTimer = memo(function MeetingDurationTimer({ startedAt, cou
 
   return (
     <div
+      className="tw-duration-timer"
       style={{
         position: 'absolute',
         left: '24px',
@@ -4727,6 +4728,36 @@ export function MeetingRoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasJoined, audioId, videoId, outputId]);
 
+  // A meeting is an application surface, not a scrolling document. In particular, iPad Safari's
+  // legacy 100vh includes space hidden behind the browser chrome. That made the bottom toolbar,
+  // duration timer and utility controls sit below the visible viewport in landscape. Keep the
+  // document itself locked only while in a call; chat/people/settings panels retain their own
+  // intentionally scrollable regions.
+  useEffect(() => {
+    if (!hasJoined) return undefined;
+
+    const html = document.documentElement;
+    const body = document.body;
+    const previous = {
+      htmlOverflow: html.style.overflow,
+      htmlOverscrollBehavior: html.style.overscrollBehavior,
+      bodyOverflow: body.style.overflow,
+      bodyOverscrollBehavior: body.style.overscrollBehavior,
+    };
+
+    html.style.overflow = 'hidden';
+    html.style.overscrollBehavior = 'none';
+    body.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+
+    return () => {
+      html.style.overflow = previous.htmlOverflow;
+      html.style.overscrollBehavior = previous.htmlOverscrollBehavior;
+      body.style.overflow = previous.bodyOverflow;
+      body.style.overscrollBehavior = previous.bodyOverscrollBehavior;
+    };
+  }, [hasJoined]);
+
   // ===========================================================================
   // STAGE 2: IN-MEETING VIEW (Google Meet Visual Truth Matching Image 1)
   // ===========================================================================
@@ -4740,10 +4771,13 @@ export function MeetingRoomPage() {
       <div
         className="tw-root"
         style={{
-          height: '100vh',
-          width: '100vw',
+          // dvh follows Safari/Chrome's actual visible viewport as their browser chrome expands
+          // or collapses. The fixed shell also prevents a parent route from adding document height.
+          height: '100dvh',
+          width: '100dvw',
           backgroundColor: '#121212',
-          position: 'relative',
+          position: 'fixed',
+          inset: 0,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
@@ -4767,7 +4801,10 @@ export function MeetingRoomPage() {
             .tw-topbar > div:first-child > span:nth-of-type(n+2),
             .tw-topbar > div:first-child > button,
             .tw-topbar > div:first-child > div[title] { display: none !important; }
-            .tw-main { padding: 2px 6px 84px !important; }
+            /* The duration timer has its own row above the bottom dock on touch devices.
+               This prevents it from sitting on top of the expanded call toolbar. */
+            .tw-main { padding: 2px 6px calc(124px + env(safe-area-inset-bottom)) !important; }
+            .tw-duration-timer { left: 12px !important; bottom: calc(76px + env(safe-area-inset-bottom)) !important; padding: 6px 10px !important; }
             .tw-stage-row { flex-direction: column !important; max-width: 100% !important; gap: 8px !important; }
             .tw-stage-row > div:first-child { min-height: 0 !important; flex: 1 1 0 !important; }
             .tw-speaker-filmstrip { width: 100% !important; min-width: 0 !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; height: 100px !important; flex: 0 0 100px !important; }
@@ -4808,6 +4845,37 @@ export function MeetingRoomPage() {
             .tw-main { padding: 2px 6px 96px !important; }
             .tw-grid { overflow: hidden !important; }
             .tw-grid [data-gallery-cell] > div { border-radius: 14px !important; max-width: 100% !important; }
+          }
+          /* Tablet bottom dock: reserve three independent areas rather than letting the
+             elapsed-time pill, central call controls and right utility controls compete for
+             the same bottom edge. This covers iPad Safari and Android tablets in either
+             orientation; only the content panels themselves remain scrollable. */
+          @media (min-width: 769px) and (max-width: 1280px) and (pointer: coarse) {
+            .tw-main { padding-bottom: calc(132px + env(safe-area-inset-bottom)) !important; }
+            .tw-duration-timer { left: 12px !important; bottom: calc(96px + env(safe-area-inset-bottom)) !important; }
+            .tw-toolbar {
+              left: 12px !important;
+              right: 174px !important;
+              width: auto !important;
+              max-width: none !important;
+              transform: none !important;
+              bottom: calc(12px + env(safe-area-inset-bottom)) !important;
+              box-sizing: border-box !important;
+              justify-content: center !important;
+              gap: clamp(4px, 0.8vw, 10px) !important;
+              padding-left: clamp(8px, 1.2vw, 14px) !important;
+              padding-right: clamp(8px, 1.2vw, 14px) !important;
+            }
+            .tw-brgroup { right: 12px !important; bottom: calc(24px + env(safe-area-inset-bottom)) !important; }
+          }
+          @media (min-width: 769px) and (max-width: 920px) and (pointer: coarse) {
+            .tw-toolbar { height: 64px !important; border-radius: 32px !important; right: 158px !important; }
+            .tw-toolbar button[title="Select microphone"],
+            .tw-toolbar button[title="Select camera"],
+            .tw-toolbar button[title*="captions"],
+            .tw-toolbar button[title*="tile view"],
+            .tw-toolbar button[title="Invite people to meeting"] { display: none !important; }
+            .tw-brgroup { right: 8px !important; }
           }
           @keyframes floatUp {
             0% { transform: translateY(0) scale(0.8); opacity: 1; }
