@@ -4853,12 +4853,19 @@ export function MeetingRoomPage() {
           @media (min-width: 769px) and (max-width: 1280px) and (pointer: coarse) {
             .tw-main { padding-bottom: calc(132px + env(safe-area-inset-bottom)) !important; }
             .tw-duration-timer { left: 12px !important; bottom: calc(96px + env(safe-area-inset-bottom)) !important; }
+            /* Centered on the full screen (left: 50% + translateX), not boxed between asymmetric
+               left/right offsets -- that previous approach centered the pill within its own box,
+               but the box itself (left: 12px, right: 174px) wasn't centered on screen, so the
+               whole toolbar visibly sat left of center with a lopsided gap on the right before
+               .tw-brgroup. max-width keeps it clear of .tw-brgroup's reserved 174px on the right
+               while staying symmetric (same clearance mirrored on the left) so it reads as
+               properly centered either way. */
             .tw-toolbar {
-              left: 12px !important;
-              right: 174px !important;
+              left: 50% !important;
+              right: auto !important;
+              transform: translateX(-50%) !important;
               width: auto !important;
-              max-width: none !important;
-              transform: none !important;
+              max-width: calc(100% - 348px) !important;
               bottom: calc(12px + env(safe-area-inset-bottom)) !important;
               box-sizing: border-box !important;
               justify-content: center !important;
@@ -4869,7 +4876,7 @@ export function MeetingRoomPage() {
             .tw-brgroup { right: 12px !important; bottom: calc(24px + env(safe-area-inset-bottom)) !important; }
           }
           @media (min-width: 769px) and (max-width: 920px) and (pointer: coarse) {
-            .tw-toolbar { height: 64px !important; border-radius: 32px !important; right: 158px !important; }
+            .tw-toolbar { height: 64px !important; border-radius: 32px !important; max-width: calc(100% - 316px) !important; }
             .tw-toolbar button[title="Select microphone"],
             .tw-toolbar button[title="Select camera"],
             .tw-toolbar button[title*="captions"],
