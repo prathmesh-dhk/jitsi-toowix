@@ -317,12 +317,23 @@ export function ParticipantGallery({
     [ key, { key, ...uniformPositions[index], width: uniformLayout.cardWidth, height: uniformLayout.cardHeight } ]
   )));
 
-  const cellFramesByKey = isMobileGallery ? uniformCellFramesByKey : flexCellFramesByKey;
+  // Equal-size cards once a call is dense enough, on EITHER device: with 4+ participants the
+  // flexible crop-aware solver's per-card weighting (wider card for whoever's camera is on, a
+  // visibly narrower/padded card for whoever's camera is off) reads as broken rather than
+  // intentional once there's no single dominant speaker to justify it -- reported directly
+  // ("the video on card is extending a bit... equal 50/50... no stretching or padding"). Below
+  // that density the flexible solver's per-participant aspect-matching still gives a visibly
+  // better result (e.g. a solo full-bleed camera, or two cards shaped for a 1:1/landscape pair),
+  // so it's kept for 1-3 participants on desktop exactly as before. Mobile already forced this at
+  // the same 4-participant threshold (mobileGalleryPaged); this extends the SAME threshold to
+  // desktop rather than inventing a second one.
+  const useUniformGrid = isMobileGallery || galleryCellKeys.length >= 4;
+  const cellFramesByKey = useUniformGrid ? uniformCellFramesByKey : flexCellFramesByKey;
   const cellFrames = galleryCellKeys.map((key) => (
     cellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: 0, height: 0 }
   ));
-  const galleryStructureKey = isMobileGallery
-    ? `mobile-uniform:${safeGalleryPageIndex}:${uniformLayout.columns}x${uniformLayout.rows}:${uniformLayout.ratio}`
+  const galleryStructureKey = useUniformGrid
+    ? `uniform:${safeGalleryPageIndex}:${uniformLayout.columns}x${uniformLayout.rows}:${uniformLayout.ratio}`
     : `desktop-flex:${flexLayout.topologyKey}:${ratioPreferenceCards.map((c) => `${c.key}@${c.preferredRatio.toFixed(3)}`).join(',')}`;
 
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- logs the exact ratio map the gallery
@@ -342,7 +353,7 @@ export function ParticipantGallery({
     const renderedCropFractions = Object.values(renderedCropFractionByKey);
 
     logGalleryDebug('gallery layout selection', {
-      viewMode: isMobileGallery ? 'mobile-uniform-grid' : 'desktop-flex-fill',
+      viewMode: useUniformGrid ? 'uniform-grid' : 'desktop-flex-fill',
       cellRatios: Object.fromEntries(cellRatios),
       cameraOffDefaultRatio,
       ratioPreferenceCards,
@@ -432,8 +443,8 @@ export function ParticipantGallery({
     <div
       className="tw-grid"
       data-count={galleryCellKeys.length}
-      data-gallery-layout={isMobileGallery ? `${uniformLayout.columns}x${uniformLayout.rows}` : flexLayout.topologyKey}
-      data-layout-mode={isMobileGallery ? 'mobile-uniform-grid' : 'desktop-flex-fill'}
+      data-gallery-layout={useUniformGrid ? `${uniformLayout.columns}x${uniformLayout.rows}` : flexLayout.topologyKey}
+      data-layout-mode={useUniformGrid ? 'uniform-grid' : 'desktop-flex-fill'}
       style={{
         width: '100%',
         flex: 1,
@@ -499,7 +510,7 @@ export function ParticipantGallery({
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   onVideoElement={setInCallVideoNode}
                   adaptiveAspect
-                  layoutFit={isMobileGallery ? 'contain' : 'adaptive'}
+                  layoutFit={useUniformGrid ? 'contain' : 'adaptive'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}
@@ -528,7 +539,7 @@ export function ParticipantGallery({
                   theme={getParticipantColorTheme(remote.name, idx + 1)}
                   style={{ width: '100%', height: '100%', maxWidth: '100%' }}
                   adaptiveAspect
-                  layoutFit={isMobileGallery ? 'contain' : 'adaptive'}
+                  layoutFit={useUniformGrid ? 'contain' : 'adaptive'}
                   videoBoundaryMode="smart-height"
                   cardWidth={frame.width}
                   cardHeight={frame.height}
