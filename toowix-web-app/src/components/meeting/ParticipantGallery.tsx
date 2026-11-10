@@ -268,13 +268,36 @@ export function ParticipantGallery({
   }));
   const preferredRatioByKey = new Map(ratioPreferenceCards.map((c) => [ c.key, c.preferredRatio ]));
 
+  // Equal-size cards once a call is dense enough, on EITHER device: with 4+ participants the
+  // flexible crop-aware solver's per-card weighting (wider card for whoever's camera is on, a
+  // visibly narrower/padded card for whoever's camera is off) reads as broken rather than
+  // intentional once there's no single dominant speaker to justify it -- reported directly
+  // ("the video on card is extending a bit... equal 50/50... no stretching or padding"). Below
+  // that density the flexible solver's per-participant aspect-matching still gives a visibly
+  // better result (e.g. a solo full-bleed camera, or two cards shaped for a 1:1/landscape pair),
+  // so it's kept for 1-3 participants on desktop exactly as before. Mobile already forced this at
+  // the same 4-participant threshold (mobileGalleryPaged); this extends the SAME threshold to
+  // desktop rather than inventing a second one. Computed here (not lower down, where it's actually
+  // consumed) so the flex-fill hook call below can use it to bound its own input -- see that call's
+  // own comment.
+  const useUniformGrid = isMobileGallery || galleryCellKeys.length >= 4;
+
   // Desktop Gallery View: the flexible full-fill, crop-aware solver (TOOWIX_PHASE_1_2/3.1) --
   // card shape follows each participant's real source ratio as a scored preference, cropping is
-  // measured and penalized, never a hard-equal grid. Always computed (even on mobile, where it's
-  // unused) because this is a real hook -- its previous-structure ref must persist across renders
-  // regardless of which branch below actually reads its output.
+  // measured and penalized, never a hard-equal grid. Always CALLED (even when useUniformGrid is
+  // true and its output is thrown away below) because this is a real hook -- its previous-
+  // structure ref must persist across renders regardless of which branch actually reads the
+  // result. BUT the search itself is O(N^2) in participant count (confirmed by load testing: 0.1ms
+  // at N=4, 34ms at N=200, 118ms at N=400 -- quadratic, not linear), and desktop has no pagination
+  // cap the way mobile does. Before the uniform-grid threshold above existed, this only ever ran on
+  // whatever page mobile handed it (capped at MOBILE_GALLERY_TILES_PER_PAGE=8); now a large desktop
+  // call can hand it hundreds of tiles every render even though useUniformGrid means NONE of that
+  // work is ever used. Capping the input to the same 4 tiles the <4 desktop path actually cares
+  // about keeps the hook call (and its ref bookkeeping) happy without paying for a search whose
+  // answer is discarded.
   const flexLayout = useStableFlexibleFillLayout(
-    ratioPreferenceCards, galleryStageSize.width, galleryStageSize.height,
+    useUniformGrid ? ratioPreferenceCards.slice(0, 4) : ratioPreferenceCards,
+    galleryStageSize.width, galleryStageSize.height,
     { mode: isMobileGallery ? 'mobile' : 'desktop', gap: GALLERY_GAP },
   );
   const flexCellFramesByKey = new Map(flexLayout.frames.map((frame) => [ frame.key, frame ]));
@@ -317,17 +340,6 @@ export function ParticipantGallery({
     [ key, { key, ...uniformPositions[index], width: uniformLayout.cardWidth, height: uniformLayout.cardHeight } ]
   )));
 
-  // Equal-size cards once a call is dense enough, on EITHER device: with 4+ participants the
-  // flexible crop-aware solver's per-card weighting (wider card for whoever's camera is on, a
-  // visibly narrower/padded card for whoever's camera is off) reads as broken rather than
-  // intentional once there's no single dominant speaker to justify it -- reported directly
-  // ("the video on card is extending a bit... equal 50/50... no stretching or padding"). Below
-  // that density the flexible solver's per-participant aspect-matching still gives a visibly
-  // better result (e.g. a solo full-bleed camera, or two cards shaped for a 1:1/landscape pair),
-  // so it's kept for 1-3 participants on desktop exactly as before. Mobile already forced this at
-  // the same 4-participant threshold (mobileGalleryPaged); this extends the SAME threshold to
-  // desktop rather than inventing a second one.
-  const useUniformGrid = isMobileGallery || galleryCellKeys.length >= 4;
   const cellFramesByKey = useUniformGrid ? uniformCellFramesByKey : flexCellFramesByKey;
   const cellFrames = galleryCellKeys.map((key) => (
     cellFramesByKey.get(key) ?? { key, left: 0, top: 0, width: 0, height: 0 }

@@ -157,11 +157,19 @@ function calculateForcedRowLayout(
  * centers an incomplete final row without special-case spacer elements.
  */
 export function calculateMeetingLayout(input: MeetingLayoutInput): MeetingLayoutResult {
-  const count = Math.max(1, Math.floor(input.participantCount));
+  // Math.max(1, NaN) is NaN, not 1 -- a non-finite participantCount/width/height would otherwise
+  // leak NaN straight into the returned card geometry (renders as "NaNpx"), and a non-finite count
+  // specifically would make the column-count search below (`columns = 1; columns <= count`) loop
+  // forever on Infinity. Number.isFinite rejects both NaN and +/-Infinity, so this falls back to a
+  // sane default instead of either. The 500 cap is a sanity ceiling (no real meeting approaches
+  // this), not a real-world constraint -- it exists only so a corrupted/malicious count can't make
+  // this search pathologically slow.
+  const safeCount = Number.isFinite(input.participantCount) ? Math.floor(input.participantCount) : 1;
+  const count = Math.min(500, Math.max(1, safeCount));
   const gap = input.gap ?? 12;
   const ratios = input.ratios ?? ['16:9', '4:3'];
-  const width = Math.max(1, input.width);
-  const height = Math.max(1, input.height);
+  const width = Number.isFinite(input.width) ? Math.max(1, input.width) : 1;
+  const height = Number.isFinite(input.height) ? Math.max(1, input.height) : 1;
 
   if (input.forceColumns) {
     // Defensive clamp -- the caller (mobile pagination) is expected to already hand this function
