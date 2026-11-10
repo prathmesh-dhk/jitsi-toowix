@@ -1027,7 +1027,17 @@ function searchFlexibleFillCandidates(
 ): { rowCount: number; candidate: FlexCandidate } {
   let best: { rowCount: number; candidate: FlexCandidate } | null = null;
 
-  for (let rowCount = 1; rowCount <= safeTiles.length; rowCount += 1) {
+  // Side by side is the universal expectation for a 2-person call (every mainstream video app
+  // does this) -- the area-maximizing search below can otherwise legitimately pick 2 stacked rows
+  // instead whenever the stage happens to land close to square. Reported directly ("after screen
+  // share, the 2-participant grid goes above/below, not left/right") and traced to exactly this:
+  // reproduces with a fresh 2-person stage at the same squarish aspect, no screen-share involved
+  // at all -- the share/stop sequence just happened to leave the stage at that shape, it wasn't
+  // stale state. Capping the search to a single row for exactly 2 tiles removes the choice
+  // entirely instead of trying to out-tune the cost function for every possible stage shape.
+  const maxRowCount = safeTiles.length === 2 ? 1 : safeTiles.length;
+
+  for (let rowCount = 1; rowCount <= maxRowCount; rowCount += 1) {
     const candidate = bestCandidateForRowCount(safeTiles, rowCount, width, height, gap, mode);
 
     if (!best || candidate.cost < best.candidate.cost - 1e-9) best = { rowCount, candidate };
