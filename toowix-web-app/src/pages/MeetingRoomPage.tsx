@@ -426,8 +426,14 @@ export function MeetingRoomPage() {
   // Host Waiting Queue
   const [pendingQueue, setPendingQueue] = useState<IWaitingParticipant[]>([]);
 
-  // Duration Timer in meeting
+  // Duration Timer in meeting -- the server-authoritative moment a SECOND participant actually
+  // joined (see backend's meetingStartedAt/getLiveStatus), the SAME timestamp for every
+  // participant, never a per-device Date.now() at that device's own join time. The ref gives
+  // synchronous reads for non-render code (e.g. computing durationMinutes when leaving); the
+  // state is what actually re-renders <MeetingDurationTimer> the moment the live-status poll
+  // learns a second participant has joined.
   const meetingStartedAtRef = useRef<number | null>(null);
+  const [meetingStartedAt, setMeetingStartedAt] = useState<number | null>(null);
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const recordingStartTimeRef = useRef<number | null>(null);
   const [inCallVideo, setInCallVideo] = useState(true);
@@ -2723,11 +2729,6 @@ export function MeetingRoomPage() {
     }
   };
 
-  // Meeting duration timer
-  useEffect(() => {
-    meetingStartedAtRef.current = hasJoined ? Date.now() : null;
-  }, [hasJoined]);
-
   // Recording clock: only the small <ElapsedClock> re-renders each second, not this whole page.
   useEffect(() => {
     setRecordingStartedAt(recording ? Date.now() : null);
@@ -3384,25 +3385,46 @@ export function MeetingRoomPage() {
 
   // This is only a product-state check; media signalling handles real connection state. A
   // ten-second cadence avoids a per-participant API request every three seconds during calls.
+  // Also the one place meetingStartedAt(Ref) gets set -- see that declaration's own comment for
+  // why this is a server value, not a local Date.now() stamp. Polled immediately on joining (not
+  // just every 10s) so a participant who joins right as the meeting crosses from 1 to 2 people
+  // doesn't wait up to 10s to see their own timer appear.
   useEffect(() => {
-    if (!hasJoined) return;
-    const interval = setInterval(async () => {
+    if (!hasJoined) {
+      meetingStartedAtRef.current = null;
+      setMeetingStartedAt(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}/live-status`);
-        if (!res.ok) return;
+        if (!res.ok || cancelled) return;
         const data = await res.json();
         if (data.cancelled) {
           leaveMeeting('The host has ended the meeting for everyone.');
-        } else if (data.ended) {
+          return;
+        }
+        if (data.ended) {
           // data.reason comes from the backend (see getLiveStatus) -- this is the authoritative
           // fallback for a participant whose own client-side timer never fired this round (a
           // moderator-triggered end, or a slow/dropped signal), so it must resolve exactly the
           // same way handleMeetingTerminatedRemotely does everywhere else.
           handleMeetingTerminatedRemotely(data.reason, 'The host has ended the meeting for everyone.');
+          return;
+        }
+        const serverStartedAt = typeof data.meetingStartedAt === 'number' ? data.meetingStartedAt : null;
+
+        if (serverStartedAt !== meetingStartedAtRef.current) {
+          meetingStartedAtRef.current = serverStartedAt;
+          setMeetingStartedAt(serverStartedAt);
         }
       } catch { }
-    }, 10000);
-    return () => clearInterval(interval);
+    };
+
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [hasJoined, roomId, leaveMeeting, handleMeetingTerminatedRemotely]);
 
   const formattedRoomTitle = roomId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -6914,7 +6936,7 @@ export function MeetingRoomPage() {
             instead of counting up from zero -- "reserved for 2 hours, going down", not elapsed. */}
         {!isFromConversation && (
           <MeetingDurationTimer
-            startedAt={hasJoined ? meetingStartedAtRef.current : null}
+            startedAt={hasJoined ? meetingStartedAt : null}
             countdownTo={isFreeInstantMeeting ? freeInstantExpiresAt : null}
           />
         )}

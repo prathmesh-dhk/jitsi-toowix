@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/settingsApi';
 import {
   sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle,
-  inputStyle, SettingsFooterActions, Toggle, Toast, useSettingsDirty,
+  inputStyle, readOnlyInputStyle, SettingsFooterActions, Toggle, Toast, useSettingsDirty,
 } from './SettingsShared';
 import { Info } from 'lucide-react';
+import { useTheme } from '../../lib/theme';
 
 const DEFAULTS = {
   autoRecordOwnMeetings: false, recordActiveSpeakerAndScreen: true, recordGallery: false,
@@ -15,6 +16,7 @@ const DEFAULTS = {
 type IForm = typeof DEFAULTS;
 
 export function RecordingSection() {
+  const { isDark } = useTheme();
   const { setDirty } = useSettingsDirty();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,16 +71,16 @@ export function RecordingSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Recording</h1>
-        <p style={sectionSubtitleStyle}>Control how meeting recordings are created and stored.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Recording</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Control how meeting recordings are created and stored.</p>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#3730A3' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: isDark ? 'rgba(79, 70, 229, 0.15)' : '#EEF2FF', border: `1px solid ${isDark ? '#3730A3' : '#C7D2FE'}`, borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: isDark ? '#A5B4FC' : '#3730A3' }}>
         <Info size={14} style={{ marginTop: '1px', flexShrink: 0 }} />
         Participants will be notified when recording starts.
       </div>
 
-      <div style={cardStyle}>
+      <div style={cardStyle(isDark)}>
         <Toggle label="Automatically record meetings I organize" checked={form.autoRecordOwnMeetings} onChange={(v) => set('autoRecordOwnMeetings', v)} />
         <Toggle label="Record active speaker and shared screen" checked={form.recordActiveSpeakerAndScreen} onChange={(v) => set('recordActiveSpeakerAndScreen', v)} />
         <Toggle label="Record participant gallery" checked={form.recordGallery} onChange={(v) => set('recordGallery', v)} />
@@ -87,19 +89,19 @@ export function RecordingSection() {
         <Toggle label="Generate captions" checked={form.generateCaptions} onChange={(v) => set('generateCaptions', v)} />
         <Toggle label="Include meeting chat in recording resources" checked={form.includeChatInResources} onChange={(v) => set('includeChatInResources', v)} />
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '16px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>Recording quality</label>
-            <select style={inputStyle} value={form.quality} onChange={(e) => set('quality', e.target.value as any)}>
+            <label style={labelStyle(isDark)}>Recording quality</label>
+            <select style={inputStyle(isDark)} value={form.quality} onChange={(e) => set('quality', e.target.value as any)}>
               <option value="720p">720p</option>
               <option value="1080p">1080p</option>
             </select>
           </div>
           <div>
-            <label style={labelStyle}>Recording layout</label>
-            <select style={inputStyle} value={form.layout} onChange={(e) => set('layout', e.target.value as any)}>
+            <label style={labelStyle(isDark)}>Recording layout</label>
+            <select style={inputStyle(isDark)} value={form.layout} onChange={(e) => set('layout', e.target.value as any)}>
               <option value="ActiveSpeaker">Active speaker</option>
               <option value="Gallery">Gallery</option>
               <option value="SharedScreenWithSpeaker">Shared screen with speaker</option>
@@ -109,12 +111,12 @@ export function RecordingSection() {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>Storage location</label>
-            <input style={{ ...inputStyle, background: '#F9FAFB', color: '#6B7280' }} value="Cloudflare R2 (company default)" readOnly />
+            <label style={labelStyle(isDark)}>Storage location</label>
+            <input style={readOnlyInputStyle(isDark)} value="Cloudflare R2 (company default)" readOnly />
           </div>
           <div>
-            <label style={labelStyle}>Recording retention period</label>
-            <select style={inputStyle} value={form.retentionDays} onChange={(e) => set('retentionDays', Number(e.target.value))}>
+            <label style={labelStyle(isDark)}>Recording retention period</label>
+            <select style={inputStyle(isDark)} value={form.retentionDays} onChange={(e) => set('retentionDays', Number(e.target.value))}>
               <option value={30}>30 days</option>
               <option value={60}>60 days</option>
               <option value={90}>90 days</option>
@@ -132,13 +134,13 @@ export function RecordingSection() {
 
       {confirmAutoRecord && (
         <div role="alertdialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ width: 'min(400px, 92vw)', background: '#FFFFFF', borderRadius: '14px', padding: '22px' }}>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 700, color: '#141B2B' }}>Enable automatic recording?</h3>
-            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#6B7280' }}>
+          <div style={{ width: 'min(400px, 92vw)', background: isDark ? '#131B2E' : '#FFFFFF', borderRadius: '14px', padding: '22px' }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Enable automatic recording?</h3>
+            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
               Every meeting you organize will be recorded automatically from the start, and participants will be notified.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button onClick={() => { setConfirmAutoRecord(false); set('autoRecordOwnMeetings', false); }} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #D1D5DB', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => { setConfirmAutoRecord(false); set('autoRecordOwnMeetings', false); }} style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
               <button onClick={() => { setConfirmAutoRecord(false); doSave(); }} style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', background: '#4F46E5', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Enable</button>
             </div>
           </div>

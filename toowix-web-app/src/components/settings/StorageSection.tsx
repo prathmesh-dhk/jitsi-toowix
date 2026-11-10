@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/settingsApi';
 import { sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle, inputStyle, Toggle } from './SettingsShared';
+import { useTheme } from '../../lib/theme';
 
 const formatBytes = (bytes: number) => {
   if (!bytes) return '0 MB';
@@ -17,6 +18,7 @@ const BREAKDOWN_COLORS: Record<string, string> = {
 };
 
 export function StorageSection() {
+  const { isDark } = useTheme();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [notify80, setNotify80] = useState(true);
@@ -35,19 +37,19 @@ export function StorageSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Storage</h1>
-        <p style={sectionSubtitleStyle}>Monitor recording storage and retention.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Storage</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Monitor recording storage and retention.</p>
       </div>
 
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '16px' }}>
-          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Storage used</div><div style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B' }}>{formatBytes(data.usedBytes)}</div></div>
-          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Total storage limit</div><div style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B' }}>{data.limitBytes !== null ? formatBytes(data.limitBytes) : 'Unlimited'}</div></div>
-          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Available</div><div style={{ fontSize: '18px', fontWeight: 700, color: '#141B2B' }}>{data.availableBytes !== null ? formatBytes(data.availableBytes) : '—'}</div></div>
+          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Storage used</div><div style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>{formatBytes(data.usedBytes)}</div></div>
+          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Total storage limit</div><div style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>{data.limitBytes !== null ? formatBytes(data.limitBytes) : 'Unlimited'}</div></div>
+          <div><div style={{ fontSize: '11px', color: '#9CA3AF' }}>Available</div><div style={{ fontSize: '18px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>{data.availableBytes !== null ? formatBytes(data.availableBytes) : '—'}</div></div>
         </div>
         {data.limitBytes !== null && (
           <div>
-            <div style={{ height: '8px', borderRadius: '4px', background: '#F3F4F6', overflow: 'hidden' }}>
+            <div style={{ height: '8px', borderRadius: '4px', background: isDark ? '#1E293B' : '#F3F4F6', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${percentUsed}%`, background: percentUsed >= 90 ? '#DC2626' : percentUsed >= 80 ? '#D97706' : '#4F46E5', transition: 'width 0.3s ease' }} />
             </div>
             <div style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '4px' }}>{percentUsed}% used</div>
@@ -55,8 +57,8 @@ export function StorageSection() {
         )}
       </div>
 
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 12px 0' }}>Storage breakdown</h3>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 12px 0' }}>Storage breakdown</h3>
         {breakdownTotal === 0 ? (
           <p style={{ fontSize: '12px', color: '#9CA3AF' }}>No recordings yet — nothing to break down.</p>
         ) : (
@@ -64,19 +66,19 @@ export function StorageSection() {
             {Object.entries(data.breakdown).map(([key, bytes]: [string, any]) => (
               <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: BREAKDOWN_COLORS[key], flexShrink: 0 }} />
-                <span style={{ fontSize: '13px', color: '#374151', flex: 1 }}>{BREAKDOWN_LABELS[key]}</span>
-                <span style={{ fontSize: '12px', color: '#6B7280' }}>{formatBytes(bytes)}</span>
+                <span style={{ fontSize: '13px', color: isDark ? '#D1D5DB' : '#374151', flex: 1 }}>{BREAKDOWN_LABELS[key]}</span>
+                <span style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>{formatBytes(bytes)}</span>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '12px' }}>
           <div>
-            <label style={labelStyle}>Recording retention</label>
-            <select style={inputStyle} defaultValue={data.retentionDays} disabled={!data.canManageStoragePolicy}>
+            <label style={labelStyle(isDark)}>Recording retention</label>
+            <select style={inputStyle(isDark)} defaultValue={data.retentionDays} disabled={!data.canManageStoragePolicy}>
               <option value={30}>30 days</option>
               <option value={60}>60 days</option>
               <option value={90}>90 days</option>
@@ -92,41 +94,41 @@ export function StorageSection() {
           <p style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '6px' }}>Only an organization Admin can change retention and deletion policy.</p>
         )}
         <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
-          <button style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #4F46E5', color: '#4F46E5', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Request more storage</button>
+          <button style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #4F46E5', color: isDark ? '#A5B4FC' : '#4F46E5', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Request more storage</button>
           <button
             onClick={() => (window.location.href = '/dashboard?tab=recordings')}
-            style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #D1D5DB', color: '#141B2B', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+            style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, color: isDark ? '#F9FAFB' : '#141B2B', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
           >
             Manage recordings
           </button>
         </div>
       </div>
 
-      <div style={cardStyle}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 12px 0' }}>Largest recordings</h3>
+      <div style={cardStyle(isDark)}>
+        <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 12px 0' }}>Largest recordings</h3>
         {data.largestRecordings.length === 0 ? (
           <p style={{ fontSize: '12px', color: '#9CA3AF' }}>No recordings yet.</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>RECORDING</th>
-                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>DATE</th>
-                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>ORGANIZER</th>
-                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>SIZE</th>
-                  <th style={{ textAlign: 'right', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>MANAGE</th>
+                <tr style={{ borderBottom: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}` }}>
+                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>RECORDING</th>
+                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>DATE</th>
+                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>ORGANIZER</th>
+                  <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>SIZE</th>
+                  <th style={{ textAlign: 'right', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>MANAGE</th>
                 </tr>
               </thead>
               <tbody>
                 {data.largestRecordings.map((r: any) => (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                    <td style={{ padding: '9px 6px', fontSize: '13px', fontWeight: 600, color: '#141B2B' }}>{r.name}</td>
-                    <td style={{ padding: '9px 6px', fontSize: '12px', color: '#6B7280' }}>{new Date(r.recordedAt).toLocaleDateString()}</td>
-                    <td style={{ padding: '9px 6px', fontSize: '12px', color: '#6B7280' }}>{r.organizer}</td>
-                    <td style={{ padding: '9px 6px', fontSize: '12px', color: '#6B7280' }}>{formatBytes(r.sizeBytes)}</td>
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}` }}>
+                    <td style={{ padding: '9px 6px', fontSize: '13px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B' }}>{r.name}</td>
+                    <td style={{ padding: '9px 6px', fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>{new Date(r.recordedAt).toLocaleDateString()}</td>
+                    <td style={{ padding: '9px 6px', fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>{r.organizer}</td>
+                    <td style={{ padding: '9px 6px', fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>{formatBytes(r.sizeBytes)}</td>
                     <td style={{ padding: '9px 6px', textAlign: 'right' }}>
-                      <button onClick={() => (window.location.href = '/dashboard?tab=recordings')} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid #C7D2FE', color: '#4F46E5', background: '#FFFFFF', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>Manage</button>
+                      <button onClick={() => (window.location.href = '/dashboard?tab=recordings')} style={{ padding: '5px 12px', borderRadius: '6px', border: `1px solid ${isDark ? '#3730A3' : '#C7D2FE'}`, color: isDark ? '#A5B4FC' : '#4F46E5', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>Manage</button>
                     </td>
                   </tr>
                 ))}

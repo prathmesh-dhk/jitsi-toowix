@@ -2,11 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { backendLogout } from '../lib/sessionLogout';
 import {
   Home, Calendar, Clock, History, Video, Users, Building2, Settings as SettingsIcon,
   ChevronLeft, ChevronRight, User as UserIcon, Bell, ShieldCheck, HardDrive, Sliders, LogOut,
 } from 'lucide-react';
 import { SettingsDirtyProvider, useSettingsDirty } from '../components/settings/SettingsShared';
+import { useTheme } from '../lib/theme';
 
 const RAIL_STORAGE_KEY = 'toowix_settings_rail_collapsed';
 
@@ -33,8 +35,9 @@ const SETTINGS_NAV = [
 function RailIcon({
   icon: Icon, label, active, expanded, danger, onClick,
 }: { icon: any; label: string; active?: boolean; expanded: boolean; danger?: boolean; onClick: () => void }) {
+  const { isDark } = useTheme();
   const [hover, setHover] = useState(false);
-  const color = danger ? '#DC2626' : active ? '#4F46E5' : '#6B7280';
+  const color = danger ? '#DC2626' : active ? (isDark ? '#A5B4FC' : '#4F46E5') : (isDark ? '#9CA3AF' : '#6B7280');
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
@@ -48,7 +51,7 @@ function RailIcon({
           height: '40px',
           borderRadius: '10px',
           border: 'none',
-          background: active ? '#EEF2FF' : 'transparent',
+          background: active ? (isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF') : 'transparent',
           color,
           borderLeft: active ? '3px solid #4F46E5' : '3px solid transparent',
           display: 'flex',
@@ -93,6 +96,7 @@ function RailIcon({
 }
 
 function SettingsShell() {
+  const { isDark } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const { requestNavigation } = useSettingsDirty();
@@ -111,6 +115,7 @@ function SettingsShell() {
   const expanded = !manuallyCollapsed;
 
   const handleSignOut = async () => {
+    await backendLogout();
     try { await signOut(auth); } catch (e) { console.warn('Sign out warning:', e); }
     // See the matching comment in DashboardPage.tsx's own handleSignOut -- toowix_session_token
     // is its own independent "is logged in" signal (RootRoute/AccountGuard) and must be cleared
@@ -123,15 +128,15 @@ function SettingsShell() {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100vh', background: '#F7F8FA', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+    <div style={{ display: 'flex', height: '100vh', background: isDark ? '#0B1220' : '#F7F8FA', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
       {/* Main app rail -- collapses to 68px icon-only, or expands to ~220px with labels
           via the chevron toggle at the bottom. */}
       <aside
         style={{
           width: expanded ? '220px' : '68px',
           flexShrink: 0,
-          background: '#FFFFFF',
-          borderRight: '1px solid #E5E7EB',
+          background: isDark ? '#0E1526' : '#FFFFFF',
+          borderRight: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`,
           display: 'flex',
           flexDirection: 'column',
           alignItems: expanded ? 'stretch' : 'center',
@@ -147,7 +152,7 @@ function SettingsShell() {
             style={{ width: '28px', height: '28px', objectFit: 'contain', flexShrink: 0 }}
             onError={(e) => { e.currentTarget.style.display = 'none'; }}
           />
-          {expanded && <span style={{ fontSize: '15px', fontWeight: 800, color: '#141B2B', whiteSpace: 'nowrap' }}>Toowix <span style={{ color: '#4F46E5' }}>Meet</span></span>}
+          {expanded && <span style={{ fontSize: '15px', fontWeight: 800, color: isDark ? '#F9FAFB' : '#141B2B', whiteSpace: 'nowrap' }}>Toowix <span style={{ color: '#4F46E5' }}>Meet</span></span>}
         </div>
 
         {/* Scrollable nav groups */}
@@ -155,14 +160,14 @@ function SettingsShell() {
           {MAIN_NAV.slice(0, 5).map((item) => (
             <RailIcon key={item.label} icon={item.icon} label={item.label} expanded={expanded} onClick={() => requestNavigation(() => navigate(item.path))} />
           ))}
-          <div style={{ height: '1px', background: '#F3F4F6', margin: '8px 4px' }} />
+          <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '8px 4px' }} />
           {MAIN_NAV.slice(5).map((item) => (
             <RailIcon key={item.label} icon={item.icon} label={item.label} expanded={expanded} onClick={() => requestNavigation(() => navigate(item.path))} />
           ))}
         </nav>
 
         {/* Settings + Sign Out, pinned to the bottom -- matches the dashboard's own sidebar layout */}
-        <div style={{ borderTop: '1px solid #F3F4F6', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ borderTop: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <RailIcon icon={SettingsIcon} label="Settings" active expanded={expanded} onClick={() => {}} />
           <RailIcon icon={LogOut} label="Sign Out" danger expanded={expanded} onClick={handleSignOut} />
         </div>
@@ -171,7 +176,7 @@ function SettingsShell() {
           <button
             onClick={() => setManuallyCollapsed((c) => !c)}
             title={expanded ? 'Collapse sidebar' : 'Expand sidebar'}
-            style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid #E5E7EB', background: '#FFFFFF', color: '#6B7280', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+            style={{ width: '30px', height: '30px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#E5E7EB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#9CA3AF' : '#6B7280', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
           >
             {expanded ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
           </button>
@@ -179,8 +184,8 @@ function SettingsShell() {
       </aside>
 
       {/* Settings sub-navigation, 230px */}
-      <aside style={{ width: '230px', flexShrink: 0, background: '#FFFFFF', borderRight: '1px solid #E5E7EB', padding: '24px 12px', overflowY: 'auto' }}>
-        <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#141B2B', margin: '0 0 20px 12px' }}>Settings</h2>
+      <aside style={{ width: '230px', flexShrink: 0, background: isDark ? '#0E1526' : '#FFFFFF', borderRight: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`, padding: '24px 12px', overflowY: 'auto' }}>
+        <h2 style={{ fontSize: '18px', fontWeight: 800, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 20px 12px' }}>Settings</h2>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {SETTINGS_NAV.map((item) => {
             const active = activeSettingsPath === item.path;
@@ -196,8 +201,8 @@ function SettingsShell() {
                   borderRadius: '8px',
                   border: 'none',
                   borderLeft: active ? '3px solid #4F46E5' : '3px solid transparent',
-                  background: active ? '#EEF2FF' : 'transparent',
-                  color: active ? '#4F46E5' : '#374151',
+                  background: active ? (isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF') : 'transparent',
+                  color: active ? (isDark ? '#A5B4FC' : '#4F46E5') : (isDark ? '#D1D5DB' : '#374151'),
                   fontSize: '13px',
                   fontWeight: active ? 700 : 500,
                   cursor: 'pointer',

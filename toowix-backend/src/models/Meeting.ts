@@ -118,6 +118,12 @@ export interface IMeeting {
   hostAnnouncement?: string | null;
   hostJoined?: boolean;
   quickAccessEnabled?: boolean;
+  // Set once, the moment a SECOND participant's attendance is recorded (never on the first --
+  // a lone participant isn't "in a meeting" yet). This is the one shared, server-authoritative
+  // clock every client's duration timer reads from, instead of each device stamping its own
+  // Date.now() at its own join time -- which produced a different, drifting "elapsed time" per
+  // participant depending on when THEY happened to join, not when the meeting itself began.
+  meetingStartedAt?: Date | null;
   endedAt?: Date | null;
   // Why endedAt got set -- distinguishes a real host decision from the scheduled link's own
   // validity window running out, so every participant (not just whichever client's own timer
@@ -289,6 +295,7 @@ const MeetingSchema = new Schema<IMeetingDocument>(
     hostAnnouncement: { type: String, default: null },
     hostJoined: { type: Boolean, default: false },
     quickAccessEnabled: { type: Boolean, default: true },
+    meetingStartedAt: { type: Date, default: null },
     endedAt: { type: Date, default: null },
     endReason: { type: String, enum: [ 'LINK_EXPIRED', 'HOST_ENDED', 'DURATION_LIMIT' ], default: null },
   },

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { useTheme } from '../../lib/theme';
 
 // Shared "is this section dirty" context so the shell (sub-nav + rail) can intercept
 // navigation and show the unsaved-changes confirmation, without React Router's data-router
@@ -20,6 +21,7 @@ export function useSettingsDirty() {
 }
 
 export function SettingsDirtyProvider({ children }: { children: React.ReactNode }) {
+  const { isDark } = useTheme();
   const [isDirty, setIsDirty] = useState(false);
   const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
 
@@ -40,15 +42,15 @@ export function SettingsDirtyProvider({ children }: { children: React.ReactNode 
           aria-modal="true"
           style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         >
-          <div style={{ width: 'min(400px, 92vw)', background: '#FFFFFF', borderRadius: '14px', padding: '22px', boxShadow: '0 20px 45px rgba(15,23,42,0.2)' }}>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 700, color: '#141B2B' }}>Unsaved changes</h3>
-            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#6B7280' }}>
+          <div style={{ width: 'min(400px, 92vw)', background: isDark ? '#131B2E' : '#FFFFFF', borderRadius: '14px', padding: '22px', boxShadow: isDark ? '0 20px 45px rgba(0,0,0,0.5)' : '0 20px 45px rgba(15,23,42,0.2)' }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Unsaved changes</h3>
+            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
               You have unsaved changes. Do you want to discard them?
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button
                 onClick={() => setPendingNav(null)}
-                style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#141B2B', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+                style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
               >
                 Keep editing
               </button>
@@ -74,13 +76,16 @@ export function SettingsDirtyProvider({ children }: { children: React.ReactNode 
 // ---- Shared small UI building blocks reused by every section, matching the app's
 // existing inline-style design language (indigo accent, thin borders, no gradients). ----
 
+// Each helper takes isDark explicitly (not a hook) since they're plain style objects, not
+// components -- call sites read `const { isDark } = useTheme()` themselves and pass it through,
+// e.g. `style={cardStyle(isDark)}`.
 export const sectionHeaderStyle: React.CSSProperties = { marginBottom: '24px' };
-export const sectionTitleStyle: React.CSSProperties = { fontSize: '20px', fontWeight: 800, color: '#141B2B', margin: '0 0 4px 0' };
-export const sectionSubtitleStyle: React.CSSProperties = { fontSize: '13px', color: '#6B7280', margin: 0 };
-export const cardStyle: React.CSSProperties = { backgroundColor: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '22px' };
-export const labelStyle: React.CSSProperties = { display: 'block', fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px' };
-export const inputStyle: React.CSSProperties = { width: '100%', height: '38px', padding: '0 12px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '13px', color: '#141B2B', outline: 'none', boxSizing: 'border-box', background: '#FFFFFF' };
-export const readOnlyInputStyle: React.CSSProperties = { ...inputStyle, background: '#F9FAFB', color: '#6B7280', cursor: 'not-allowed' };
+export const sectionTitleStyle = (isDark: boolean): React.CSSProperties => ({ fontSize: '20px', fontWeight: 800, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 4px 0' });
+export const sectionSubtitleStyle = (isDark: boolean): React.CSSProperties => ({ fontSize: '13px', color: isDark ? '#9CA3AF' : '#6B7280', margin: 0 });
+export const cardStyle = (isDark: boolean): React.CSSProperties => ({ backgroundColor: isDark ? '#131B2E' : '#FFFFFF', border: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}`, borderRadius: '12px', padding: '22px' });
+export const labelStyle = (isDark: boolean): React.CSSProperties => ({ display: 'block', fontSize: '12px', fontWeight: 600, color: isDark ? '#D1D5DB' : '#374151', marginBottom: '6px' });
+export const inputStyle = (isDark: boolean): React.CSSProperties => ({ width: '100%', height: '38px', padding: '0 12px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, fontSize: '13px', color: isDark ? '#F9FAFB' : '#141B2B', outline: 'none', boxSizing: 'border-box', background: isDark ? '#0F172A' : '#FFFFFF' });
+export const readOnlyInputStyle = (isDark: boolean): React.CSSProperties => ({ ...inputStyle(isDark), background: isDark ? '#1E293B' : '#F9FAFB', color: isDark ? '#9CA3AF' : '#6B7280', cursor: 'not-allowed' });
 
 export function SettingsFooterActions({
   onCancel,
@@ -93,12 +98,14 @@ export function SettingsFooterActions({
   saving: boolean;
   disabled: boolean;
 }) {
+  const { isDark } = useTheme();
+
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '22px', paddingTop: '18px', borderTop: '1px solid #F3F4F6' }}>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '22px', paddingTop: '18px', borderTop: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}` }}>
       <button
         onClick={onCancel}
         disabled={saving}
-        style={{ padding: '9px 18px', borderRadius: '8px', border: '1px solid #D1D5DB', background: '#FFFFFF', color: '#141B2B', fontSize: '13px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer' }}
+        style={{ padding: '9px 18px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '13px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer' }}
       >
         Cancel
       </button>
@@ -109,7 +116,7 @@ export function SettingsFooterActions({
           padding: '9px 20px',
           borderRadius: '8px',
           border: 'none',
-          background: saving || disabled ? '#C7D2FE' : '#4F46E5',
+          background: saving || disabled ? (isDark ? '#312E81' : '#C7D2FE') : '#4F46E5',
           color: '#FFFFFF',
           fontSize: '13px',
           fontWeight: 700,
@@ -123,9 +130,11 @@ export function SettingsFooterActions({
 }
 
 export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  const { isDark } = useTheme();
+
   return (
     <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '10px 0', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>
-      <span style={{ fontSize: '13px', color: '#374151' }}>{label}</span>
+      <span style={{ fontSize: '13px', color: isDark ? '#D1D5DB' : '#374151' }}>{label}</span>
       <span
         onClick={() => !disabled && onChange(!checked)}
         role="switch"
@@ -136,7 +145,7 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
           width: '38px',
           height: '22px',
           borderRadius: '11px',
-          background: checked ? '#4F46E5' : '#D1D5DB',
+          background: checked ? '#4F46E5' : (isDark ? '#334155' : '#D1D5DB'),
           position: 'relative',
           transition: 'background 0.15s ease',
           flexShrink: 0,
@@ -149,6 +158,8 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
 }
 
 export function Toast({ message, type, onClose }: { message: string; type: 'success' | 'error'; onClose: () => void }) {
+  const { isDark } = useTheme();
+
   React.useEffect(() => {
     const t = setTimeout(onClose, 4000);
     return () => clearTimeout(t);
@@ -162,8 +173,8 @@ export function Toast({ message, type, onClose }: { message: string; type: 'succ
         zIndex: 1100,
         padding: '12px 18px',
         borderRadius: '10px',
-        background: type === 'success' ? '#141B2B' : '#DC2626',
-        color: '#FFFFFF',
+        background: type === 'success' ? (isDark ? '#F9FAFB' : '#141B2B') : '#DC2626',
+        color: type === 'success' && isDark ? '#141B2B' : '#FFFFFF',
         fontSize: '13px',
         fontWeight: 600,
         boxShadow: '0 10px 25px rgba(0,0,0,0.25)',

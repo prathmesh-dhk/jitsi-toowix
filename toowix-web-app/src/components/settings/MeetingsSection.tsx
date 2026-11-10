@@ -4,6 +4,7 @@ import {
   sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle,
   inputStyle, SettingsFooterActions, Toggle, Toast, useSettingsDirty,
 } from './SettingsShared';
+import { useTheme } from '../../lib/theme';
 
 const DEFAULTS = {
   cameraOffOnJoin: false, useHdVideo: true, displayParticipantNames: true,
@@ -14,15 +15,17 @@ const DEFAULTS = {
 type IForm = typeof DEFAULTS;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const { isDark } = useTheme();
   return (
     <div style={{ marginBottom: '20px' }}>
-      <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 6px 0' }}>{title}</h3>
+      <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 6px 0' }}>{title}</h3>
       {children}
     </div>
   );
 }
 
 export function MeetingsSection() {
+  const { isDark } = useTheme();
   const { setDirty } = useSettingsDirty();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -67,18 +70,18 @@ export function MeetingsSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Meeting preferences</h1>
-        <p style={sectionSubtitleStyle}>Set defaults for meetings you organize.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Meeting preferences</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Set defaults for meetings you organize.</p>
       </div>
 
-      <div style={cardStyle}>
+      <div style={cardStyle(isDark)}>
         <Section title="Video">
           <Toggle label="Camera off when joining" checked={form.cameraOffOnJoin} onChange={(v) => set('cameraOffOnJoin', v)} />
           <Toggle label="Use HD video when available" checked={form.useHdVideo} onChange={(v) => set('useHdVideo', v)} />
           <Toggle label="Display participant names" checked={form.displayParticipantNames} onChange={(v) => set('displayParticipantNames', v)} />
         </Section>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '16px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
 
         <Section title="Audio">
           <Toggle label="Mute microphone when joining" checked={form.muteMicOnJoin} onChange={(v) => set('muteMicOnJoin', v)} />
@@ -87,7 +90,7 @@ export function MeetingsSection() {
           <Toggle label="Noise suppression" checked={form.noiseSuppression} onChange={(v) => set('noiseSuppression', v)} />
         </Section>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '16px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
 
         <Section title="Joining and access">
           <Toggle label="Require guests to wait in the lobby" checked={form.requireLobby} onChange={(v) => set('requireLobby', v)} />
@@ -98,19 +101,19 @@ export function MeetingsSection() {
           <Toggle label="Notify the host when someone enters the lobby" checked={form.notifyHostOnLobbyEntry} onChange={(v) => set('notifyHostOnLobbyEntry', v)} />
         </Section>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '16px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
 
         <Section title="Defaults">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
-              <label style={labelStyle}>Default meeting duration</label>
-              <select style={inputStyle} value={form.defaultDurationMinutes} onChange={(e) => set('defaultDurationMinutes', Number(e.target.value))}>
+              <label style={labelStyle(isDark)}>Default meeting duration</label>
+              <select style={inputStyle(isDark)} value={form.defaultDurationMinutes} onChange={(e) => set('defaultDurationMinutes', Number(e.target.value))}>
                 {[15, 30, 45, 60, 90].map((m) => <option key={m} value={m}>{m} min</option>)}
               </select>
             </div>
             <div>
-              <label style={labelStyle}>Default meeting type</label>
-              <select style={inputStyle} value={form.defaultMeetingType} onChange={(e) => set('defaultMeetingType', e.target.value as any)}>
+              <label style={labelStyle(isDark)}>Default meeting type</label>
+              <select style={inputStyle(isDark)} value={form.defaultMeetingType} onChange={(e) => set('defaultMeetingType', e.target.value as any)}>
                 <option value="Internal">Internal</option>
                 <option value="Guest">External</option>
               </select>

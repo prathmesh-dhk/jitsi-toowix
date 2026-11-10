@@ -45,7 +45,7 @@ const TIMEZONES = ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/Lon
 const LANGUAGES = [{ code: 'en', label: 'English' }, { code: 'hi', label: 'Hindi' }, { code: 'es', label: 'Spanish' }, { code: 'fr', label: 'French' }];
 
 export function GeneralSection() {
-  const { setTheme } = useTheme();
+  const { setTheme, isDark } = useTheme();
   const { setDirty } = useSettingsDirty();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -181,21 +181,21 @@ export function GeneralSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>General</h1>
-        <p style={sectionSubtitleStyle}>Choose your language, time and appearance preferences.</p>
+        <h1 style={sectionTitleStyle(isDark)}>General</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Choose your language, time and appearance preferences.</p>
       </div>
 
-      <div style={cardStyle}>
+      <div style={cardStyle(isDark)}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>App language</label>
-            <select style={inputStyle} value={form.language} onChange={(e) => update('language', e.target.value)}>
+            <label style={labelStyle(isDark)}>App language</label>
+            <select style={inputStyle(isDark)} value={form.language} onChange={(e) => update('language', e.target.value)}>
               {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
             </select>
           </div>
           <div>
-            <label style={labelStyle}>Time zone</label>
-            <select style={inputStyle} value={form.timezone} onChange={(e) => update('timezone', e.target.value)}>
+            <label style={labelStyle(isDark)}>Time zone</label>
+            <select style={inputStyle(isDark)} value={form.timezone} onChange={(e) => update('timezone', e.target.value)}>
               {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
             </select>
           </div>
@@ -203,16 +203,16 @@ export function GeneralSection() {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>Date format</label>
-            <select style={inputStyle} value={form.dateFormat} onChange={(e) => update('dateFormat', e.target.value as any)}>
+            <label style={labelStyle(isDark)}>Date format</label>
+            <select style={inputStyle(isDark)} value={form.dateFormat} onChange={(e) => update('dateFormat', e.target.value as any)}>
               <option value="DD/MM/YYYY">DD/MM/YYYY</option>
               <option value="MM/DD/YYYY">MM/DD/YYYY</option>
               <option value="YYYY-MM-DD">YYYY-MM-DD</option>
             </select>
           </div>
           <div>
-            <label style={labelStyle}>Time format</label>
-            <select style={inputStyle} value={form.timeFormat} onChange={(e) => update('timeFormat', e.target.value as any)}>
+            <label style={labelStyle(isDark)}>Time format</label>
+            <select style={inputStyle(isDark)} value={form.timeFormat} onChange={(e) => update('timeFormat', e.target.value as any)}>
               <option value="12h">12-hour</option>
               <option value="24h">24-hour</option>
             </select>
@@ -220,14 +220,14 @@ export function GeneralSection() {
         </div>
 
         <div style={{ marginBottom: '20px' }}>
-          <label style={labelStyle}>Week starts on</label>
-          <select style={inputStyle} value={form.weekStartsOn} onChange={(e) => update('weekStartsOn', e.target.value as any)}>
+          <label style={labelStyle(isDark)}>Week starts on</label>
+          <select style={inputStyle(isDark)} value={form.weekStartsOn} onChange={(e) => update('weekStartsOn', e.target.value as any)}>
             <option value="SUNDAY">Sunday</option>
             <option value="MONDAY">Monday</option>
           </select>
         </div>
 
-        <label style={labelStyle}>Appearance</label>
+        <label style={labelStyle(isDark)}>Appearance</label>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
           {(['light', 'dark', 'system'] as const).map((mode) => (
             <button
@@ -237,9 +237,9 @@ export function GeneralSection() {
                 flex: 1,
                 padding: '10px',
                 borderRadius: '8px',
-                border: form.appearance === mode ? '2px solid #4F46E5' : '1px solid #D1D5DB',
-                background: form.appearance === mode ? '#EEF2FF' : '#FFFFFF',
-                color: form.appearance === mode ? '#4F46E5' : '#374151',
+                border: form.appearance === mode ? '2px solid #4F46E5' : `1px solid ${isDark ? '#334155' : '#D1D5DB'}`,
+                background: form.appearance === mode ? (isDark ? 'rgba(79, 70, 229, 0.15)' : '#EEF2FF') : (isDark ? '#0F172A' : '#FFFFFF'),
+                color: form.appearance === mode ? (isDark ? '#A5B4FC' : '#4F46E5') : (isDark ? '#D1D5DB' : '#374151'),
                 fontSize: '13px',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -251,7 +251,7 @@ export function GeneralSection() {
           ))}
         </div>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '18px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '18px 0' }} />
 
         <Toggle label="Reduce motion" checked={form.reduceMotion} onChange={(v) => update('reduceMotion', v)} />
         <Toggle label="High contrast" checked={form.highContrast} onChange={(v) => update('highContrast', v)} />
@@ -260,8 +260,8 @@ export function GeneralSection() {
       </div>
 
       {canManagePolicy && policyForm && (
-        <div style={{ ...cardStyle, marginTop: '16px' }}>
-          <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#141B2B', margin: '0 0 4px 0' }}>Company meeting policy</h3>
+        <div style={{ ...cardStyle(isDark), marginTop: '16px' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 4px 0' }}>Company meeting policy</h3>
           <p style={{ fontSize: '12px', color: '#9CA3AF', margin: '0 0 16px 0' }}>
             Applies to every meeting created in your organization. Only Admins can change this.
           </p>
@@ -274,11 +274,11 @@ export function GeneralSection() {
           <Toggle label="Lock microphone for participants by default" checked={policyForm.micLockEnabled} onChange={(v) => updatePolicy('micLockEnabled', v)} />
 
           <div style={{ marginTop: '14px', maxWidth: '260px' }}>
-            <label style={labelStyle}>Max meeting duration (minutes, blank = no limit)</label>
+            <label style={labelStyle(isDark)}>Max meeting duration (minutes, blank = no limit)</label>
             <input
               type="number"
               min={1}
-              style={inputStyle}
+              style={inputStyle(isDark)}
               value={policyForm.maxMeetingDurationMinutes ?? ''}
               onChange={(e) => updatePolicy('maxMeetingDurationMinutes', e.target.value ? Number(e.target.value) : null)}
             />

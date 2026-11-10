@@ -106,7 +106,7 @@ const endedMeetingSlugs = new Map<string, IMeetingEndReason>();
 // every write site that already touches endedMeetingSlugs above (same reasoning -- this cache
 // additionally covers hostJoined/cancelledAt, which that Set does not), plus cancelMeetingHandler
 // in meetings.ts.
-const liveStatusCache = new SimpleCache<{ cancelled: boolean; ended: boolean; hostJoined: boolean; live: boolean; reason: IMeetingEndReason | null }>(5000);
+const liveStatusCache = new SimpleCache<{ cancelled: boolean; ended: boolean; hostJoined: boolean; live: boolean; meetingStartedAt: number | null; reason: IMeetingEndReason | null }>(5000);
 const liveStatusCacheEnabled = () => process.env.CACHE_LIVE_STATUS !== 'false';
 
 /**
@@ -506,7 +506,7 @@ export async function getLiveStatus(room: string): Promise<IServiceResult> {
   const cachedReason = endedMeetingSlugs.get(room);
 
   if (cachedReason) {
-    const result = { live: false, ended: true, cancelled: false, hostJoined: false, reason: cachedReason };
+    const result = { live: false, ended: true, cancelled: false, hostJoined: false, meetingStartedAt: null, reason: cachedReason };
     if (cacheOn) liveStatusCache.set(room, result);
     return { body: result, httpStatus: 200 };
   }
@@ -523,6 +523,10 @@ export async function getLiveStatus(room: string): Promise<IServiceResult> {
     ended: !!meeting?.endedAt,
     cancelled: !!meeting?.cancelledAt,
     hostJoined: !!meeting?.hostJoined,
+    // The one shared clock every participant's duration timer reads from (see recordAttendance's
+    // own comment) -- null until a second participant has actually joined, so every client shows
+    // the exact same elapsed time instead of each device timing from its own join moment.
+    meetingStartedAt: meeting?.meetingStartedAt ? meeting.meetingStartedAt.getTime() : null,
     reason,
   };
 
@@ -743,6 +747,23 @@ export async function recordAttendance(room: string, attendanceToken: string, le
       }
       await Meeting.updateOne({ roomSlug: room, 'participants._id': { $ne: claim.participantEntryId } },
         { $push: { participants: { _id: claim.participantEntryId, name: claim.identity.name, email: claim.identity.email, avatarUrl: claim.identity.avatar || null, role: claim.moderator ? 'Organizer' : 'Participant', joinedAt: new Date() } } });
+
+      // The shared meeting-duration clock starts the moment a SECOND participant is actually
+      // present -- a lone host isn't "in a meeting" yet. Re-read the fresh participant list
+      // (not a count computed before the push above) and guard the write with
+      // `meetingStartedAt: null` so only the one join that genuinely crosses from 1 to 2 active
+      // participants ever sets it, even if two joins land concurrently.
+      const updated = await Meeting.findOne({ roomSlug: room }, { participants: 1 });
+      const activeCount = updated?.participants?.filter((p: any) => !p.leftAt).length || 0;
+
+      if (activeCount >= 2) {
+        const stamped = await Meeting.updateOne({ roomSlug: room, meetingStartedAt: null }, { $set: { meetingStartedAt: new Date() } });
+
+        // Only when THIS call is the one that actually set it (guards against a concurrent
+        // duplicate also seeing activeCount >= 2 and invalidating redundantly) -- still cheap
+        // either way, this just avoids every participant's periodic join wastefully evicting it.
+        if (stamped.modifiedCount > 0) invalidateLiveStatusCache(room);
+      }
     }
     return { body: undefined, httpStatus: 200 };
   } catch {

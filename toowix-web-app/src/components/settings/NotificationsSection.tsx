@@ -5,6 +5,7 @@ import {
   inputStyle, SettingsFooterActions, Toast, useSettingsDirty,
 } from './SettingsShared';
 import { Info } from 'lucide-react';
+import { useTheme } from '../../lib/theme';
 
 const NOTIFICATION_ROWS: { key: string; label: string; locked?: boolean }[] = [
   { key: 'MEETING_INVITATION', label: 'Meeting invitations' },
@@ -33,6 +34,7 @@ const defaultEntries = (): IEntries =>
   Object.fromEntries(NOTIFICATION_ROWS.map((r) => [r.key, { inApp: true, email: r.key === 'SECURITY_ALERT' }]));
 
 export function NotificationsSection() {
+  const { isDark } = useTheme();
   const { setDirty } = useSettingsDirty();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -104,26 +106,26 @@ export function NotificationsSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Notifications</h1>
-        <p style={sectionSubtitleStyle}>Choose which updates you want to receive.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Notifications</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Choose which updates you want to receive.</p>
       </div>
 
-      <div style={cardStyle}>
+      <div style={cardStyle(isDark)}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B' }}>Mute all notifications</span>
+            <span style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B' }}>Mute all notifications</span>
             <span
               onClick={() => setMuteAll((m) => !m)}
               role="switch"
               aria-checked={muteAll}
-              style={{ width: '38px', height: '22px', borderRadius: '11px', background: muteAll ? '#4F46E5' : '#D1D5DB', position: 'relative', cursor: 'pointer' }}
+              style={{ width: '38px', height: '22px', borderRadius: '11px', background: muteAll ? '#4F46E5' : (isDark ? '#334155' : '#D1D5DB'), position: 'relative', cursor: 'pointer' }}
             >
               <span style={{ position: 'absolute', top: '2px', left: muteAll ? '18px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: '#FFFFFF', transition: 'left 0.15s ease' }} />
             </span>
           </div>
           <div>
-            <label style={{ ...labelStyle, marginBottom: '4px', display: 'inline-block', marginRight: '8px' }}>Meeting reminder timing</label>
-            <select style={{ ...inputStyle, width: 'auto', height: '32px', display: 'inline-block' }} value={reminder} onChange={(e) => setReminder(Number(e.target.value))}>
+            <label style={{ ...labelStyle(isDark), marginBottom: '4px', display: 'inline-block', marginRight: '8px' }}>Meeting reminder timing</label>
+            <select style={{ ...inputStyle(isDark), width: 'auto', height: '32px', display: 'inline-block' }} value={reminder} onChange={(e) => setReminder(Number(e.target.value))}>
               <option value={5}>5 minutes before</option>
               <option value={10}>10 minutes before</option>
               <option value={15}>15 minutes before</option>
@@ -133,7 +135,7 @@ export function NotificationsSection() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#F9FAFB', border: '1px solid #F3F4F6', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#6B7280' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: isDark ? '#1E293B' : '#F9FAFB', border: `1px solid ${isDark ? '#334155' : '#F3F4F6'}`, borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
           <Info size={14} style={{ marginTop: '1px', flexShrink: 0 }} />
           Critical security notifications can't be fully disabled — they'll always reach you in-app, even with mute all on.
         </div>
@@ -141,18 +143,18 @@ export function NotificationsSection() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>NOTIFICATION</th>
-                <th style={{ textAlign: 'center', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>IN-APP</th>
-                <th style={{ textAlign: 'center', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: '#6B7280' }}>EMAIL</th>
+              <tr style={{ borderBottom: `1px solid ${isDark ? '#1E293B' : '#E5E7EB'}` }}>
+                <th style={{ textAlign: 'left', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>NOTIFICATION</th>
+                <th style={{ textAlign: 'center', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>IN-APP</th>
+                <th style={{ textAlign: 'center', padding: '8px 6px', fontSize: '11px', fontWeight: 700, color: isDark ? '#9CA3AF' : '#6B7280' }}>EMAIL</th>
               </tr>
             </thead>
             <tbody>
               {NOTIFICATION_ROWS.map((row) => {
                 const entry = entries[row.key] || { inApp: true, email: false };
                 return (
-                  <tr key={row.key} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                    <td style={{ padding: '9px 6px', fontSize: '13px', color: '#374151' }}>
+                  <tr key={row.key} style={{ borderBottom: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}` }}>
+                    <td style={{ padding: '9px 6px', fontSize: '13px', color: isDark ? '#D1D5DB' : '#374151' }}>
                       {row.label}
                       {row.locked && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#9CA3AF' }}>(always on)</span>}
                     </td>

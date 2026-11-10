@@ -5,6 +5,7 @@ import {
   inputStyle, readOnlyInputStyle, SettingsFooterActions, Toast, useSettingsDirty,
 } from './SettingsShared';
 import { CheckCircle2 } from 'lucide-react';
+import { useTheme } from '../../lib/theme';
 
 const TIMEZONES = ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata', 'Asia/Singapore', 'Australia/Sydney'];
 const LANGUAGES = [{ code: 'en', label: 'English' }, { code: 'hi', label: 'Hindi' }, { code: 'es', label: 'Spanish' }, { code: 'fr', label: 'French' }];
@@ -21,6 +22,7 @@ interface IProfileForm {
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
 
 export function ProfileSection() {
+  const { isDark } = useTheme();
   const { setDirty } = useSettingsDirty();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -167,20 +169,20 @@ export function ProfileSection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Profile</h1>
-        <p style={sectionSubtitleStyle}>Manage your personal information.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Profile</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Manage your personal information.</p>
       </div>
 
-      <div style={cardStyle}>
+      <div style={cardStyle(isDark)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
           {avatarUrl ? (
             <img src={avatarUrl} alt="" style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }} />
           ) : (
-            <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: '#EEF2FF', color: '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: 700 }}>
+            <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF', color: isDark ? '#A5B4FC' : '#4F46E5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', fontWeight: 700 }}>
               {initialsOf(`${form.firstName} ${form.lastName}`)}
             </div>
           )}
-          <label style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #4F46E5', color: '#4F46E5', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+          <label style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #4F46E5', color: isDark ? '#A5B4FC' : '#4F46E5', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
             Change photo
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handlePhotoChange} style={{ display: 'none' }} />
           </label>
@@ -193,21 +195,21 @@ export function ProfileSection() {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>First name</label>
-            <input style={inputStyle} value={form.firstName} onChange={(e) => update('firstName', e.target.value)} aria-invalid={!!errors.firstName} />
+            <label style={labelStyle(isDark)}>First name</label>
+            <input style={inputStyle(isDark)} value={form.firstName} onChange={(e) => update('firstName', e.target.value)} aria-invalid={!!errors.firstName} />
             {errors.firstName && <span style={{ fontSize: '11px', color: '#DC2626' }}>{errors.firstName}</span>}
           </div>
           <div>
-            <label style={labelStyle}>Last name</label>
-            <input style={inputStyle} value={form.lastName} onChange={(e) => update('lastName', e.target.value)} />
+            <label style={labelStyle(isDark)}>Last name</label>
+            <input style={inputStyle(isDark)} value={form.lastName} onChange={(e) => update('lastName', e.target.value)} />
           </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>Email address</label>
+            <label style={labelStyle(isDark)}>Email address</label>
             <div style={{ position: 'relative' }}>
-              <input style={readOnlyInputStyle} value={account.email} readOnly />
+              <input style={readOnlyInputStyle(isDark)} value={account.email} readOnly />
               {account.emailVerified && (
                 <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 700, color: '#059669' }}>
                   <CheckCircle2 size={13} /> Verified
@@ -216,50 +218,50 @@ export function ProfileSection() {
             </div>
           </div>
           <div>
-            <label style={labelStyle}>Phone number</label>
-            <input style={inputStyle} value={form.phoneNumber} onChange={(e) => update('phoneNumber', e.target.value)} placeholder="+91 98765 43210" />
+            <label style={labelStyle(isDark)}>Phone number</label>
+            <input style={inputStyle(isDark)} value={form.phoneNumber} onChange={(e) => update('phoneNumber', e.target.value)} placeholder="+91 98765 43210" />
             {errors.phoneNumber && <span style={{ fontSize: '11px', color: '#DC2626' }}>{errors.phoneNumber}</span>}
           </div>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
           <div>
-            <label style={labelStyle}>Job title</label>
-            <input style={inputStyle} value={form.jobTitle} onChange={(e) => update('jobTitle', e.target.value)} placeholder="e.g. Product Admin" />
+            <label style={labelStyle(isDark)}>Job title</label>
+            <input style={inputStyle(isDark)} value={form.jobTitle} onChange={(e) => update('jobTitle', e.target.value)} placeholder="e.g. Product Admin" />
           </div>
           <div>
-            <label style={labelStyle}>Time zone</label>
-            <select style={inputStyle} value={form.timezone} onChange={(e) => update('timezone', e.target.value)}>
+            <label style={labelStyle(isDark)}>Time zone</label>
+            <select style={inputStyle(isDark)} value={form.timezone} onChange={(e) => update('timezone', e.target.value)}>
               {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
             </select>
           </div>
         </div>
 
         <div style={{ marginBottom: '4px' }}>
-          <label style={labelStyle}>Language</label>
-          <select style={inputStyle} value={form.language} onChange={(e) => update('language', e.target.value)}>
+          <label style={labelStyle(isDark)}>Language</label>
+          <select style={inputStyle(isDark)} value={form.language} onChange={(e) => update('language', e.target.value)}>
             {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
           </select>
         </div>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '22px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '22px 0' }} />
 
-        <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#141B2B', margin: '0 0 14px 0' }}>Organization</h3>
+        <h3 style={{ fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 14px 0' }}>Organization</h3>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div>
-            <label style={labelStyle}>Organization</label>
-            <input style={readOnlyInputStyle} value={account.organization || '—'} readOnly />
+            <label style={labelStyle(isDark)}>Organization</label>
+            <input style={readOnlyInputStyle(isDark)} value={account.organization || '—'} readOnly />
           </div>
           <div>
-            <label style={labelStyle}>Role</label>
-            <input style={readOnlyInputStyle} value={account.roleLabel} readOnly />
+            <label style={labelStyle(isDark)}>Role</label>
+            <input style={readOnlyInputStyle(isDark)} value={account.roleLabel} readOnly />
           </div>
         </div>
 
-        <div style={{ height: '1px', background: '#F3F4F6', margin: '22px 0' }} />
+        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '22px 0' }} />
 
-        <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#141B2B', margin: '0 0 10px 0' }}>Account summary</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '13px', color: '#4B5563' }}>
+        <h3 style={{ fontSize: '14px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 10px 0' }}>Account summary</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '13px', color: isDark ? '#D1D5DB' : '#4B5563' }}>
           <div><div style={{ color: '#9CA3AF', fontSize: '11px' }}>Member since</div><div>{account.memberSince ? new Date(account.memberSince).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}</div></div>
           <div><div style={{ color: '#9CA3AF', fontSize: '11px' }}>Last sign-in</div><div>{account.lastSignIn ? new Date(account.lastSignIn).toLocaleString() : 'Not tracked'}</div></div>
         </div>
