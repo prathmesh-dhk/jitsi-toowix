@@ -5,6 +5,7 @@ import {
 import { auth } from '../../lib/firebase';
 import { settingsApi } from '../../lib/settingsApi';
 import { sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle, inputStyle, Toast } from './SettingsShared';
+import { useTheme } from '../../lib/theme';
 import { Eye, EyeOff, Info, AlertTriangle, Monitor, X } from 'lucide-react';
 
 function strengthOf(pw: string): { score: number; label: string; color: string } {
@@ -19,6 +20,7 @@ function strengthOf(pw: string): { score: number; label: string; color: string }
 }
 
 export function SecuritySection() {
+  const { isDark } = useTheme();
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [account, setAccount] = useState<any>(null);
   const [showChangePw, setShowChangePw] = useState(false);
@@ -166,13 +168,13 @@ export function SecuritySection() {
   return (
     <div>
       <div style={sectionHeaderStyle}>
-        <h1 style={sectionTitleStyle}>Security</h1>
-        <p style={sectionSubtitleStyle}>Protect your account and review sign-in activity.</p>
+        <h1 style={sectionTitleStyle(isDark)}>Security</h1>
+        <p style={sectionSubtitleStyle(isDark)}>Protect your account and review sign-in activity.</p>
       </div>
 
       {/* Password */}
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 4px 0' }}>Password</h3>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 4px 0' }}>Password</h3>
         <p style={{ fontSize: '12px', color: '#9CA3AF', margin: '0 0 12px 0' }}>
           {account?.passwordChangedAt ? `Last changed ${new Date(account.passwordChangedAt).toLocaleDateString()}` : 'No password change on record.'}
         </p>
@@ -180,40 +182,40 @@ export function SecuritySection() {
         {isGoogleUser && !showChangePw ? (
           <p style={{ fontSize: '12px', color: '#9CA3AF' }}>You sign in with Google — there's no Toowix password to change here.</p>
         ) : !showChangePw ? (
-          <button onClick={() => setShowChangePw(true)} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #4F46E5', color: '#4F46E5', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => setShowChangePw(true)} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #4F46E5', color: isDark ? '#A5B4FC' : '#4F46E5', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
             Change Password
           </button>
         ) : (
           <div>
             <div style={{ marginBottom: '12px' }}>
-              <label style={labelStyle}>Current password</label>
+              <label style={labelStyle(isDark)}>Current password</label>
               <div style={{ position: 'relative' }}>
-                <input style={inputStyle} type={showPw ? 'text' : 'password'} value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
+                <input style={inputStyle(isDark)} type={showPw ? 'text' : 'password'} value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
                 <button onClick={() => setShowPw((s) => !s)} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer' }}>
                   {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
             </div>
             <div style={{ marginBottom: '4px' }}>
-              <label style={labelStyle}>New password</label>
-              <input style={inputStyle} type={showPw ? 'text' : 'password'} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+              <label style={labelStyle(isDark)}>New password</label>
+              <input style={inputStyle(isDark)} type={showPw ? 'text' : 'password'} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
             </div>
             {newPw && (
               <div style={{ display: 'flex', gap: '4px', margin: '6px 0 12px' }}>
-                {[1, 2, 3, 4].map((i) => <div key={i} style={{ height: '4px', flex: 1, borderRadius: '2px', background: i <= strength.score ? strength.color : '#E5E7EB' }} />)}
+                {[1, 2, 3, 4].map((i) => <div key={i} style={{ height: '4px', flex: 1, borderRadius: '2px', background: i <= strength.score ? strength.color : (isDark ? '#334155' : '#E5E7EB') }} />)}
                 <span style={{ fontSize: '11px', color: strength.color, marginLeft: '6px', whiteSpace: 'nowrap' }}>{strength.label}</span>
               </div>
             )}
             <div style={{ marginBottom: '12px' }}>
-              <label style={labelStyle}>Confirm new password</label>
-              <input style={inputStyle} type={showPw ? 'text' : 'password'} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+              <label style={labelStyle(isDark)}>Confirm new password</label>
+              <input style={inputStyle(isDark)} type={showPw ? 'text' : 'password'} value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#374151', marginBottom: '14px', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: isDark ? '#D1D5DB' : '#374151', marginBottom: '14px', cursor: 'pointer' }}>
               <input type="checkbox" checked={logOutOthers} onChange={(e) => setLogOutOthers(e.target.checked)} style={{ accentColor: '#4F46E5' }} />
               Log out other sessions after changing password
             </label>
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={() => setShowChangePw(false)} disabled={changingPw} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #D1D5DB', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => setShowChangePw(false)} disabled={changingPw} style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
               <button onClick={handleChangePassword} disabled={changingPw} style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', background: '#4F46E5', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
                 {changingPw ? 'Changing...' : 'Change password'}
               </button>
@@ -223,21 +225,21 @@ export function SecuritySection() {
       </div>
 
       {/* 2FA */}
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 4px 0' }}>Two-factor authentication</h3>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 4px 0' }}>Two-factor authentication</h3>
         <p style={{ fontSize: '12px', color: '#9CA3AF', margin: '0 0 12px 0' }}>Status: {account?.twoFactorEnabled ? 'Enabled' : 'Not enabled'}</p>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: '#F9FAFB', border: '1px solid #F3F4F6', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: '#6B7280' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', background: isDark ? '#1E293B' : '#F9FAFB', border: `1px solid ${isDark ? '#334155' : '#F3F4F6'}`, borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280' }}>
           <Info size={14} style={{ marginTop: '1px', flexShrink: 0 }} />
           Authenticator-app setup (QR code, OTP verification, recovery codes) isn't built yet — this is an honest "not available," not a hidden feature.
         </div>
       </div>
 
       {/* SSO */}
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
-        <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: '0 0 4px 0' }}>Single sign-on</h3>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: '0 0 4px 0' }}>Single sign-on</h3>
         {isGoogleUser ? (
           <>
-            <p style={{ fontSize: '12px', color: '#6B7280', margin: '0 0 4px 0' }}>Connected: <strong>{auth.currentUser?.email}</strong></p>
+            <p style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 4px 0' }}>Connected: <strong>{auth.currentUser?.email}</strong></p>
             <p style={{ fontSize: '12px', color: '#9CA3AF', margin: 0 }}>Identity provider: Google</p>
           </>
         ) : (
@@ -246,14 +248,14 @@ export function SecuritySection() {
       </div>
 
       {/* Active sessions */}
-      <div style={{ ...cardStyle, marginBottom: '16px' }}>
+      <div style={{ ...cardStyle(isDark), marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-          <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#141B2B', margin: 0 }}>Active sessions</h3>
+          <h3 style={{ fontSize: '13px', fontWeight: 700, color: isDark ? '#F9FAFB' : '#141B2B', margin: 0 }}>Active sessions</h3>
           {sessions && sessions.length > 1 && (
             <button
               onClick={handleSignOutOthers}
               disabled={signingOutOthers}
-              style={{ padding: '6px 12px', borderRadius: '7px', border: '1px solid #FECACA', color: '#DC2626', background: '#FFFFFF', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+              style={{ padding: '6px 12px', borderRadius: '7px', border: `1px solid ${isDark ? '#7F1D1D' : '#FECACA'}`, color: '#DC2626', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
             >
               {signingOutOthers ? 'Signing out...' : 'Sign out other sessions'}
             </button>
@@ -269,13 +271,13 @@ export function SecuritySection() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {sessions.map((s) => (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #F3F4F6', background: s.isCurrent ? '#F5F3FF' : '#FFFFFF' }}>
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}`, background: s.isCurrent ? (isDark ? 'rgba(79, 70, 229, 0.15)' : '#F5F3FF') : (isDark ? '#0F172A' : '#FFFFFF') }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                  <Monitor size={16} style={{ color: '#6B7280', flexShrink: 0 }} />
+                  <Monitor size={16} style={{ color: isDark ? '#9CA3AF' : '#6B7280', flexShrink: 0 }} />
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#141B2B', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 600, color: isDark ? '#F9FAFB' : '#141B2B', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {s.browser} on {s.os}
-                      {s.isCurrent && <span style={{ fontSize: '10px', fontWeight: 700, color: '#4F46E5', background: '#EEF2FF', padding: '2px 6px', borderRadius: '999px' }}>This device</span>}
+                      {s.isCurrent && <span style={{ fontSize: '10px', fontWeight: 700, color: isDark ? '#A5B4FC' : '#4F46E5', background: isDark ? 'rgba(99, 102, 241, 0.2)' : '#EEF2FF', padding: '2px 6px', borderRadius: '999px' }}>This device</span>}
                     </div>
                     <div style={{ fontSize: '11px', color: '#9CA3AF' }}>
                       {s.ipAddress} • {s.location} • last active {new Date(s.lastSeenAt).toLocaleString()}
@@ -299,21 +301,21 @@ export function SecuritySection() {
       </div>
 
       {/* Danger zone */}
-      <div style={{ ...cardStyle, border: '1px solid #FECACA' }}>
+      <div style={{ ...cardStyle(isDark), border: `1px solid ${isDark ? '#7F1D1D' : '#FECACA'}` }}>
         <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#DC2626', margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <AlertTriangle size={14} /> Danger zone
         </h3>
         <p style={{ fontSize: '12px', color: '#9CA3AF', margin: '0 0 14px 0' }}>Deactivating your account signs you out and disables access until reactivated by an admin.</p>
         {!showDeactivate ? (
-          <button onClick={() => setShowDeactivate(true)} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #FECACA', color: '#DC2626', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => setShowDeactivate(true)} style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#7F1D1D' : '#FECACA'}`, color: '#DC2626', background: isDark ? '#1E293B' : '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
             Deactivate account
           </button>
         ) : (
           <div>
-            <label style={labelStyle}>Confirm your password</label>
-            <input style={inputStyle} type="password" value={deactivatePw} onChange={(e) => setDeactivatePw(e.target.value)} />
+            <label style={labelStyle(isDark)}>Confirm your password</label>
+            <input style={inputStyle(isDark)} type="password" value={deactivatePw} onChange={(e) => setDeactivatePw(e.target.value)} />
             <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-              <button onClick={() => setShowDeactivate(false)} disabled={deactivating} style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #D1D5DB', background: '#FFFFFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => setShowDeactivate(false)} disabled={deactivating} style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${isDark ? '#334155' : '#D1D5DB'}`, background: isDark ? '#1E293B' : '#FFFFFF', color: isDark ? '#F9FAFB' : '#141B2B', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
               <button onClick={handleDeactivate} disabled={deactivating} style={{ padding: '9px 16px', borderRadius: '8px', border: 'none', background: '#DC2626', color: '#FFFFFF', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
                 {deactivating ? 'Deactivating...' : 'Confirm deactivation'}
               </button>
