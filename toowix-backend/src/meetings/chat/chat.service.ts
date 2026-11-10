@@ -58,8 +58,26 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
     return { body: { persisted: false }, httpStatus: 200 };
   }
 
-  const senderName = String(params.senderName || 'Guest').slice(0, 100);
-  const senderId = typeof params.senderId === 'string' ? params.senderId.slice(0, 120) : null;
+  // CONFIRMED EXPLOITABLE (QA, 2026-11-10): senderName/senderId used to come straight from the
+  // request body with no binding to the caller's real identity -- any authenticated account could
+  // POST a message with an arbitrary senderName/senderId impersonating someone else, and the
+  // forged message rendered identically to a real one (ConversationsPanel.tsx has no separate
+  // ownership check of its own). A genuine guest (no Firebase account at all) has no real identity
+  // to derive from, so that path is intentionally left as-is (see editMessage's own comment) --
+  // this fix only closes the hole for anyone who actually has an account, which is also exactly
+  // the population that can reach getHistory/listMembers in the first place.
+  let senderName = String(params.senderName || 'Guest').slice(0, 100);
+  let senderId = typeof params.senderId === 'string' ? params.senderId.slice(0, 120) : null;
+
+  if (params.firebaseUid) {
+    const sender = await User.findOne({ firebaseUid: params.firebaseUid }).select('_id fullName email');
+
+    if (sender) {
+      senderName = (sender.fullName || sender.email || senderName).slice(0, 100);
+      senderId = String(sender._id);
+    }
+  }
+
   const text = typeof params.text === 'string' ? params.text.slice(0, MAX_TEXT_LENGTH) : null;
   const imageUrl = typeof params.imageUrl === 'string' ? params.imageUrl.slice(0, 2000) : null;
   const imageSize = typeof params.imageSize === 'number' ? params.imageSize : null;
@@ -146,6 +164,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
 }
 
 interface IEditMessageParams {
+  firebaseUid?: string;
   senderId?: string;
   text: string;
 }
@@ -155,11 +174,15 @@ interface IEditMessageParams {
  * no persisted Meeting document (the homepage's free instant meeting) has no history to edit
  * here at all, so this is a silent no-op for it; the LIVE edit still broadcasts fine via the
  * real-time signal, this only affects what a reload or a later viewer of saved history sees.
- * Ownership is checked by senderId (the sender's live session id, same guard the live chat's own
- * "is this my own message" check already uses) rather than an account -- a guest with no account
- * can send a message and must be able to edit it too. This means editing is only possible from
- * the SAME session that sent it (reloading starts a new session id), which matches how this
- * feature is actually used -- fixing a typo moments after sending, not a long-lived edit history.
+ * For an authenticated caller, ownership is the real account id derived server-side from
+ * firebaseUid -- NEVER the client-supplied senderId, which is exactly how an authenticated
+ * attacker could read a victim's senderId off listMembers/getHistory and then edit their message
+ * (confirmed by QA, 2026-11-10). A genuine guest (no account) has no server identity to derive,
+ * so that path still falls back to the client-supplied senderId -- the sender's live session id,
+ * matching how the live chat's own "is this my own message" check already works. This means guest
+ * editing is only possible from the SAME session that sent it (reloading starts a new session
+ * id), which matches how this feature is actually used -- fixing a typo moments after sending,
+ * not a long-lived edit history.
  */
 export async function editMessage(room: string, messageId: string, params: IEditMessageParams): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
@@ -179,7 +202,19 @@ export async function editMessage(room: string, messageId: string, params: IEdit
   if (!existing) {
     return { body: { error: 'Message not found' }, httpStatus: 404 };
   }
-  if (!params.senderId || existing.senderId !== params.senderId) {
+
+  let ownerId: string | null = typeof params.senderId === 'string' ? params.senderId : null;
+
+  if (params.firebaseUid) {
+    const sender = await User.findOne({ firebaseUid: params.firebaseUid }).select('_id');
+
+    // An authenticated caller is ALWAYS checked against their real account id, win or lose --
+    // never falls back to the client-supplied senderId, or this would just be the same hole
+    // wearing a firebaseUid-present guard.
+    ownerId = sender ? String(sender._id) : `__unknown_account__${params.firebaseUid}`;
+  }
+
+  if (!ownerId || existing.senderId !== ownerId) {
     return { body: { error: 'You can only edit your own messages' }, httpStatus: 403 };
   }
 

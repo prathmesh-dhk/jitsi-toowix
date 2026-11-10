@@ -52,6 +52,18 @@ export async function persistChatImage(
   }
 
   const [ , mime, base64Data ] = match;
+
+  // Narrow, deliberate exception to "accept any image/<subtype>" above: SVG is the one image
+  // subtype that can embed executable <script>/event-handler content (confirmed uploadable and
+  // served back as image/svg+xml with no Content-Disposition by QA, 2026-11-10 -- not currently
+  // exploitable thanks to this app's global CSP, but that's a property of unrelated code, not of
+  // this upload path, so it shouldn't be the only thing standing between a chat "image" and script
+  // execution). A real photo/graphic never needs to be an SVG; reject it here instead of trying to
+  // sanitize or rewrite untrusted SVG markup.
+  if (mime.toLowerCase() === 'svg+xml') {
+    throw new Error('SVG images are not supported here -- please upload a PNG, JPEG, WEBP, or GIF.');
+  }
+
   const ext = extensionForImageMimeSubtype(mime);
   const buffer = Buffer.from(base64Data, 'base64');
 

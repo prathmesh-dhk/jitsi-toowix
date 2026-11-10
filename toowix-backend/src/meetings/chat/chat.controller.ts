@@ -51,6 +51,7 @@ export async function editChatMessageHandler(req: any, res: Response): Promise<v
     const room = String(req.params.roomSlug).toLowerCase();
     const messageId = String(req.params.messageId);
     const result = await chatService.editMessage(room, messageId, {
+      firebaseUid: req.firebaseUid,
       senderId: req.body.senderId,
       text: req.body.text,
     });
