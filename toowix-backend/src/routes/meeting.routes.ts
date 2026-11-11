@@ -82,7 +82,7 @@ router.get('/room/:roomSlug/live-status', optionalAccount, getLiveMeetingStatusH
 // Chat persistence & attachments
 router.post('/room/:roomSlug/chat', optionalAccount, postChatMessageHandler);
 router.patch('/room/:roomSlug/chat/:messageId', optionalAccount, editChatMessageHandler);
-router.get('/room/:roomSlug/chat', verifyFirebaseToken, getChatHistoryHandler);
+router.get('/room/:roomSlug/chat', optionalAccount, getChatHistoryHandler);
 router.post('/room/:roomSlug/chat/image', optionalAccount, uploadChatImageHandler);
 router.post('/room/:roomSlug/chat/audio', optionalAccount, uploadChatAudioHandler);
 router.post('/room/:roomSlug/chat/file', optionalAccount, uploadChatFileHandler);
