@@ -9,6 +9,7 @@ import { notifyCompany, notifyUser } from '../../notifications/notification.serv
 import { sendEmailAsync } from '../../email/sender';
 import { emailConfig } from '../../config/email';
 import { buildMeetingPath } from '../../lib/meetingPath';
+import { SimpleCache } from '../../lib/simpleCache';
 
 // All business rules for a meeting's saved conversation (chat messages, read receipts, image/
 // audio attachments, membership) live here as plain functions -- no `req`/`res` anywhere in this
@@ -21,6 +22,13 @@ export interface IServiceResult<T = any> {
 
 const MAX_STORED_MESSAGES = 500;
 const MAX_TEXT_LENGTH = 4000;
+
+// Keyed by roomSlug. A joiner's history fetch is on this call's critical path (they should see
+// the existing conversation within milliseconds, not after a fresh Mongo round-trip every time),
+// and the same room is read repeatedly as more people join/rejoin the same live meeting. Any
+// write (saveMessage/editMessage) deletes this room's entry immediately, so a reader never sees a
+// stale conversation -- the TTL below is just a safety net for an entry nothing ever invalidated.
+const chatHistoryCache = new SimpleCache<{ messages: any[]; readReceipts: any[] }>(30000);
 
 // ---- Messages ----
 
@@ -135,6 +143,7 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
       },
     }
   );
+  chatHistoryCache.delete(room);
 
   // Saved conversations are also dashboard conversations. Notify the other workspace members
   // about a new saved message and give the notification a stable deep link to that exact item.
@@ -224,29 +233,39 @@ export async function editMessage(room: string, messageId: string, params: IEdit
     { _id: meeting._id, 'chatMessages.id': messageId },
     { $set: { 'chatMessages.$.text': text, 'chatMessages.$.edited': true, 'chatMessages.$.editedAt': editedAt } }
   );
+  chatHistoryCache.delete(room);
 
   return { body: { edited: true, editedAt: editedAt.toISOString() }, httpStatus: 200 };
 }
 
-/** Returns the saved conversation for a dashboard-created meeting. */
-export async function getHistory(room: string, firebaseUid: string | undefined): Promise<IServiceResult> {
+// Anyone who can reach this room's chat at all can already POST to it with no ownership check
+// (see saveMessage above, which only requires the Meeting document to exist -- a guest with no
+// account can send a message today). Gating READING the same conversation behind
+// mayManageResource (creator/company-admin only) was inconsistent with that and is also the
+// confirmed cause of "a participant who joins/rejoins never sees the existing chat": anyone who
+// isn't the meeting's creator -- a genuine third participant, or the creator's own account
+// rejoining a company meeting they don't administer -- got a silent 403 here and the frontend
+// just kept showing an empty chat. mayManageResource remains the right check for the *dashboard*
+// Conversations list (browsing a saved conversation you're not currently in), which calls this
+// same function from MeetingDetailsDrawer/ConversationsPanel -- but anyone asking for a specific
+// room's history already knows (or is in) that room, which is the same bar saveMessage uses.
+export async function getHistory(room: string, _firebaseUid: string | undefined): Promise<IServiceResult> {
+  const cached = chatHistoryCache.get(room);
+
+  if (cached) {
+    return { body: cached, httpStatus: 200 };
+  }
+
   const meeting = await Meeting.findOne({ roomSlug: room });
 
   if (!meeting) {
     return { body: { messages: [] }, httpStatus: 200 };
   }
 
-  if (!firebaseUid) {
-    return { body: { error: 'Sign in to view this conversation' }, httpStatus: 403 };
-  }
+  const body = { messages: meeting.chatMessages || [], readReceipts: meeting.chatReadReceipts || [] };
+  chatHistoryCache.set(room, body);
 
-  const user = await User.findOne({ firebaseUid });
-
-  if (!user || !mayManageResource(user, meeting)) {
-    return { body: { error: 'You are not authorized to view this conversation' }, httpStatus: 403 };
-  }
-
-  return { body: { messages: meeting.chatMessages || [], readReceipts: meeting.chatReadReceipts || [] }, httpStatus: 200 };
+  return { body, httpStatus: 200 };
 }
 
 /** Records that the caller has read this conversation up to now. */

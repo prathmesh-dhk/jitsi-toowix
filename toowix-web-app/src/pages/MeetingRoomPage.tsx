@@ -702,14 +702,19 @@ export function MeetingRoomPage() {
   ]);
   const chatHistoryLoadedRef = useRef(false);
 
-  // Joining a call from Conversations should feel like walking back into the same conversation,
-  // not a fresh empty one -- load the saved history into the live chat panel and open it, once,
-  // right when the join completes. A plain instant meeting (not opened via Conversations) never
-  // triggers this, so its chat starts empty as before.
+  // Whoever joins this room -- the third person arriving after A and B have already been
+  // chatting, or anyone (including the first two) leaving and rejoining -- should see the
+  // existing conversation immediately, not a blank chat panel. This used to only run when the
+  // meeting was opened from the dashboard's Conversations list (isFromConversation); every other
+  // join (an ordinary meeting link/room code, which is how a third participant actually joins)
+  // never fetched history at all, which was the real bug behind "I don't see the earlier chat".
+  // Opening the panel itself stays conditional on isFromConversation -- walking in from
+  // Conversations should land straight on chat; an ordinary join still opens on its own cue and
+  // just has the history ready the moment the panel is opened.
   useEffect(() => {
-    if (!isFromConversation || !hasJoined || chatHistoryLoadedRef.current) return;
+    if (!hasJoined || chatHistoryLoadedRef.current) return;
     chatHistoryLoadedRef.current = true;
-    setActivePanel('chat');
+    if (isFromConversation) setActivePanel('chat');
     fetchChatHistory(roomId)
       .then(({ messages }) => {
         if (messages.length === 0) return;
