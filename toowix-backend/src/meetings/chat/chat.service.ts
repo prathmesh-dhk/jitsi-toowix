@@ -30,6 +30,29 @@ const MAX_TEXT_LENGTH = 4000;
 // stale conversation -- the TTL below is just a safety net for an entry nothing ever invalidated.
 const chatHistoryCache = new SimpleCache<{ messages: any[]; readReceipts: any[] }>(30000);
 
+// A homepage/instant meeting (roomSlug starting instant-/twx-) never gets a Meeting document, so
+// saveMessage's normal $push-to-Mongo path has nothing to write to -- a third participant joining
+// one of these after the first two have already chatted hit the exact same "I don't see the
+// earlier messages" bug dbb365c fixed for dashboard meetings, just via a different cause (no row
+// to read back, not a permissions/fetch gap). There's no DB document to persist to here, so this
+// keeps the same bounded, in-memory, best-effort buffer per room instead -- pruned after a period
+// of inactivity so a never-ending stream of ad-hoc rooms can't grow this without bound.
+const MAX_IN_MEMORY_MESSAGES = 200;
+const IN_MEMORY_CHAT_TTL_MS = 6 * 60 * 60 * 1000;
+interface IInMemoryChatRoom {
+  messages: any[];
+  lastActivity: number;
+}
+const inMemoryChatRooms = new Map<string, IInMemoryChatRoom>();
+
+function pruneInMemoryChatRooms(): void {
+  const cutoff = Date.now() - IN_MEMORY_CHAT_TTL_MS;
+  for (const [room, data] of inMemoryChatRooms) {
+    if (data.lastActivity < cutoff) inMemoryChatRooms.delete(room);
+  }
+}
+setInterval(pruneInMemoryChatRooms, 30 * 60 * 1000).unref();
+
 // ---- Messages ----
 
 interface ISaveMessageParams {
@@ -61,10 +84,6 @@ interface ISaveMessageParams {
 /** Best-effort persistence for one chat message (text, image, voice message, and @mentions). */
 export async function saveMessage(room: string, params: ISaveMessageParams): Promise<IServiceResult> {
   const meeting = await Meeting.findOne({ roomSlug: room });
-
-  if (!meeting) {
-    return { body: { persisted: false }, httpStatus: 200 };
-  }
 
   // CONFIRMED EXPLOITABLE (QA, 2026-11-10): senderName/senderId used to come straight from the
   // request body with no binding to the caller's real identity -- any authenticated account could
@@ -118,6 +137,14 @@ export async function saveMessage(room: string, params: ISaveMessageParams): Pro
     mentions,
     createdAt: new Date(),
   };
+
+  if (!meeting) {
+    const buffer = inMemoryChatRooms.get(room) || { messages: [], lastActivity: 0 };
+    buffer.messages = [ ...buffer.messages, message ].slice(-MAX_IN_MEMORY_MESSAGES);
+    buffer.lastActivity = Date.now();
+    inMemoryChatRooms.set(room, buffer);
+    return { body: { persisted: false, id: message.id }, httpStatus: 200 };
+  }
 
   // $slice caps the array server-side so a very long meeting can't grow this document without
   // bound -- keeps only the most recent MAX_STORED_MESSAGES messages.
@@ -259,7 +286,9 @@ export async function getHistory(room: string, _firebaseUid: string | undefined)
   const meeting = await Meeting.findOne({ roomSlug: room });
 
   if (!meeting) {
-    return { body: { messages: [] }, httpStatus: 200 };
+    // No Meeting document means this is a homepage/instant room -- see inMemoryChatRooms above.
+    const buffer = inMemoryChatRooms.get(room);
+    return { body: { messages: buffer?.messages || [] }, httpStatus: 200 };
   }
 
   const body = { messages: meeting.chatMessages || [], readReceipts: meeting.chatReadReceipts || [] };
