@@ -373,6 +373,14 @@ export function MeetingRoomPage() {
   // Pre-join user inputs — restore name from rejoin state or localStorage
   const [displayName, setDisplayName] = useState<string>(() => {
     if (location.state?.displayName) return location.state.displayName;
+    // An external caller (e.g. Rocket.Chat's video-conference integration) can seed the name for
+    // an anonymous ad-hoc join via "?name=" -- without this, such a join has no location.state,
+    // no Firebase auth and no prior toowix_guest_displayName in this browser, so it would always
+    // fall through to the generic "Participant" fallback further down, regardless of who it is.
+    try {
+      const nameParam = new URLSearchParams(window.location.search).get('name');
+      if (nameParam?.trim()) return nameParam.trim();
+    } catch {}
     if (auth.currentUser?.displayName) return auth.currentUser.displayName;
     try {
       const user = JSON.parse(localStorage.getItem('toowix_user') || '{}');
