@@ -37,6 +37,7 @@ import {
   verifyCameraCaptureOrientation,
   getCameraCaptureDebugInfo,
   getCameraDeviceCategory,
+  isMobileBrowser,
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 
@@ -2053,14 +2054,24 @@ export function useJitsiMeeting({
       if (!displayVideoTrack) {
         throw new Error('The selected source did not provide a video track.');
       }
-      try {
-        await displayVideoTrack.applyConstraints({
-          width: { max: desktopPolicy.desktopMaxWidth },
-          height: { max: desktopPolicy.desktopMaxHeight },
-          frameRate: { max: desktopPolicy.desktopFps }
-        });
-      } catch {
-        // Window/tab capture is still valid when a browser declines these optional limits.
+      // Desktop only. Re-constraining an already-live getDisplayMedia() track like this is fine
+      // on desktop Chromium, but mobile Chrome's screen-capture pipeline (Android) is known to
+      // restart its capture surface on a mid-stream applyConstraints() call and can come back
+      // delivering solid black frames instead of a resumed capture -- exactly the reported "screen
+      // share goes black on mobile" bug, which only ever showed up once the network dipped out of
+      // GOOD (desktopPolicy only tightens past that point, see getMediaQualityPolicy). Stock Jitsi
+      // never does this re-constraining at all; mobile here now matches that and just publishes
+      // whatever the OS picker handed back, same as desktop did before this fix existed.
+      if (!isMobileBrowser()) {
+        try {
+          await displayVideoTrack.applyConstraints({
+            width: { max: desktopPolicy.desktopMaxWidth },
+            height: { max: desktopPolicy.desktopMaxHeight },
+            frameRate: { max: desktopPolicy.desktopFps }
+          });
+        } catch {
+          // Window/tab capture is still valid when a browser declines these optional limits.
+        }
       }
       [desktopTrack] = await JitsiMeetJS.createLocalTracksFromMediaStreams([
         {
