@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCameraCaptureDebugInfo, getCameraOrientationDebugState, getPreferredCameraCaptureConstraints, reconcileInitialPortraitCapture, verifyCameraCaptureOrientation } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 import { jitsiHttpScheme, jitsiWsScheme } from './jitsi/ensureLibJitsiMeetLoaded';
+import { primeIceServers } from './iceServersPatch';
 
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
 // low-level library Jitsi's own web app is built on, used directly so real MediaStreamTracks
@@ -160,6 +161,10 @@ export function useLibJitsiConference({
         if (disposedRef.current) {
           return;
         }
+
+        // See iceServersPatch.ts. Fire-and-forget -- several more async steps happen before any
+        // real ICE negotiation starts.
+        void primeIceServers();
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;

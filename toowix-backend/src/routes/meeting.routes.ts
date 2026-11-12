@@ -24,6 +24,7 @@ import {
   inviteConversationMemberHandler,
   getConversationMembersHandler,
 } from '../meetings/chat/chat.controller';
+import { getTurnCredentialsHandler } from '../meetings/turn/turn.controller';
 import {
   roomAdmission,
   attendance,
@@ -78,6 +79,9 @@ router.post('/room/:roomSlug/lobby/deny', optionalAccount, denyLobbyHandler);
 router.post('/room/:roomSlug/lobby/announce', optionalAccount, announceLobbyHandler);
 router.post('/room/:roomSlug/end-for-everyone', optionalAccount, endMeetingForEveryoneHandler);
 router.get('/room/:roomSlug/live-status', optionalAccount, getLiveMeetingStatusHandler);
+
+// Not room-scoped -- see turn.controller.ts.
+router.get('/turn-credentials', optionalAccount, getTurnCredentialsHandler);
 
 // Chat persistence & attachments
 router.post('/room/:roomSlug/chat', optionalAccount, postChatMessageHandler);

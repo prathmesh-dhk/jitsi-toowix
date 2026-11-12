@@ -40,6 +40,7 @@ import {
   isMobileBrowser,
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
+import { primeIceServers } from './iceServersPatch';
 
 export interface ISharedVideoState {
   muted?: boolean;
@@ -1047,6 +1048,11 @@ export function useJitsiMeeting({
 
           return;
         }
+
+        // Fire-and-forget: joining has several more async steps after this (JWT, connection
+        // establish, conference join) before any real RTCPeerConnection/ICE negotiation starts,
+        // which is plenty of time for this to land. See iceServersPatch.ts for why this exists.
+        void primeIceServers();
 
         const JitsiMeetJS = window.JitsiMeetJS;
         const config = window.config;
