@@ -38,6 +38,7 @@ import {
   getCameraCaptureDebugInfo,
   getCameraDeviceCategory,
   isMobileBrowser,
+  clampVideoHeightForNetwork,
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 import { primeIceServers } from './iceServersPatch';
@@ -159,6 +160,25 @@ export function getRoomDeviceSessionId(roomName: string): string {
 // can flip this one constant without editing source, to run the AV1/VP9/VP8 x simulcast
 // on/off test matrix. Never set this env var in a production build.
 const SEND_SINGLE_VIDEO_LAYER = import.meta.env.VITE_FORCE_SIMULCAST === 'true' ? false : true;
+// Codec PREFERENCE, not exclusion -- lib-jitsi-meet filters this down to whatever the browser
+// actually supports and keeps every one of them negotiable; this only reorders which one it
+// tries first. AV1 (software-encoded via libaom -- no broadly-deployed hardware encoder yet) was
+// confirmed live (getStats() showed encoderImplementation "libaom" on every outbound video
+// stream in a real screen-share test against production) to be what this app was sending by
+// default, with no app code ever asking for it -- just the browser/JVB's own default choice. A
+// client-side-only attempt to steer this via RTCRtpTransceiver.setCodecPreferences() was tried
+// and confirmed NOT to work for this deployment (see iceServersPatch.ts's note) -- this app only
+// ever answers (JVB/Jicofo is always the offerer), so the right lever is lib-jitsi-meet's own
+// videoQuality config below, not fighting the negotiation from underneath. There's also a real,
+// documented production incident (staging/README.md's §0 finding 2): Av1DDPacket/"Invalid
+// template ID" JVB warnings (521 occurrences, 12 rooms) starting ~2.5h after simulcast was
+// enabled -- unproven causation, but a real AV1-related wrinkle already seen in this exact
+// deployment. AV1 stays last (never removed), so a network/device that genuinely needs it can
+// still fall back to it.
+const VIDEO_CODEC_PREFERENCE_ORDER = [ 'VP9', 'VP8', 'H264', 'AV1' ];
+// Screen content (text, sharp edges) is exactly where AV1's extra software-encode cost is least
+// justified -- VP9 already compresses flat/sharp screen content well without it.
+const SCREENSHARE_CODEC = 'VP9';
 // Ceiling for a single room.addTrack/removeTrack/replaceTrack call inside the shared
 // trackOperationQueueRef queue (see runSerializedRoomOperation) -- see its comment for why this
 // has to live at the queue level and not just at each caller's own await.
@@ -176,10 +196,13 @@ const EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS = 8000;
 // Phase 1b (see the periodic network-quality effect for where this ran inline previously).
 // Factored out so setVirtualBackground's removal path can restore exactly this, instead of a
 // second, possibly-drifting copy of the same formula.
-function computeNonEffectSendHeight(networkState: NetworkState, base: number): number {
-  const height = networkState === 'POOR' ? Math.min(base, 180)
-    : networkState === 'DEGRADED' || networkState === 'RECOVERING' ? Math.min(base, 360)
-      : base;
+// screenShareActive defaults to false so the two call sites that restore the CAMERA's own send
+// height after a virtual-background effect ends/gives up (unrelated to screen share, and not
+// where the P0-1 black-screen-share bug lives) keep their exact prior behavior unless a caller
+// explicitly knows a share is active too. See clampVideoHeightForNetwork for the actual fix.
+function computeNonEffectSendHeight(networkState: NetworkState, base: number, screenShareActive = false): number {
+  if (screenShareActive) return clampVideoHeightForNetwork(networkState, base, true);
+  const height = clampVideoHeightForNetwork(networkState, base, false);
 
   return networkState === 'GOOD' ? Math.max(base, 720) : height;
 }
@@ -1108,7 +1131,15 @@ export function useJitsiMeeting({
               // joined produced offer/answer failures in production, so a stable media route is
               // preferred over the small direct-route saving for two-person calls.
               p2p: { ...(config.p2p || {}), enabled: false },
-              openBridgeChannel: true
+              openBridgeChannel: true,
+              // See VIDEO_CODEC_PREFERENCE_ORDER's comment.
+              videoQuality: {
+                ...(config.videoQuality || {}),
+                codecPreferenceOrder: VIDEO_CODEC_PREFERENCE_ORDER,
+                mobileCodecPreferenceOrder: VIDEO_CODEC_PREFERENCE_ORDER,
+                screenshareCodec: SCREENSHARE_CODEC,
+                mobileScreenshareCodec: SCREENSHARE_CODEC,
+              },
             });
 
             myRoom = room;
@@ -1428,9 +1459,7 @@ export function useJitsiMeeting({
     // step it down / back up as the measured network state changes, so quality follows the
     // network in both directions. The bridge still picks what the bandwidth estimate can carry.
     const base = getReceiveMaxHeightForCallSize(remoteParticipantCount + 1, screenShareActive);
-    const height = networkState === 'POOR' ? Math.min(base, 180)
-      : networkState === 'DEGRADED' || networkState === 'RECOVERING' ? Math.min(base, 360)
-        : base;
+    const height = clampVideoHeightForNetwork(networkState, base, screenShareActive);
     const lastN = networkState === 'POOR' ? Math.min(policy.lastN, 2) : policy.lastN;
 
     try {
@@ -1505,7 +1534,7 @@ export function useJitsiMeeting({
         // already re-applies this same formula immediately rather than waiting for this tick).
         effectAppliedTargetRef.current = null;
         effectSenderHeightRef.current = null;
-        const sendHeight = computeNonEffectSendHeight(networkState, base);
+        const sendHeight = computeNonEffectSendHeight(networkState, base, screenShareActive);
 
         // Phase 1 stabilization: this used to fire unconditionally on every effect run, even when
         // networkState/base produced the same sendHeight as last time (e.g. a participant-count

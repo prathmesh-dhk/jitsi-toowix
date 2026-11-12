@@ -18,7 +18,16 @@ assert.match(quality, /totalParticipants <= 2\) height = 2160/, 'one-to-one may 
 assert.match(quality, /totalParticipants <= 4\) height = 1080/, 'small calls up to 1080p');
 
 
-assert.ok(hook.includes("networkState === 'POOR' ? Math.min(base, 180)"), 'weak network lowers the requested video height');
+// P0-1 fix (Toowix_Meet_Prioritized_Issue_Backlog.pdf): the inline POOR/DEGRADED clamp used to
+// apply the SAME ceiling to a screen share as to a camera tile (Math.min(base, 180) on POOR
+// regardless of screenShareActive), even though `base` already requests 1080 specifically
+// because a screen is being shared -- reported as the share going solid black on cellular. The
+// clamp now lives in clampVideoHeightForNetwork (networkQuality.ts), which floors a screen share
+// at 360 regardless of network state; this just checks the hook actually calls it with
+// screenShareActive threaded through, and that the floor/ceiling logic itself is still present.
+assert.ok(hook.includes('clampVideoHeightForNetwork(networkState, base, screenShareActive)'), 'receiver height clamp is screen-share aware');
+assert.match(quality, /networkState === 'POOR'\)[^;]*return Math\.min\(base, 180\)/, 'camera-only weak network still lowers the requested video height');
+assert.match(quality, /Math\.max\(360, Math\.min\(base, ceiling\)\)/, 'a screen share floors at 360 regardless of how bad the network gets');
 assert.ok(hook.includes('getAudioMaxBitrateBps(networkState)'), 'voice bitrate follows the network state');
 // Real reported bug: after a REMOTE participant stopped screen sharing, the call looked "limited"
 // -- this effect's screenShareActive also reads remote desktop tracks, but the effect only used to
@@ -26,7 +35,7 @@ assert.ok(hook.includes('getAudioMaxBitrateBps(networkState)'), 'voice bitrate f
 // re-applied the receiver/sender constraints for the new state. remoteScreenShares.length (real
 // React state) must be a dependency too, not just isScreenSharing.
 assert.ok(
-  hook.includes('remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState ]'),
+  hook.includes('remoteParticipantCount, isScreenSharing, remoteScreenShares.length, networkState]'),
   'quality is re-evaluated whenever the network state OR a remote screen share starts/stops changes, not just local sharing'
 );
 

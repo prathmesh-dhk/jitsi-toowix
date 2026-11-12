@@ -11,6 +11,17 @@
 // backend-issued TURN/STUN servers merged into whatever iceServers it was given -- a real,
 // working ICE server list on every call, regardless of what Jitsi's signaling server did or
 // didn't hand out.
+//
+// NOTE: an earlier version of this file also tried to steer video codec selection away from AV1
+// here, by reordering RTCRtpTransceiver.setCodecPreferences() on every createOffer/createAnswer.
+// Confirmed via a real live test against production that this does NOT work for this deployment:
+// setCodecPreferences succeeded (no exception) on every call, but encoderImplementation stayed
+// "libaom" (AV1) regardless -- this client only ever calls createAnswer (JVB/Jicofo is always the
+// offerer), and the offer's own codec list is what actually constrains the answer. Codec
+// preference belongs in lib-jitsi-meet's own, purpose-built config instead (videoQuality.
+// codecPreferenceOrder/screenshareCodec, passed into initJitsiConference in useJitsiMeeting.ts/
+// useLibJitsiConference.ts) -- that routes through its real signaling path rather than fighting
+// it from underneath with a raw WebRTC API call.
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 let cachedServers: RTCIceServer[] = [];

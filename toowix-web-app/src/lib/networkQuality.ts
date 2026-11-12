@@ -418,6 +418,26 @@ export function getReceiveMaxHeightForCallSize(totalParticipants: number, screen
   return Math.min(height, mobileCap);
 }
 
+// P0 fix (see Toowix_Meet_Prioritized_Issue_Backlog.pdf, P0-1): a shared screen's content
+// (slides, text) is unreadable at the same height a POOR/DEGRADED network clamps a face tile
+// to -- the caller previously clamped straight to Math.min(base, 180)/Math.min(base, 360)
+// regardless of screenShareActive, even though `base` (getReceiveMaxHeightForCallSize) already
+// requests 1080 specifically because a screen is being shared. On cellular (which commonly trips
+// POOR on RTT/loss while audio stays fine), that produced a screen share clamped to the SAME
+// 180p a camera gets -- reported as the share going solid black on mobile data. A screen share
+// now floors at 360 (still-readable text) regardless of how bad the network gets, with a higher
+// ceiling than a camera tile at every state; a camera-only call is completely unaffected (exact
+// same 180/360/base behavior as before).
+export function clampVideoHeightForNetwork(networkState: NetworkState, base: number, screenShareActive: boolean): number {
+  if (screenShareActive) {
+    const ceiling = networkState === 'POOR' ? 480 : networkState === 'DEGRADED' || networkState === 'RECOVERING' ? 720 : base;
+    return Math.max(360, Math.min(base, ceiling));
+  }
+  if (networkState === 'POOR') return Math.min(base, 180);
+  if (networkState === 'DEGRADED' || networkState === 'RECOVERING') return Math.min(base, 360);
+  return base;
+}
+
 // Opus voice bitrate per network state. Voice stays intelligible far below the default, so on a
 // weak link it is lowered to protect the connection and raised again when the network recovers.
 export function getAudioMaxBitrateBps(state: NetworkState): number {

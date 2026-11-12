@@ -1,4 +1,5 @@
 import { auth } from '../lib/firebase';
+import { settingsApi } from '../lib/settingsApi';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { ensureLibJitsiMeetLoaded, getRoomDeviceSessionId, useJitsiMeeting } from '../lib/useJitsiMeeting';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
@@ -446,6 +447,43 @@ export function MeetingRoomPage() {
   // person turns it off themselves (this is still real React state, not reset on every render),
   // it just never again persists that choice into a future, unrelated meeting.
   const [videoEnabled, setVideoEnabled] = useState(!isVoiceCall);
+  // P0 fix (see Toowix_Meet_Prioritized_Issue_Backlog.pdf, P0-2): Settings -> Meetings'
+  // "Mute microphone on join" / "Turn off camera on join" saved nothing but their own preference
+  // row -- this page never read it back, so the toggle visibly did nothing, which is a trust
+  // problem ("IT blames Jitsi" when a company rolls out "everyone joins muted" and it never
+  // applies). This is a DIFFERENT thing from the always-start-on behavior explained in
+  // micEnabled/videoEnabled's own comments above: that fix was about accidental LEFTOVER
+  // localStorage state silently carrying a past session's mute into an unrelated future one;
+  // this is the user's current, explicit, saved preference, applied fresh every join -- not
+  // stale state. Guarded by userToggledPrejoinMediaRef so it can never clobber a choice the
+  // person already made with the lobby's own mic/camera buttons (the fetch is one network
+  // round-trip; someone who taps mute before it resolves wins).
+  const userToggledPrejoinMediaRef = useRef(false);
+  useEffect(() => {
+    if (!auth.currentUser) return;
+    let cancelled = false;
+    settingsApi.get<{ meetingDefaults?: { cameraOffOnJoin?: boolean; muteMicOnJoin?: boolean } }>('/')
+      .then((data) => {
+        if (cancelled || userToggledPrejoinMediaRef.current) return;
+        const defaults = data.meetingDefaults;
+        if (!defaults) return;
+        if (defaults.cameraOffOnJoin) {
+          setVideoEnabled(false);
+          const track = mediaStreamRef.current?.getVideoTracks()[0];
+          if (track) track.enabled = false;
+        }
+        if (defaults.muteMicOnJoin) {
+          setMicEnabled(false);
+          const track = mediaStreamRef.current?.getAudioTracks()[0];
+          if (track) track.enabled = false;
+        }
+      })
+      .catch(() => {
+        // Best-effort -- a failed fetch just leaves the existing always-on-by-default behavior.
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -2436,6 +2474,7 @@ export function MeetingRoomPage() {
 
   // Toggle video track
   const handleToggleVideo = () => {
+    userToggledPrejoinMediaRef.current = true;
     const next = !videoEnabled;
     setVideoEnabled(next);
     if (mediaStreamRef.current) {
@@ -2446,6 +2485,7 @@ export function MeetingRoomPage() {
 
   // Toggle mic track
   const handleToggleMic = () => {
+    userToggledPrejoinMediaRef.current = true;
     const next = !micEnabled;
     setMicEnabled(next);
     if (mediaStreamRef.current) {

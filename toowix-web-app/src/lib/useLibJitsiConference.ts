@@ -4,6 +4,10 @@ import { logGalleryDebug } from './galleryOrientationDebug';
 import { jitsiHttpScheme, jitsiWsScheme } from './jitsi/ensureLibJitsiMeetLoaded';
 import { primeIceServers } from './iceServersPatch';
 
+// See useJitsiMeeting.ts's own copy of these two constants for the full reasoning/evidence.
+const VIDEO_CODEC_PREFERENCE_ORDER = [ 'VP9', 'VP8', 'H264', 'AV1' ];
+const SCREENSHARE_CODEC = 'VP9';
+
 // Direct lib-jitsi-meet integration -- no Jitsi IFrame, no external_api.js. This is the
 // low-level library Jitsi's own web app is built on, used directly so real MediaStreamTracks
 // can be attached to our own <video>/<audio> elements inside MeetingRoomPage's existing
@@ -203,7 +207,17 @@ export function useLibJitsiConference({
 
             const room = connection.initJitsiConference(roomName.toLowerCase(), {
               ...config,
-              openBridgeChannel: true
+              openBridgeChannel: true,
+              // See VIDEO_CODEC_PREFERENCE_ORDER's comment (useJitsiMeeting.ts has the full
+              // reasoning/evidence -- duplicated here rather than imported, matching this hook's
+              // existing independence from that one).
+              videoQuality: {
+                ...(config.videoQuality || {}),
+                codecPreferenceOrder: VIDEO_CODEC_PREFERENCE_ORDER,
+                mobileCodecPreferenceOrder: VIDEO_CODEC_PREFERENCE_ORDER,
+                screenshareCodec: SCREENSHARE_CODEC,
+                mobileScreenshareCodec: SCREENSHARE_CODEC,
+              },
             });
 
             roomRef.current = room;
