@@ -484,7 +484,14 @@ export function MeetingRoomPage() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => getSavedBackground());
+  // P2-4 fix (Toowix_Meet_Prioritized_Issue_Backlog.pdf -- "Default off on mobile/slow network").
+  // The runtime CPU-governor (JitsiStreamBackgroundEffect's _perfCap, handleBackgroundGiveUp's
+  // "this device can't keep up" toast) already covers the OTHER half of that ticket ("prompt
+  // when CPU high") -- confirmed already in place, not new. What was missing: a background
+  // saved on a desktop session auto-restores on ANY device, including a phone, with no
+  // device-aware default at all. A phone now simply never auto-restores a saved background --
+  // the person can still turn one on manually from the modal, same governor still protects that.
+  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => (isMobileBrowser() ? null : getSavedBackground()));
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showEndMeetingModal, setShowEndMeetingModal] = useState(false);
@@ -3951,6 +3958,10 @@ export function MeetingRoomPage() {
       backgroundAppliedRef.current = false;
       return;
     }
+    // See prejoinBackground's own P2-4 comment -- same mobile-default-off rule applies here too,
+    // for whoever joins straight into the call (voice-call/audio-only entry, or a rejoin) rather
+    // than going through the prejoin lobby at all.
+    if (isMobileBrowser()) return;
     const saved = getSavedBackground();
 
     if (!saved || backgroundAppliedRef.current || !jitsiMeeting.localCameraStream) return;

@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react';
 import {
   classifyNetwork,
   isBitrateOnlyPoorSignal,
+  isMobileBrowser,
   isRttOrLossPoorSignal,
   NETWORK_RECOVERY_STABLE_MS,
   NETWORK_STATS_INTERVAL_MS,
@@ -90,9 +91,10 @@ export function useNetworkQualityMonitor(deps: INetworkQualityDeps): void {
     // problem is never suppressed, grace window or not.
     const inBweRampUpGrace = recentHighBitrateTrackStartAtRef.current !== null
       && now - recentHighBitrateTrackStartAtRef.current < BWE_RAMP_UP_GRACE_MS;
-    const observed = inBweRampUpGrace && !isRttOrLossPoorSignal(metrics) && isBitrateOnlyPoorSignal(metrics)
-      ? classifyNetwork({ ...metrics, availableOutgoingBitrateKbps: null })
-      : classifyNetwork(metrics);
+    const isMobile = isMobileBrowser();
+    const observed = inBweRampUpGrace && !isRttOrLossPoorSignal(metrics, isMobile) && isBitrateOnlyPoorSignal(metrics)
+      ? classifyNetwork({ ...metrics, availableOutgoingBitrateKbps: null }, isMobile)
+      : classifyNetwork(metrics, isMobile);
     const current = networkStateRef.current;
     let next = current;
 

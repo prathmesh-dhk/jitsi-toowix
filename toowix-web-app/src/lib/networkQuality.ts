@@ -36,12 +36,24 @@ export const NETWORK_THRESHOLDS = {
 
 const isNumber = (value: number | null): value is number => value !== null && Number.isFinite(value);
 
+// P1-1 fix (Toowix_Meet_Prioritized_Issue_Backlog.pdf -- flagged as an open gap even under that
+// ticket's own "VERIFY" status: "mobile POOR still aggressive"). Cellular's baseline RTT to any
+// server is structurally higher than WiFi/ethernet -- 150-250ms is normal, healthy 4G/5G, not a
+// sign of trouble, whereas the same number on WiFi usually does mean something's wrong. Applying
+// identical RTT thresholds regardless of access network meant a perfectly healthy mobile call
+// read as DEGRADED/POOR far more readily than an equivalent desktop call. Loss/bitrate thresholds
+// are deliberately left untouched here: packet loss and available bandwidth mean the same thing
+// on any access network, only RTT's baseline differs by medium.
+const MOBILE_RTT_TOLERANCE_MULTIPLIER = 1.6;
+
 // True for the signals that are reliable the instant they're observed -- an actually-broken ICE
 // transport, real measured RTT, or real measured packet loss. None of these depend on the
 // browser's own bandwidth estimator having had time to settle.
-export function isRttOrLossPoorSignal(metrics: INetworkMetrics): boolean {
+export function isRttOrLossPoorSignal(metrics: INetworkMetrics, isMobile = false): boolean {
+  const poorRttMs = isMobile ? NETWORK_THRESHOLDS.poorRttMs * MOBILE_RTT_TOLERANCE_MULTIPLIER : NETWORK_THRESHOLDS.poorRttMs;
+
   return Boolean(metrics.connectionState) && ![ 'connected', 'completed' ].includes(metrics.connectionState!)
-    || (isNumber(metrics.rttMs) && metrics.rttMs > NETWORK_THRESHOLDS.poorRttMs)
+    || (isNumber(metrics.rttMs) && metrics.rttMs > poorRttMs)
     || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent > NETWORK_THRESHOLDS.poorLossPercent);
 }
 
@@ -64,12 +76,14 @@ export function isBitrateOnlyPoorSignal(metrics: INetworkMetrics): boolean {
     && metrics.availableOutgoingBitrateKbps < NETWORK_THRESHOLDS.poorBitrateKbps;
 }
 
-export function classifyNetwork(metrics: INetworkMetrics): Exclude<NetworkState, 'RECOVERING'> {
-  if (isRttOrLossPoorSignal(metrics) || isBitrateOnlyPoorSignal(metrics)) {
+export function classifyNetwork(metrics: INetworkMetrics, isMobile = false): Exclude<NetworkState, 'RECOVERING'> {
+  if (isRttOrLossPoorSignal(metrics, isMobile) || isBitrateOnlyPoorSignal(metrics)) {
     return 'POOR';
   }
+  const degradedRttMs = isMobile ? NETWORK_THRESHOLDS.degradedRttMs * MOBILE_RTT_TOLERANCE_MULTIPLIER : NETWORK_THRESHOLDS.degradedRttMs;
+
   if (
-    (isNumber(metrics.rttMs) && metrics.rttMs >= NETWORK_THRESHOLDS.degradedRttMs)
+    (isNumber(metrics.rttMs) && metrics.rttMs >= degradedRttMs)
     || (isNumber(metrics.packetLossPercent) && metrics.packetLossPercent >= NETWORK_THRESHOLDS.degradedLossPercent)
   ) {
     return 'DEGRADED';

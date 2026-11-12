@@ -114,3 +114,30 @@ test('getTargetVideoHeight on GOOD with a thin pipe still never goes below 720',
 
   assert.equal(getTargetVideoHeight('GOOD', 360, 149), 720);
 });
+
+// P1-1 fix: cellular's structurally higher baseline RTT must not read as the same severity WiFi
+// would at the same number (Toowix_Meet_Prioritized_Issue_Backlog.pdf -- "mobile POOR still
+// aggressive"). Desktop behavior (isMobile omitted/false) must stay byte-for-byte identical.
+test('mobile gets a wider RTT tolerance than desktop at the same measured RTT', () => {
+  const { classifyNetwork } = exportsObject;
+  const atRtt = (rttMs) => ({
+    availableOutgoingBitrateKbps: null, candidateType: 'cellular', connectionState: 'connected',
+    jitterMs: 5, packetLossPercent: 0, rttMs, videoBitrateKbps: 800,
+  });
+
+  // 350ms: real trouble on WiFi (> poorRttMs=300), still just DEGRADED-range on cellular.
+  assert.equal(classifyNetwork(atRtt(350)), 'POOR');
+  assert.equal(classifyNetwork(atRtt(350), true), 'DEGRADED');
+
+  // 200ms: already DEGRADED on WiFi (>= 150), still GOOD on cellular (< 150*1.6=240) -- this is
+  // the exact false-positive the backlog flags: healthy 4G reading as a degraded call.
+  assert.equal(classifyNetwork(atRtt(200)), 'DEGRADED');
+  assert.equal(classifyNetwork(atRtt(200), true), 'GOOD');
+
+  // A genuinely bad connection is still POOR on mobile too -- this is tolerance, not blindness.
+  assert.equal(classifyNetwork(atRtt(600), true), 'POOR');
+
+  // isMobile defaulting to false/omitted must not change a single existing desktop classification.
+  assert.equal(classifyNetwork(atRtt(100)), classifyNetwork(atRtt(100), false));
+  assert.equal(classifyNetwork(atRtt(400)), classifyNetwork(atRtt(400), false));
+});
