@@ -75,8 +75,18 @@ import {
   playTimeWarningTone,
 } from '../lib/notificationSounds';
 import { useTheme } from '../lib/theme';
-import { ShareMeetingModal } from '../components/ShareMeetingModal';
-import { VirtualBackgroundModal } from '../components/VirtualBackgroundModal';
+// Lazy-loaded (same pattern/reasoning as SharedVideoManager below): each of these is a modal
+// that most joins never open in a given call (share, virtual background, shortcuts, embed,
+// security options, stats, performance, polls) -- previously all static imports, bundling
+// ~1500 lines of modal code into every single join's initial chunk whether it was ever opened
+// or not. Render sites now gate on the same `showX` state that used to be passed as `isOpen`,
+// so the dynamic import is only requested the first time a given modal is actually opened.
+const ShareMeetingModal = lazy(() =>
+  import('../components/ShareMeetingModal').then(m => ({ default: m.ShareMeetingModal }))
+);
+const VirtualBackgroundModal = lazy(() =>
+  import('../components/VirtualBackgroundModal').then(m => ({ default: m.VirtualBackgroundModal }))
+);
 import { ShareVideoDialog } from '../components/ShareVideoDialog';
 // Lazy-loaded: pulls in react-youtube, only actually needed by the small minority of calls that
 // ever share a YouTube video -- was previously a static import, bundling it into every join.
@@ -91,12 +101,25 @@ import { isOverlayDebugEnabled } from '../lib/virtualBackground/backgroundDebugT
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
-import { KeyboardShortcutsModal } from '../components/KeyboardShortcutsModal';
-import { EmbedMeetingModal } from '../components/EmbedMeetingModal';
-import { SecurityOptionsModal } from '../components/SecurityOptionsModal';
-import { ParticipantStatsModal } from '../components/ParticipantStatsModal';
-import { PerformanceSettingsModal } from '../components/PerformanceSettingsModal';
-import { PollsModal, type IPoll } from '../components/PollsModal';
+const KeyboardShortcutsModal = lazy(() =>
+  import('../components/KeyboardShortcutsModal').then(m => ({ default: m.KeyboardShortcutsModal }))
+);
+const EmbedMeetingModal = lazy(() =>
+  import('../components/EmbedMeetingModal').then(m => ({ default: m.EmbedMeetingModal }))
+);
+const SecurityOptionsModal = lazy(() =>
+  import('../components/SecurityOptionsModal').then(m => ({ default: m.SecurityOptionsModal }))
+);
+const ParticipantStatsModal = lazy(() =>
+  import('../components/ParticipantStatsModal').then(m => ({ default: m.ParticipantStatsModal }))
+);
+const PerformanceSettingsModal = lazy(() =>
+  import('../components/PerformanceSettingsModal').then(m => ({ default: m.PerformanceSettingsModal }))
+);
+const PollsModal = lazy(() =>
+  import('../components/PollsModal').then(m => ({ default: m.PollsModal }))
+);
+import type { IPoll } from '../components/PollsModal';
 import { MeetingParticipantCard } from '../components/MeetingParticipantCard';
 import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/participantColorTheme';
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
@@ -7742,23 +7765,31 @@ export function MeetingRoomPage() {
         ))}
 
         {/* Share Modal */}
-        <ShareMeetingModal
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          meeting={{
-            name: formattedRoomTitle,
-            meetingUrl: getMeetingUrl(roomId),
-            roomSlug: roomId,
-            hostName: meetingInfo?.organizerName || displayName || 'Organizer',
-            description: meetingInfo?.description || undefined,
-          }}
-        />
+        {showShareModal && (
+          <Suspense fallback={null}>
+            <ShareMeetingModal
+              isOpen={showShareModal}
+              onClose={() => setShowShareModal(false)}
+              meeting={{
+                name: formattedRoomTitle,
+                meetingUrl: getMeetingUrl(roomId),
+                roomSlug: roomId,
+                hostName: meetingInfo?.organizerName || displayName || 'Organizer',
+                description: meetingInfo?.description || undefined,
+              }}
+            />
+          </Suspense>
+        )}
 
-        <VirtualBackgroundModal
-          isOpen={showVirtualBackgroundModal}
-          onClose={() => setShowVirtualBackgroundModal(false)}
-          onSelect={jitsiMeeting.setVirtualBackground}
-        />
+        {showVirtualBackgroundModal && (
+          <Suspense fallback={null}>
+            <VirtualBackgroundModal
+              isOpen={showVirtualBackgroundModal}
+              onClose={() => setShowVirtualBackgroundModal(false)}
+              onSelect={jitsiMeeting.setVirtualBackground}
+            />
+          </Suspense>
+        )}
 
         <ShareVideoDialog
           isOpen={showShareVideoDialog}
@@ -7896,46 +7927,70 @@ export function MeetingRoomPage() {
             </div>
           </div>
         )}
-        <KeyboardShortcutsModal isOpen={showShortcutsModal} onClose={() => setShowShortcutsModal(false)} />
+        {showShortcutsModal && (
+          <Suspense fallback={null}>
+            <KeyboardShortcutsModal isOpen={showShortcutsModal} onClose={() => setShowShortcutsModal(false)} />
+          </Suspense>
+        )}
 
-        <EmbedMeetingModal
-          isOpen={showEmbedModal}
-          onClose={() => setShowEmbedModal(false)}
-          meetingUrl={getMeetingUrl(roomId)}
-        />
+        {showEmbedModal && (
+          <Suspense fallback={null}>
+            <EmbedMeetingModal
+              isOpen={showEmbedModal}
+              onClose={() => setShowEmbedModal(false)}
+              meetingUrl={getMeetingUrl(roomId)}
+            />
+          </Suspense>
+        )}
 
-        <SecurityOptionsModal
-          isOpen={showSecurityModal}
-          onClose={() => setShowSecurityModal(false)}
-          isLocked={jitsiMeeting.isLocked || serverLocked}
-          isModerator={isModerator}
-          onLock={handleLockRoom}
-          onUnlock={handleUnlockRoom}
-        />
+        {showSecurityModal && (
+          <Suspense fallback={null}>
+            <SecurityOptionsModal
+              isOpen={showSecurityModal}
+              onClose={() => setShowSecurityModal(false)}
+              isLocked={jitsiMeeting.isLocked || serverLocked}
+              isModerator={isModerator}
+              onLock={handleLockRoom}
+              onUnlock={handleUnlockRoom}
+            />
+          </Suspense>
+        )}
 
-        <ParticipantStatsModal
-          isOpen={showStatsModal}
-          onClose={() => setShowStatsModal(false)}
-          localName={displayName || 'You'}
-          connectionStats={jitsiMeeting.connectionStats}
-          participantNames={Object.fromEntries(remoteParticipants.map((p) => [ p.id, p.name ]))}
-        />
+        {showStatsModal && (
+          <Suspense fallback={null}>
+            <ParticipantStatsModal
+              isOpen={showStatsModal}
+              onClose={() => setShowStatsModal(false)}
+              localName={displayName || 'You'}
+              connectionStats={jitsiMeeting.connectionStats}
+              participantNames={Object.fromEntries(remoteParticipants.map((p) => [ p.id, p.name ]))}
+            />
+          </Suspense>
+        )}
 
-        <PerformanceSettingsModal
-          isOpen={showPerformanceModal}
-          onClose={() => setShowPerformanceModal(false)}
-          currentMaxHeight={performanceMaxHeight}
-          onSelect={handlePerformanceSelect}
-        />
+        {showPerformanceModal && (
+          <Suspense fallback={null}>
+            <PerformanceSettingsModal
+              isOpen={showPerformanceModal}
+              onClose={() => setShowPerformanceModal(false)}
+              currentMaxHeight={performanceMaxHeight}
+              onSelect={handlePerformanceSelect}
+            />
+          </Suspense>
+        )}
 
-        <PollsModal
-          isOpen={showPollsModal}
-          onClose={() => setShowPollsModal(false)}
-          polls={polls}
-          mySessionId={sessionIdRef.current}
-          onCreate={handleCreatePoll}
-          onVote={handleVotePoll}
-        />
+        {showPollsModal && (
+          <Suspense fallback={null}>
+            <PollsModal
+              isOpen={showPollsModal}
+              onClose={() => setShowPollsModal(false)}
+              polls={polls}
+              mySessionId={sessionIdRef.current}
+              onCreate={handleCreatePoll}
+              onVote={handleVotePoll}
+            />
+          </Suspense>
+        )}
 
         <MeetingSettingsDialog
           isOpen={showSettingsModal}
@@ -9370,11 +9425,15 @@ export function MeetingRoomPage() {
         </div>
       </div>
 
-      <VirtualBackgroundModal
-        isOpen={!hasJoined && showVirtualBackgroundModal}
-        onClose={() => setShowVirtualBackgroundModal(false)}
-        onSelect={async (config) => setPrejoinBackground(config && config.backgroundType !== 'none' ? config : null)}
-      />
+      {!hasJoined && showVirtualBackgroundModal && (
+        <Suspense fallback={null}>
+          <VirtualBackgroundModal
+            isOpen={!hasJoined && showVirtualBackgroundModal}
+            onClose={() => setShowVirtualBackgroundModal(false)}
+            onSelect={async (config) => setPrejoinBackground(config && config.backgroundType !== 'none' ? config : null)}
+          />
+        </Suspense>
+      )}
 
       <MeetingSettingsDialog
         tabs={['audio', 'video']}
