@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { signInWithEmailAndPassword, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
-import { signInWithToowix } from '../lib/keycloakAuth';
+import { isKeycloakSignInEnabled, signInWithToowix } from '../lib/keycloakAuth';
 import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
@@ -22,6 +22,7 @@ export function LoginPage() {
   const [statusReason, setStatusReason] = useState<string | null>(null);
 
   const navigate = useNavigate();
+  const keycloakSignInEnabled = isKeycloakSignInEnabled();
 
   // Process Login Gate Verification with Toowix Backend
   const handleBackendLoginGate = async (idToken: string, firebaseUser?: FirebaseUser) => {
@@ -540,7 +541,7 @@ export function LoginPage() {
                 </svg>
                 Sign in with Google
               </button>
-              <button
+              {keycloakSignInEnabled && <button
                 type="button"
                 onClick={() => void handleToowixSignIn()}
                 disabled={isLoading}
@@ -552,7 +553,7 @@ export function LoginPage() {
                 }}
               >
                 Sign in with Toowix
-              </button>
+              </button>}
             </div>
 
             {/* Footer Link */}

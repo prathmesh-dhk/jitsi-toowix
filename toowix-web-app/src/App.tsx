@@ -281,11 +281,17 @@ import { ThemeProvider } from './lib/theme';
 // mirrors the EXACT existing pattern already used for MeetingRoomPage/DirectMeetingRoomPage
 // below (same lazy()/Suspense mechanism, not a new system) -- measured with `npm run build`
 // before and after, see docs/phase5-frontend-performance-audit.md for the real before/after
-// numbers. LoginPage is the one exception kept eager: it's the most common next destination
-// from the public homepage (Sign In / the auth redirect flow), so deferring it would trade a
-// guaranteed-needed download for a visible loading flash on the single most common navigation.
+// numbers.
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(module => ({ default: module.DashboardPage })));
-import { LoginPage } from './pages/LoginPage';
+// RC-1 (senior-dev 2G notes): Phase 5 deliberately kept LoginPage eager, reasoning it's the most
+// common next destination from the public homepage. That reasoning doesn't hold for someone who
+// opens a meeting link directly and never visits /login in the session at all -- a guest joining
+// on 2G still has to download LoginPage's code (and, transitively, the Firebase Auth SDK it
+// imports -- confirmed nothing else in the eager/root import graph pulls in firebase) before
+// React Router even decides their route is /instant/:roomId, not /login. Made lazy like every
+// other non-homepage route; the one-time "Loading..." flash on an actual login navigation is the
+// same accepted tradeoff Phase 5 already made for Signup/ForgotPassword/etc.
+const LoginPage = lazy(() => import('./pages/LoginPage').then(module => ({ default: module.LoginPage })));
 const SignupPage = lazy(() => import('./pages/SignupPage').then(module => ({ default: module.SignupPage })));
 const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage').then(module => ({ default: module.ForgotPasswordPage })));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage').then(module => ({ default: module.ResetPasswordPage })));
@@ -364,9 +370,9 @@ export default function App() {
           {/* New direct lib-jitsi-meet path -- no iframe, real tracks in real <video>
               elements. Separate route, zero risk to the working /meet/:roomId iframe flow. */}
           <Route path="/meet-direct/:roomId" element={<Suspense fallback={<MeetingRouteLoader />}><DirectMeetingRoomPage /></Suspense>} />
-          <Route path="/login" element={<LoginPage />} />
+          <Route path="/login" element={<Suspense fallback={<RouteLoader />}><LoginPage /></Suspense>} />
           <Route path="/auth/callback" element={<Suspense fallback={<RouteLoader />}><AuthCallbackPage /></Suspense>} />
-          <Route path="/signin" element={<LoginPage />} />
+          <Route path="/signin" element={<Suspense fallback={<RouteLoader />}><LoginPage /></Suspense>} />
           <Route path="/signup" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
           <Route path="/register" element={<Suspense fallback={<RouteLoader />}><SignupPage /></Suspense>} />
           <Route path="/forgot-password" element={<Suspense fallback={<RouteLoader />}><ForgotPasswordPage /></Suspense>} />

@@ -101,6 +101,25 @@ export function getMediaQualityPolicy(
 ): IMediaQualityPolicy {
   const normalLastN = participantCount >= 8 ? 4 : 6;
 
+  // RC-3 (senior-dev 2G notes, "ultra-low" profile): a direct 2G/slow-2g signal from the browser
+  // is trusted immediately instead of waiting for classifyNetwork's RTT/loss samples to settle
+  // into POOR -- that debounce exists to avoid flapping on a WiFi/cellular connection that is
+  // only briefly noisy, but effectiveType is a known, stable property of the access network
+  // itself, not a noisy instantaneous sample, so there is nothing to debounce here. Does not
+  // override an explicit 'audio-only' choice (strictly MORE conservative already) or mode ===
+  // 'low-data' (same floor this produces anyway).
+  if (mode === 'auto' && state !== 'POOR' && isSlowNetworkConnection()) {
+    return {
+      audioOnly: false,
+      desktopFps: 3,
+      desktopMaxHeight: 360,
+      desktopMaxWidth: 640,
+      lastN: screenShareActive ? 1 : 0,
+      receiveMaxHeight: 180,
+      sendMaxHeight: 180
+    };
+  }
+
   if (mode === 'audio-only') {
     return {
       audioOnly: true,
@@ -160,6 +179,20 @@ export function getMediaQualityPolicy(
 }
 
 export const isMobileBrowser = () => typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// RC-3/RC-6 (senior-dev 2G notes): the browser's own Network Information API reports the access
+// network's class directly ('slow-2g' | '2g' | '3g' | '4g'), instead of waiting for several RTT/
+// loss samples to accumulate before classifyNetwork's debounced state machine can even reach
+// POOR. Not supported on Safari/Firefox at all -- always returns false there, same as today's
+// behavior (no regression, just no early signal on those browsers).
+export function isSlowNetworkConnection(): boolean {
+  try {
+    const conn = (navigator as any)?.connection;
+    return conn?.effectiveType === '2g' || conn?.effectiveType === 'slow-2g';
+  } catch {
+    return false;
+  }
+}
 
 // Real reported bug: on macOS Chrome, the camera came in portrait/narrow on the FIRST join of a
 // meeting, but correctly landscape after leaving and rejoining. Root cause -- the prejoin lobby

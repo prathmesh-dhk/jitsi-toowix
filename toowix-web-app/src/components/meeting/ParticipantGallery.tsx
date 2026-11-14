@@ -6,7 +6,7 @@
 // Moved verbatim; no behavior change. Verified post-extraction with the project's own headless-
 // Chrome gallery test suite (tests/meeting-gallery-browser.cjs, tests/meeting-gallery-layout.test.cjs)
 // against the live dev server, not just tsc/build -- see the Track 3 report for exact results.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import {
   calculateCellPositions,
@@ -71,7 +71,16 @@ export interface IParticipantGalleryProps {
   activePanel: 'chat' | 'people' | 'info' | 'host' | 'activities' | null;
 }
 
-export function ParticipantGallery({
+// RC-2 (Phase 5 audit, Finding C -- "likely forces a re-render of the entire component tree"):
+// MeetingRoomPage re-executes its render body on every one of its many state updates (e.g. the
+// ~3s connectionStats tick, unrelated to anything the gallery shows), and without memo, React
+// re-renders every child it passes a new JSX element to on the parent's next render regardless of
+// whether that child's actual props changed. This component's own props are a closed, typed list
+// (IParticipantGalleryProps) with no internal default-prop surprises, and the two props that used
+// to get a fresh reference on every MeetingRoomPage render (allShares, localTheme) are now
+// useMemo'd at the call site -- so plain shallow-equality memo is correct here, not a false
+// sense of safety.
+export const ParticipantGallery = memo(function ParticipantGallery({
   allShares, remoteParticipants, displayName, localAvatarUrl, inCallStream, inCallVideo, inCallMuted,
   isHandRaised, localTheme, isSpeaking, setInCallVideoNode, pinnedParticipantId, setPinnedManually,
   setTileViewEnabled, isModerator, handleRemoteAudioControl, activePanel,
@@ -611,4 +620,4 @@ export function ParticipantGallery({
       </div>
     </div>
   );
-}
+});

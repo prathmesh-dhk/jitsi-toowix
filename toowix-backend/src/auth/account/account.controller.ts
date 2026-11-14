@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth';
 import * as accountService from './account.service';
 import type { IRequestMeta } from './account.service';
+import { KeycloakAuthenticatedRequest } from '../../middleware/keycloakAuth';
 
 // Every function here does exactly one thing: parse the HTTP request (including pulling
 // userAgent/ip out of `req` where a handler needs them for session/email metadata), call one
@@ -22,6 +23,62 @@ function requestMeta(req: Request): IRequestMeta {
  */
 export const loginGateHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const result = await accountService.evaluateLoginGate(req.firebaseUid, req.firebaseEmail, req.firebaseEmailVerified, requestMeta(req));
+  res.status(result.httpStatus).json(result.body);
+};
+
+type KeycloakLoginGate = typeof accountService.evaluateKeycloakLoginGate;
+type KeycloakSelfLink = typeof accountService.linkOwnKeycloakIdentity;
+
+/**
+ * Factory keeps the HTTP handler thin and permits isolated tests without a real MongoDB
+ * database. Production uses the existing account-service login gate unchanged.
+ */
+export const createKeycloakSessionHandler = (
+  evaluateLoginGate: KeycloakLoginGate = accountService.evaluateKeycloakLoginGate,
+) => async (req: KeycloakAuthenticatedRequest, res: Response): Promise<void> => {
+  if (!req.keycloakSub) {
+    // This can only happen if the middleware was accidentally removed from the route.
+    res.status(401).json({ error: 'Invalid or expired Keycloak access token' });
+    return;
+  }
+
+  const result = await evaluateLoginGate(
+    req.keycloakSub, req.keycloakRoles ?? [], req.keycloakEmail, req.keycloakEmailVerified ?? false, requestMeta(req),
+  );
+  res.status(result.httpStatus).json(result.body);
+};
+
+/** POST /api/auth/keycloak-session */
+export const keycloakSessionHandler = createKeycloakSessionHandler();
+
+/**
+ * POST /api/auth/keycloak-link
+ * Both prior middleware stages must succeed: Firebase/Toowix authentication establishes whose
+ * account may be changed, then X-Keycloak-Authorization establishes the exact external `sub`.
+ */
+export const createKeycloakSelfLinkHandler = (
+  linkOwnIdentity: KeycloakSelfLink = accountService.linkOwnKeycloakIdentity,
+) => async (req: KeycloakAuthenticatedRequest, res: Response): Promise<void> => {
+  const result = await linkOwnIdentity(req.firebaseUid, req.keycloakSub);
+  res.status(result.httpStatus).json(result.body);
+};
+
+export const keycloakSelfLinkHandler = createKeycloakSelfLinkHandler();
+
+/**
+ * POST /api/auth/logout
+ * Revokes this device's Meet session and, strictly and unconditionally, this same person's
+ * Mail session too (by email) -- see account.service.ts's logoutAndRevokeEverywhere.
+ */
+export const logoutHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const userId = (req.accountUser?.id as string | undefined);
+  if (!userId) {
+    res.status(200).json({ success: true });
+    return;
+  }
+  const email = req.accountUser?.email as string | undefined;
+  const sessionToken = req.get('X-Toowix-Session') || undefined;
+  const result = await accountService.logoutAndRevokeEverywhere(userId, sessionToken, email);
   res.status(result.httpStatus).json(result.body);
 };
 

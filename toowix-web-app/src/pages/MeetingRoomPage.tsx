@@ -63,7 +63,7 @@ import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } fro
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
 import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
-import { getNetworkStatusLabel, isMobileBrowser } from '../lib/networkQuality';
+import { getNetworkStatusLabel, isMobileBrowser, isSlowNetworkConnection } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
 import {
   playChatMessageTone,
@@ -337,10 +337,6 @@ export function MeetingRoomPage() {
     }
   });
   const autoRejoinStartedRef = useRef(false);
-  // Free/unauthenticated instant meeting from the public landing page's "New Meeting" button --
-  // capped at 2 hours, like a free-tier call limit. Captured once at mount (not re-read from
-  // location.state on every render) so it can't be lost on an in-page navigation.
-  const [isFreeInstantMeeting] = useState<boolean>(Boolean((location.state as any)?.freeInstantMeeting));
   // Real reported bug: the 2-hour warning toast/tone and countdown timer could silently never
   // fire for a free instant meeting. Root cause -- this was a ref, not state: setting it inside
   // an effect doesn't itself trigger a re-render, so effectiveExpiresAt (a plain const computed
@@ -459,10 +455,24 @@ export function MeetingRoomPage() {
   // person already made with the lobby's own mic/camera buttons (the fetch is one network
   // round-trip; someone who taps mute before it resolves wins).
   const userToggledPrejoinMediaRef = useRef(false);
+  // Same P0-2 bug as cameraOffOnJoin/muteMicOnJoin above, for the other two Settings -> Meetings
+  // "Audio" toggles: "Automatically adjust microphone volume" and "Noise suppression" saved a
+  // preference row but nothing ever read it back, so both silently did nothing. AGC is a plain
+  // getUserMedia constraint, applied to the prejoin track here (it's adopted as-is into the real
+  // call via useJitsiMeeting's existingStream). Noise suppression is a custom RNNoise track
+  // effect that only exists once useJitsiMeeting has created the real local audio track, so its
+  // default can't be applied here -- noiseSuppressionDefaultRef carries it forward to the
+  // "apply once joined" effect further down, right after useJitsiMeeting is constructed.
+  const noiseSuppressionDefaultRef = useRef(false);
+  // RC-8 (senior-dev notes): "Use HD video when available" (MeetingsSection.tsx's useHdVideo
+  // toggle) was saved to meetingDefaults but never read back anywhere -- same dead-toggle bug as
+  // the other two above. Defaults to true (today's existing always-allow-HD behavior) when unset,
+  // so an account that saved settings before this field existed sees no change.
+  const useHdVideoDefaultRef = useRef(true);
   useEffect(() => {
     if (!auth.currentUser) return;
     let cancelled = false;
-    settingsApi.get<{ meetingDefaults?: { cameraOffOnJoin?: boolean; muteMicOnJoin?: boolean } }>('/')
+    settingsApi.get<{ meetingDefaults?: { cameraOffOnJoin?: boolean; muteMicOnJoin?: boolean; autoAdjustMicVolume?: boolean; noiseSuppression?: boolean; useHdVideo?: boolean } }>('/')
       .then((data) => {
         if (cancelled || userToggledPrejoinMediaRef.current) return;
         const defaults = data.meetingDefaults;
@@ -477,6 +487,14 @@ export function MeetingRoomPage() {
           const track = mediaStreamRef.current?.getAudioTracks()[0];
           if (track) track.enabled = false;
         }
+        const audioTrack = mediaStreamRef.current?.getAudioTracks()[0];
+        if (audioTrack && typeof audioTrack.applyConstraints === 'function') {
+          audioTrack.applyConstraints({ autoGainControl: Boolean(defaults.autoAdjustMicVolume) }).catch(() => {
+            // Not every device/browser supports AGC as a constraint -- best-effort only.
+          });
+        }
+        noiseSuppressionDefaultRef.current = Boolean(defaults.noiseSuppression);
+        useHdVideoDefaultRef.current = defaults.useHdVideo !== false;
       })
       .catch(() => {
         // Best-effort -- a failed fetch just leaves the existing always-on-by-default behavior.
@@ -491,7 +509,9 @@ export function MeetingRoomPage() {
   // saved on a desktop session auto-restores on ANY device, including a phone, with no
   // device-aware default at all. A phone now simply never auto-restores a saved background --
   // the person can still turn one on manually from the modal, same governor still protects that.
-  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => (isMobileBrowser() ? null : getSavedBackground()));
+  // RC-6 (senior-dev 2G notes): same reasoning as the mobile check above -- a saved virtual
+  // background shouldn't auto-restore onto a connection too slow to spare the CPU/bandwidth cost.
+  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => (isMobileBrowser() || isSlowNetworkConnection() ? null : getSavedBackground()));
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showEndMeetingModal, setShowEndMeetingModal] = useState(false);
@@ -2286,6 +2306,27 @@ export function MeetingRoomPage() {
 
   const meetingInfoRef = useRef(meetingInfo);
 
+  // Free/unauthenticated instant meeting -- capped at 2 hours, like a free-tier call limit.
+  // Real reported bug: the countdown timer never showed up for anyone except the one browser tab
+  // that actually clicked the homepage's "New Meeting" button. Two wrong signals were tried and
+  // both broke for the exact same reason -- they only describe how the CREATOR'S OWN tab got
+  // here, not something every participant shares:
+  //   1. location.state.freeInstantMeeting -- only set by that one `navigate()` call; a guest
+  //      who opens the meeting from a shared link lands here with empty location.state.
+  //   2. location.pathname.startsWith('/instant/') -- the creator's own tab does land on that
+  //      route, but the share-link this app hands out for that SAME meeting does not: the
+  //      room id is the plain twx-xxx-xxx-xxx shape with no "instant-" prefix, so
+  //      buildMeetingPath (meeting-id.ts) resolves it to the bare "/<roomId>" route
+  //      (BareRoomRoute) for every guest who actually uses that link, not "/instant/<roomId>".
+  // meetingInfo.persisted is the one piece of information that is actually identical for every
+  // participant regardless of which URL shape got them here: the backend already computes it
+  // from whether this room has a real Meeting document (see lobby.service.ts's own `persisted:
+  // !!meeting`), true for a dashboard-created meeting and false for every kind of ad-hoc room --
+  // this app's "free instant meeting" tier by definition. `meetingInfo != null` guards against
+  // this reading true for the first render or two before the real admission response has come
+  // back, when it would otherwise default to true for every meeting type.
+  const isFreeInstantMeeting = meetingInfo != null && meetingInfo.persisted !== true;
+
   const accountHeaders = useCallback(async (): Promise<Record<string, string>> => {
     await auth.authStateReady();
     // Someone who is signed in always joins as themselves. Joining as an anonymous guest while signed
@@ -2969,16 +3010,12 @@ export function MeetingRoomPage() {
     leaveMeeting(hostEndedMessage);
   }, [resolveMeetingEndReason, navigate, leaveMeeting]);
 
-  // Auto-end once the meeting's scheduled window (start + chosen duration) elapses. The
-  // moderator's client broadcasts the real "ended for everyone" signal (same mechanism as
-  // clicking End Meeting) so everyone sees "the host has ended the meeting" instead of each
-  // client silently dropping out at a slightly different moment; a non-moderator still has its
-  // own fallback leave in case the moderator's client isn't present for some reason.
-  useEffect(() => {
-    if (isFreeInstantMeeting && hasJoined) {
-      setFreeInstantExpiresAt((current) => current ?? Date.now() + 2 * 60 * 60 * 1000);
-    }
-  }, [isFreeInstantMeeting, hasJoined]);
+  // freeInstantExpiresAt itself is now set in two places, both further down in this file: the
+  // moderator computes-and-broadcasts it (right after postRoomSignal is defined, search for
+  // FREE_INSTANT_EXPIRES_AT) and every participant -- moderator included -- actually adopts
+  // whatever value arrives over the signal channel (handleIncomingSignal's FREE_INSTANT_EXPIRES_AT
+  // case) so the whole room counts down to the exact same moment instead of each client timing
+  // its own 2 hours from whenever it personally joined.
 
   // meetingInfo.expiresAt is still the meeting's ORIGINAL scheduled end time even when opened
   // via Conversations (only the join-time "expired" block is bypassed there, in admission.ts) --
@@ -3098,6 +3135,43 @@ export function MeetingRoomPage() {
       setTimeout(() => setParticipantToast((t) => (t === 'You have been muted by the host' ? null : t)), 5000);
     }
   });
+
+  // Applies the "Noise suppression" default fetched above (noiseSuppressionDefaultRef), once
+  // the real local audio track exists. Guarded the same way as the camera/mic defaults: a ref
+  // that flips the moment the person touches the in-call "Extra noise suppression" button
+  // themselves, so this never clobbers their explicit choice after it's resolved.
+  const userToggledNoiseSuppressionRef = useRef(false);
+  const noiseSuppressionDefaultAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!jitsiMeeting.joined || noiseSuppressionDefaultAppliedRef.current) return;
+    noiseSuppressionDefaultAppliedRef.current = true;
+    // RC-6: noise suppression is an extra always-on CPU cost (RNNoise track effect) -- never
+    // auto-enable it on a 2G/slow-2g connection even if the saved default says on; the person can
+    // still turn it on manually, same as a saved virtual background above.
+    if (!noiseSuppressionDefaultRef.current || userToggledNoiseSuppressionRef.current || jitsiMeeting.noiseSuppressionEnabled || isSlowNetworkConnection()) return;
+    jitsiMeeting.toggleNoiseSuppression().catch(() => {
+      // Best-effort -- e.g. AudioWorklet unsupported. Leaves noise suppression off, same as today.
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jitsiMeeting.joined]);
+
+  // RC-8: applies the "Use HD video when available" default (useHdVideoDefaultRef). false caps
+  // this participant's own send/receive ceiling at 360p via the same manual-cap path the in-call
+  // Performance menu uses (setVideoQuality), which is why it's safe to apply only ONCE here --
+  // from then on it's indistinguishable from a manual choice, so a later Performance-menu pick
+  // (or the auto network-quality effect, which already backs off while manualMaxHeightRef is set)
+  // overrides it normally instead of being fought by this effect on a later re-render. true (the
+  // default) applies nothing -- today's existing always-allow-HD behavior, unchanged.
+  const useHdVideoDefaultAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!jitsiMeeting.joined || useHdVideoDefaultAppliedRef.current) return;
+    useHdVideoDefaultAppliedRef.current = true;
+    if (useHdVideoDefaultRef.current) return;
+    jitsiMeeting.setVideoQuality(360).catch(() => {
+      // Best-effort -- a bridge that ignores the receiver/sender constraint keeps today's behavior.
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jitsiMeeting.joined]);
 
   // Voice-only call: once connected, stop receiving video too (audio-only), so it really is just a voice call.
   const voiceCallAudioOnlyAppliedRef = useRef(false);
@@ -3678,10 +3752,18 @@ export function MeetingRoomPage() {
   useEffect(() => {
     setLocalShareStartedAt(isScreenSharing ? Date.now() : 0);
   }, [isScreenSharing]);
-  const allShares: Array<{ key: string; kind: 'local' | 'remote'; stream: MediaStream | null; name: string; startedAt: number }> = [
+  // RC-2 (Phase 5 audit, Finding C): memoized so this array only gets a new reference when a
+  // share actually starts/stops/changes presenter, not on every one of MeetingRoomPage's own
+  // re-renders (e.g. the ~3s connectionStats tick) -- otherwise ParticipantGallery's React.memo
+  // below would see a "changed" prop every time and re-render anyway, making the memo a no-op.
+  const allShares: Array<{ key: string; kind: 'local' | 'remote'; stream: MediaStream | null; name: string; startedAt: number }> = useMemo(() => [
     ...(isScreenSharing ? [ { key: 'local-share', kind: 'local' as const, stream: screenStream, name: `${displayName || 'You'} (You)`, startedAt: localShareStartedAt } ] : []),
     ...jitsiMeeting.remoteScreenShares.map((r) => ({ key: `share-${r.id}`, kind: 'remote' as const, stream: r.stream, name: r.presenterName, startedAt: r.startedAt }))
-  ].sort((a, b) => b.startedAt - a.startedAt);
+  ].sort((a, b) => b.startedAt - a.startedAt), [isScreenSharing, screenStream, displayName, localShareStartedAt, jitsiMeeting.remoteScreenShares]);
+  // RC-2: must be called unconditionally (Rules of Hooks) even though its only consumer below
+  // sits inside `if (hasJoined)` -- getParticipantColorTheme is pure in displayName alone, so the
+  // hook itself is cheap to run every render regardless of hasJoined.
+  const localThemeMemo = useMemo(() => getParticipantColorTheme(displayName || 'You', 0), [displayName]);
   const primaryShare = allShares[0];
   const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
   // Required behavior: a screen share always STARTS in the big focused stage view, regardless of
@@ -4136,6 +4218,26 @@ export function MeetingRoomPage() {
     [roomId, displayName]
   );
 
+  // The free-instant 2-hour cap must be the SAME countdown target for every participant, not
+  // each client's own "2 hours from when I personally joined" -- otherwise a guest who joins 20
+  // minutes after the host sees a timer running 20 minutes behind the host's, and a host who
+  // simply refreshes their tab would reset their own countdown back to a fresh 2 hours. The
+  // moderator -- the one role guaranteed to exist from the very start of an ad-hoc instant room
+  // (see isModerator's own comment) -- computes the target once and broadcasts it; every
+  // participant, moderator included, only ever actually displays the value that arrives via the
+  // FREE_INSTANT_EXPIRES_AT case in handleIncomingSignal below, never this local computation
+  // directly. A participant who joins later still gets it immediately: streamSignalsHandler
+  // replays every signal already posted for the room to a fresh subscriber, the same mechanism
+  // that already delivers chat history to late joiners.
+  const freeInstantBroadcastedRef = useRef(false);
+  useEffect(() => {
+    if (!isFreeInstantMeeting || !hasJoined || !isModerator || freeInstantBroadcastedRef.current) return;
+    freeInstantBroadcastedRef.current = true;
+    const expiresAt = Date.now() + 2 * 60 * 60 * 1000;
+    setFreeInstantExpiresAt((current) => current ?? expiresAt);
+    void postRoomSignal('FREE_INSTANT_EXPIRES_AT', { expiresAt });
+  }, [isFreeInstantMeeting, hasJoined, isModerator, postRoomSignal]);
+
   const handleRemoteAudioControl = useCallback((participantId: string) => {
     if (!isModerator) return;
     const room = jitsiMeeting.room.current;
@@ -4245,7 +4347,17 @@ export function MeetingRoomPage() {
       if (msgId && processedSignalIdsRef.current.has(msgId)) return;
       if (msgId) addProcessedSignalId(msgId);
 
-      if (type === 'MEETING_ENDED_FOR_EVERYONE') {
+      if (type === 'FREE_INSTANT_EXPIRES_AT') {
+        // The moderator's authoritative countdown target (see the broadcasting effect right
+        // after postRoomSignal is defined) -- every other participant adopts it as-is instead of
+        // trusting its own locally-computed guess, so the whole room's timer counts down to the
+        // exact same moment. Unconditional set (not current ?? ...): this is the one value meant
+        // to win over any earlier local placeholder.
+        const expiresAt = Number(payload?.expiresAt);
+        if (Number.isFinite(expiresAt) && expiresAt > 0) {
+          setFreeInstantExpiresAt(expiresAt);
+        }
+      } else if (type === 'MEETING_ENDED_FOR_EVERYONE') {
         // payload.reason is this app's own addition (see endMeetingForEveryoneOnBackend) --
         // absent entirely from an older client that predates it, which
         // handleMeetingTerminatedRemotely's own fallback already handles safely.
@@ -4874,7 +4986,7 @@ export function MeetingRoomPage() {
   if (hasJoined) {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
     const isSpeaking = media.level > 0.05 && !inCallMuted;
-    const localTheme = getParticipantColorTheme(displayName || 'You', 0);
+    const localTheme = localThemeMemo;
 
     return (
       <div
@@ -7491,6 +7603,7 @@ export function MeetingRoomPage() {
                 <button
                   onClick={() => {
                     setShowMoreMenu(false);
+                    userToggledNoiseSuppressionRef.current = true;
                     jitsiMeeting.toggleNoiseSuppression().catch((err) => {
                       // eslint-disable-next-line no-console
                       console.error('[MeetingRoomPage] failed to toggle noise suppression:', err);

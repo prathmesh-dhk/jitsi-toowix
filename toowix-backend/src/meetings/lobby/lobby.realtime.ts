@@ -284,9 +284,25 @@ export async function postSignalHandler(req: any, res: Response): Promise<void> 
     res.status(403).json({ error: 'Only the meeting host can send this signal.' });
     return;
   }
-  if (payload !== undefined && payload !== null && Buffer.byteLength(JSON.stringify(payload), 'utf8') > MAX_SIGNAL_PAYLOAD_BYTES) {
-    res.status(413).json({ error: 'Signal payload is too large.' });
-    return;
+  if (payload !== undefined && payload !== null) {
+    // JSON.stringify recurses per nesting level, so a deeply-nested (but byte-small) payload can
+    // blow V8's call stack before the byte-size check below ever runs. That throw happens inside
+    // this async handler, so without a catch it becomes an unhandled rejection -- which crashes
+    // the whole process, not just this request (confirmed live: a 50,000-level-deep payload well
+    // under MAX_SIGNAL_PAYLOAD_BYTES took the entire backend down). Reject it as a plain 400
+    // instead of letting the stack overflow escape.
+    let serialized: string;
+
+    try {
+      serialized = JSON.stringify(payload);
+    } catch {
+      res.status(400).json({ error: 'Signal payload is malformed.' });
+      return;
+    }
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_SIGNAL_PAYLOAD_BYTES) {
+      res.status(413).json({ error: 'Signal payload is too large.' });
+      return;
+    }
   }
   if (!roomSignalsMap.has(room)) {
     roomSignalsMap.set(room, []);

@@ -83,8 +83,10 @@ import { startRecordingRetentionScheduler } from './recordings/retention.service
 import settingsRoutes from './routes/settings.routes';
 import contactRoutes from './routes/contact.routes';
 import directChatRoutes from './routes/directChat.routes';
+import { internalSsoRouter } from './routes/internal-sso.routes';
 
 app.use('/api/auth', authRoutes);
+app.use('/api/internal', internalSsoRouter);
 app.use('/api/companies', companyRoutes);
 app.use('/api/meetings', meetingRoutes);
 app.use('/api/recordings', recordingRoutes);

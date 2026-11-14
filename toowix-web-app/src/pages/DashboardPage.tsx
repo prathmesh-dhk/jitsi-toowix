@@ -33,6 +33,7 @@ import { ShareMeetingModal } from '../components/ShareMeetingModal';
 import { ConversationsPanel } from '../components/ConversationsPanel';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
+import { backendLogout } from '../lib/sessionLogout';
 import { generateUniqueMeetingId, buildMeetingPath, getMeetingUrl } from '../lib/meeting-id';
 import { ensureLibJitsiMeetLoaded } from '../lib/jitsi/ensureLibJitsiMeetLoaded';
 import { formatDuration } from '../lib/formatDuration';
@@ -376,6 +377,7 @@ export function DashboardPage() {
   }, []);
 
   const handleSignOut = async () => {
+    await backendLogout();
     try {
       await signOut(auth);
     } catch (e) {

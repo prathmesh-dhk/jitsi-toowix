@@ -82,13 +82,16 @@ export interface INotificationPreferences {
 
 export interface IUser {
   firebaseUid: string;
-  // The Keycloak access token's `sub` claim for this user, once linked. Null until an admin (or
-  // the dev link-keycloak-sub script locally) explicitly links a Keycloak identity to this
-  // existing Toowix user -- requireMeetEntitlement.ts never infers this from a token's email
-  // claim at request time (that would be exactly the "unsafe email matching" real identity
-  // systems avoid: an email claim is self-reported by the IdP's user profile, not a stable,
-  // collision-proof primary key the way `sub` is). firebaseUid remains this user's primary
-  // identity; keycloakSub is an additional, optional linked identity for the Keycloak-auth path.
+  // The Keycloak access token's `sub` claim for this user. Set either by an admin (the dev
+  // link-keycloak-sub script), the user's own self-link flow, or -- as a narrowly-scoped
+  // exception, see account.service.ts's autoLinkKeycloakIdentityByVerifiedEmail -- automatically
+  // on first Keycloak login, ONLY when Keycloak itself asserts the email is verified, and ONLY to
+  // link an EXISTING unlinked User (never to create one, never to reassign an existing link). Per-
+  // request entitlement checks (meetEntitlement.ts) still never infer this from an email claim --
+  // that one-time, narrowly-guarded linking decision is not the same as trusting an email claim on
+  // every request, which would be exactly the "unsafe email matching" real identity systems avoid.
+  // firebaseUid remains this user's primary identity; keycloakSub is an additional, optional
+  // linked identity for the Keycloak-auth path.
   keycloakSub?: string | null;
   companyId?: Types.ObjectId | null;
   email: string;
@@ -151,9 +154,9 @@ const UserSchema = new Schema<IUserDocument>(
     },
     keycloakSub: {
       type: String,
-      default: null,
       trim: true,
-      // sparse: null/absent for every not-yet-linked user doesn't collide with the unique index.
+      // Keep an unlinked identity absent rather than explicitly null: a sparse unique index
+      // ignores absent fields, but indexes explicit null values.
       unique: true,
       sparse: true,
       index: true,
