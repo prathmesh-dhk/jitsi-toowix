@@ -36,19 +36,9 @@ export interface IMeetingDefaults {
   cameraOffOnJoin?: boolean;
   useHdVideo?: boolean;
   mirrorMyVideo?: boolean;
-  displayParticipantNames?: boolean;
   muteMicOnJoin?: boolean;
   autoAdjustMicVolume?: boolean;
-  playJoinLeaveSounds?: boolean;
   noiseSuppression?: boolean;
-  requireLobby?: boolean;
-  allowJoinBeforeHost?: boolean;
-  requireAuthenticatedUsers?: boolean;
-  allowExternalGuests?: boolean;
-  autoAdmitInternalUsers?: boolean;
-  notifyHostOnLobbyEntry?: boolean;
-  defaultDurationMinutes?: number;
-  defaultMeetingType?: 'Internal' | 'Guest';
 }
 
 export interface IRecordingPreferences {
@@ -254,19 +244,9 @@ const UserSchema = new Schema<IUserDocument>(
       cameraOffOnJoin: { type: Boolean, default: false },
       useHdVideo: { type: Boolean, default: true },
       mirrorMyVideo: { type: Boolean, default: false },
-      displayParticipantNames: { type: Boolean, default: true },
       muteMicOnJoin: { type: Boolean, default: false },
       autoAdjustMicVolume: { type: Boolean, default: true },
-      playJoinLeaveSounds: { type: Boolean, default: true },
       noiseSuppression: { type: Boolean, default: true },
-      requireLobby: { type: Boolean, default: false },
-      allowJoinBeforeHost: { type: Boolean, default: true },
-      requireAuthenticatedUsers: { type: Boolean, default: false },
-      allowExternalGuests: { type: Boolean, default: true },
-      autoAdmitInternalUsers: { type: Boolean, default: true },
-      notifyHostOnLobbyEntry: { type: Boolean, default: true },
-      defaultDurationMinutes: { type: Number, default: 30 },
-      defaultMeetingType: { type: String, enum: ['Internal', 'Guest'], default: 'Internal' },
     },
     recordingPreferences: {
       autoRecordOwnMeetings: { type: Boolean, default: false },

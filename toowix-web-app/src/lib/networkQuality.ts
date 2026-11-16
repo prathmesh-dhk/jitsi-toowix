@@ -159,9 +159,15 @@ export function getMediaQualityPolicy(
   }
 
   // 1080p costs substantially more encoder bandwidth than 720p. Request it only when the
-  // browser's live WebRTC estimator has at least 2.5 Mbps available and the call is small;
-  // JVB still chooses a lower simulcast layer immediately if that estimate falls again.
-  const use1080pCamera = highBandwidth && participantCount <= 4;
+  // browser's live WebRTC estimator has at least 2.5 Mbps available and the call is small; JVB
+  // still chooses a lower simulcast layer immediately if that estimate falls again. T1-2
+  // (lighter-client audit): no caller currently passes highBandwidth at all (every call site in
+  // useJitsiMeeting.ts omits it, so this was already unreachable in practice), but that made the
+  // 720p camera ceiling on mobile an accident of dead wiring, not a real guarantee -- wiring up
+  // highBandwidth later could silently push a phone's own camera to 1080p the day that lands.
+  // Explicit phone exclusion here, matching getPreferredCameraCaptureConstraints' own
+  // getCameraDeviceCategory() check elsewhere in this file, so that can never happen by accident.
+  const use1080pCamera = highBandwidth && participantCount <= 4 && getCameraDeviceCategory() !== 'phone';
 
   return {
     audioOnly: false,
@@ -434,11 +440,35 @@ export async function reconcileInitialPortraitCapture(track: MediaStreamTrack | 
 
   const requested = getPreferredCameraCaptureConstraints();
   const ratio = Number((requested.aspectRatio as any)?.ideal);
-  const aspect = capabilities?.aspectRatio;
+  // CONFIRMED BUG: this gate hardcoded 720/1280 as the dimensions to check capability support
+  // for, but the actual ideal width/height this function goes on to request (below, via
+  // `requested`) comes from getCameraCaptureIdeal() and is 1080/1920 for a phone in portrait --
+  // a completely different number. The gate was checking whether the device could do a
+  // resolution that was never being requested, so it silently failed on devices that could
+  // perfectly well satisfy the real request. Read the actual target off `requested` instead.
+  const targetWidth = Number((requested.width as any)?.ideal) || 0;
+  const targetHeight = Number((requested.height as any)?.ideal) || 0;
   const width = capabilities?.width;
   const height = capabilities?.height;
-  if (!aspect || !width || !height || !(aspect.min <= ratio && ratio <= aspect.max)
-      || !(width.min <= 720 && width.max >= 720) || !(height.min <= 1280 && height.max >= 1280)) return false;
+  if (!width || !height || !targetWidth || !targetHeight) return false;
+
+  // Some camera drivers report width/height capability RANGES in the sensor's native orientation
+  // (landscape) even though the OS can still deliver a rotated portrait frame -- so a device whose
+  // capability max height is less than the portrait target but whose max width covers it (i.e. the
+  // dimensions are satisfied with width/height swapped) can still succeed. Accept either fit.
+  const fitsDirect = width.min <= targetWidth && width.max >= targetWidth
+    && height.min <= targetHeight && height.max >= targetHeight;
+  const fitsSwapped = width.min <= targetHeight && width.max >= targetHeight
+    && height.min <= targetWidth && height.max >= targetWidth;
+  if (!fitsDirect && !fitsSwapped) return false;
+
+  // aspectRatio is a derived/optional capability -- some browsers simply don't report it even
+  // though width/height (checked above) are the real, load-bearing constraint. Only treat it as
+  // disqualifying when the browser DOES report it and the target genuinely falls outside it.
+  const aspect = capabilities?.aspectRatio;
+  if (aspect && !(aspect.min <= ratio && ratio <= aspect.max) && !(aspect.min <= 1 / ratio && 1 / ratio <= aspect.max)) {
+    return false;
+  }
 
   try {
     await track.applyConstraints(requested);
@@ -446,6 +476,54 @@ export async function reconcileInitialPortraitCapture(track: MediaStreamTrack | 
   } catch {
     return false;
   }
+}
+
+// CONFIRMED LIVE on a real device (OPPO A52, 2026): applyConstraints() above can resolve
+// successfully and track.getSettings() can report correct portrait numbers afterward, while the
+// camera driver never actually rotates the real delivered pixel buffer -- the decoded frame stays
+// landscape regardless of what the track's own metadata claims. getSettings()/getCapabilities()
+// are therefore not trustworthy proof of what's really being delivered; the only way to know is to
+// look at a real decoded frame. This attaches the track to a throwaway, never-displayed <video>
+// element (no layout/display-code involvement -- discarded immediately after reading one frame's
+// real dimensions) purely to answer "is the actual picture landscape", with a bounded timeout so a
+// track that never produces a frame can't hang the caller.
+export function isRealCaptureLandscape(track: MediaStreamTrack | null | undefined, timeoutMs = 1500): Promise<boolean> {
+  if (!track || getCameraDeviceCategory() !== 'phone' || getCameraCaptureOrientationPreference() !== 'portrait'
+      || typeof document === 'undefined') {
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const video = document.createElement('video');
+
+    video.muted = true;
+    video.playsInline = true;
+    video.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.pause();
+      video.srcObject = null;
+      video.remove();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    video.addEventListener('loadedmetadata', () => {
+      finish(video.videoWidth > 0 && video.videoHeight > 0 && video.videoWidth > video.videoHeight);
+    });
+
+    try {
+      video.srcObject = new MediaStream([ track ]);
+      document.body.appendChild(video);
+      void video.play().catch(() => {});
+    } catch {
+      finish(false);
+    }
+  });
 }
 
 // Highest video height this client asks the bridge for, by call size. A one-to-one call can use
@@ -549,6 +627,12 @@ export function getTargetVideoHeight(
 
 export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): string {
   if (mode === 'audio-only') return 'Audio priority mode';
+  // T2-1 (lighter-client audit): getMediaQualityPolicy's ultra-low tier overrides to 180p/0-lastN
+  // the instant the browser reports 2g/slow-2g, regardless of the classified `state` -- previously
+  // invisible here, so the chip could say "Good connection" while the call was silently capped.
+  // Same condition getMediaQualityPolicy itself checks, so this label always matches the real
+  // active policy.
+  if (mode === 'auto' && state !== 'POOR' && isSlowNetworkConnection()) return 'Slow connection — video limited';
   if (state === 'POOR') return 'Limited connection';
   if (state === 'DEGRADED' || state === 'RECOVERING') return 'Adjusting video quality';
 

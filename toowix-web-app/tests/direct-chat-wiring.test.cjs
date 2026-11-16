@@ -128,7 +128,7 @@ test('muted chats raise no toast or sound, and calls ring instead of toasting', 
 
 test('a voice call joins audio-only: camera off from the start, auto-join without video, audio-only quality once connected', () => {
   assert.match(meetingRoom, /\.get\('call'\) === 'voice'/);
-  assert.match(meetingRoom, /useState\(!isVoiceCall\)/);
+  assert.match(meetingRoom, /useState\(!isVoiceCall && !slowNetworkAtJoin\)/);
   assert.match(meetingRoom, /void handleJoinMeeting\(isVoiceCall\)/);
   assert.match(meetingRoom, /jitsiMeeting\.setLowDataMode\('audio-only'\)/);
 });

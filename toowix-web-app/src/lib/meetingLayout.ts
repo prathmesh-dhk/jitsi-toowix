@@ -54,6 +54,10 @@ const RATIO_VALUES: Record<MeetingCardRatio, number> = {
 const MIN_TILE_WIDTH = 120;
 const MIN_TILE_HEIGHT = 90;
 
+// Fallback ratio for an empty/placeholder card (no real participant yet) -- shared by every
+// engine in this file that needs a safe default when a real ratio is missing or non-finite.
+const DEFAULT_CARD_RATIO = 16 / 9;
+
 // A candidate must beat the current (still-valid) structure by this much relative area before
 // it's worth the visual disruption of a column-count change. Switching ratio (16:9 <-> 4:3) asks
 // for more, since that's an even bigger visual jump. Recommended ranges per the spec: 5-10% for
@@ -303,305 +307,6 @@ export function calculateCellPositions(
   return positions;
 }
 
-// --- Mixed-aspect-ratio gallery packing -----------------------------------------------------
-// calculateMeetingLayout/chooseStableLayout above size EVERY cell to the same ratio -- correct
-// for a gallery of uniform (desktop/landscape) cameras, but a mobile participant's real portrait
-// stream forced into that uniform shape is either cropped or letterboxed (see videoOrientation.ts
-// "Option A", which only fixes the letterboxing, not the shape). This section is an ADDITIVE
-// extension, not a second competing engine: it reuses the exact same row/column partitioning,
-// minimum-tile-size enforcement, and candidate-search structure as calculateMeetingLayout above,
-// just searching over ROW count instead of column count, because each row can now size itself to
-// its own cards' real ratios instead of every cell sharing one.
-//
-// Classic "justified row" gallery packing (the technique galleries like Flickr's and justified.js
-// use): partition cards into rows, give every card in a row the SAME height, and let that row's
-// height be whatever height makes `sum(ratio_i * height) + gaps` exactly fill the stage width. Row
-// heights are then uniformly scaled down (never up past 1x, to avoid ever cropping/stretching) so
-// the whole stack fits the stage height. Searching over row counts and keeping the one that uses
-// the most total area is the same "try structures, keep the best" shape as the search above.
-export interface MixedAspectCardInput {
-  key: string;
-  // width / height. Callers should pass an already-bucketed ratio (see videoOrientation.ts's
-  // bucketAspectRatio) so a continuously-drifting raw decode size never reaches this layer.
-  ratio: number;
-}
-
-export interface MixedAspectCell {
-  key: string;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-export interface MixedAspectLayoutResult {
-  rows: number;
-  cells: MixedAspectCell[];
-  // Total area actually used by cards (not the stage) -- chooseStableMixedAspectLayout's own
-  // improvement-gain comparison, and a plain equality check for memoizing "nothing changed".
-  totalArea: number;
-}
-
-const DEFAULT_CARD_RATIO = 16 / 9;
-
-// A card is "portrait" when its (already-bucketed, see bucketAspectRatio in videoOrientation.ts)
-// ratio is below 1 -- height exceeds width.
-function isPortraitRatio(ratio: number): boolean {
-  return ratio < 1;
-}
-
-/**
- * Dedicated split for exactly two cards where exactly ONE is portrait -- the spec's own
- * (explicitly "preview sizing rule, not yet proven production") formula: the portrait card fills
- * the full stage height at its own real ratio, capped at 63% of the stage width so it can never
- * dominate the row; the other card gets whatever width is left over. This deliberately bypasses
- * the general row-packer below (which would instead derive a SHARED row height from the sum of
- * both ratios, giving a less predictable, less "existing left/right gallery" split than this
- * explicit two-card rule asks for).
- *
- * Returns null -- so the caller falls through to the general packer -- for every case this rule
- * does NOT apply to: not exactly 2 cards, both cards the same "portrait-ness" (both landscape,
- * which is the existing/original two-participant side-by-side case already handled correctly by
- * the general packer for two equal ratios; or both portrait, a symmetric case the general packer
- * also already handles reasonably), or a stage too narrow for the remaining card to stay usable.
- */
-export function calculateTwoParticipantMixedLayout(
-    cards: MixedAspectCardInput[], width: number, height: number, gap: number,
-): MixedAspectLayoutResult | null {
-  if (cards.length !== 2) return null;
-
-  const [ first, second ] = cards;
-  const firstPortrait = isPortraitRatio(first.ratio);
-  const secondPortrait = isPortraitRatio(second.ratio);
-
-  if (firstPortrait === secondPortrait) return null;
-
-  const portrait = firstPortrait ? first : second;
-  const other = firstPortrait ? second : first;
-  const safeWidth = Math.max(1, width);
-  const safeHeight = Math.max(1, height);
-
-  const naturalPortraitWidth = safeHeight * portrait.ratio;
-  const portraitWidth = roundHalfPixel(Math.min(naturalPortraitWidth, safeWidth * 0.63));
-  const portraitHeight = roundHalfPixel(Math.min(safeHeight, portraitWidth / portrait.ratio));
-  const otherWidth = roundHalfPixel(safeWidth - portraitWidth - gap);
-
-  // Stage too narrow for this split to leave the other card usable -- let the general packer
-  // decide instead of ever placing an unusably thin card.
-  if (portraitWidth < MIN_TILE_WIDTH || portraitHeight < MIN_TILE_HEIGHT || otherWidth < MIN_TILE_WIDTH) {
-    return null;
-  }
-
-  const portraitTop = Math.max(0, roundHalfPixel((safeHeight - portraitHeight) / 2));
-  const portraitCell: MixedAspectCell = { key: portrait.key, left: 0, top: portraitTop, width: portraitWidth, height: portraitHeight };
-  const otherCell: MixedAspectCell = { key: other.key, left: 0, top: 0, width: otherWidth, height: safeHeight };
-
-  // Keep each participant on the same SIDE they were passed in (left/right), not always
-  // portrait-first -- preserves "the existing left/right two-participant arrangement" regardless
-  // of which of the two happens to be on a phone.
-  if (firstPortrait) {
-    otherCell.left = portraitWidth + gap;
-  } else {
-    portraitCell.left = otherWidth + gap;
-  }
-
-  return {
-    rows: 1,
-    cells: firstPortrait ? [ portraitCell, otherCell ] : [ otherCell, portraitCell ],
-    totalArea: (portraitWidth * portraitHeight) + (otherWidth * safeHeight),
-  };
-}
-
-function partitionIntoRows<T>(cards: T[], rows: number): T[][] {
-  const columns = Math.ceil(cards.length / rows);
-  const partitions: T[][] = [];
-
-  for (let row = 0; row * columns < cards.length; row += 1) {
-    partitions.push(cards.slice(row * columns, Math.min(cards.length, (row + 1) * columns)));
-  }
-
-  return partitions;
-}
-
-/**
- * One candidate: cards partitioned into exactly `rowCount` rows. Returns null when any resulting
- * card would fall below the enforced minimum tile size -- exactly like sizeForStructure above,
- * this candidate is then simply not offered rather than ever being rendered too small.
- */
-function layoutForRowCount(
-  cards: MixedAspectCardInput[], rowCount: number, width: number, height: number, gap: number,
-): MixedAspectLayoutResult | null {
-  const rowsOfCards = partitionIntoRows(cards, rowCount);
-
-  if (rowsOfCards.length === 0) return null;
-
-  const rowNaturalHeights = rowsOfCards.map((row) => {
-    const sumRatio = row.reduce((sum, card) => sum + card.ratio, 0);
-
-    return (width - gap * (row.length - 1)) / sumRatio;
-  });
-
-  if (rowNaturalHeights.some((h) => !Number.isFinite(h) || h <= 0)) return null;
-
-  const sumNaturalHeights = rowNaturalHeights.reduce((sum, h) => sum + h, 0);
-  // Gaps are fixed pixels, not part of any card's own size -- only the rows' own heights scale
-  // down to fit, never the gaps between them. Computing the scale against the TOTAL (rows + gaps)
-  // and then leaving the gaps unscaled would under-shrink the rows by exactly the gap total,
-  // overflowing the stage by (gaps * (1 - scale)) once there's more than one row.
-  const availableForRows = height - gap * (rowsOfCards.length - 1);
-
-  if (availableForRows <= 0) return null;
-
-  // Only ever shrink to fit, never stretch past a row's own natural (width-filling) height --
-  // stretching would either distort individual cards or blow the row past the stage width.
-  const scale = sumNaturalHeights > 0 ? Math.min(1, availableForRows / sumNaturalHeights) : 1;
-  const scaledRowHeights = rowNaturalHeights.map((h) => roundHalfPixel(h * scale));
-
-  for (let i = 0; i < rowsOfCards.length; i += 1) {
-    const rowHeight = scaledRowHeights[i];
-    const narrowestCardWidth = rowHeight * Math.min(...rowsOfCards[i].map((c) => c.ratio));
-
-    if (rowHeight < MIN_TILE_HEIGHT || narrowestCardWidth < MIN_TILE_WIDTH) return null;
-  }
-
-  const totalScaledHeight = scaledRowHeights.reduce((sum, h) => sum + h, 0) + gap * (rowsOfCards.length - 1);
-  const top0 = Math.max(0, roundHalfPixel((height - totalScaledHeight) / 2));
-
-  const cells: MixedAspectCell[] = [];
-  let totalArea = 0;
-  let top = top0;
-
-  rowsOfCards.forEach((row, rowIndex) => {
-    const rowHeight = scaledRowHeights[rowIndex];
-    const cardWidths = row.map((card) => roundHalfPixel(card.ratio * rowHeight));
-    const rowWidth = cardWidths.reduce((sum, w) => sum + w, 0) + gap * (row.length - 1);
-    let left = Math.max(0, roundHalfPixel((width - rowWidth) / 2));
-
-    row.forEach((card, columnIndex) => {
-      const cardWidth = cardWidths[columnIndex];
-
-      cells.push({ key: card.key, left, top, width: cardWidth, height: rowHeight });
-      totalArea += cardWidth * rowHeight;
-      left += cardWidth + gap;
-    });
-    top += rowHeight + gap;
-  });
-
-  return { rows: rowsOfCards.length, cells, totalArea };
-}
-
-/**
- * Best mixed-ratio layout for this exact stage size, with no memory of any previous layout --
- * same "absolute best fit right now" role calculateMeetingLayout plays for the uniform case.
- */
-export function calculateMixedAspectLayout(
-  cards: MixedAspectCardInput[], width: number, height: number, gap = 12,
-): MixedAspectLayoutResult {
-  const safeCards = cards.length > 0 ? cards : [ { key: '__empty__', ratio: DEFAULT_CARD_RATIO } ];
-  const safeWidth = Math.max(1, width);
-  const safeHeight = Math.max(1, height);
-
-  // Exactly-two-participants, exactly-one-portrait gets its own dedicated split (see that
-  // function's own comment for why) -- tried first, before the general row-count search below.
-  const twoParticipantSpecialCase = calculateTwoParticipantMixedLayout(safeCards, safeWidth, safeHeight, gap);
-
-  if (twoParticipantSpecialCase) return twoParticipantSpecialCase;
-
-  let best: MixedAspectLayoutResult | null = null;
-
-  for (let rowCount = 1; rowCount <= safeCards.length; rowCount += 1) {
-    const candidate = layoutForRowCount(safeCards, rowCount, safeWidth, safeHeight, gap);
-
-    if (candidate && (!best || candidate.totalArea > best.totalArea + 1)) {
-      best = candidate;
-    }
-  }
-
-  if (best) return best;
-
-  // No row count reaches the minimum tile size (a very small stage) -- fall back to the least-bad
-  // single-row-per-card-group layout so cards are still placed rather than this throwing.
-  let smallest: MixedAspectLayoutResult | null = null;
-
-  for (let rowCount = 1; rowCount <= safeCards.length; rowCount += 1) {
-    const rowsOfCards = partitionIntoRows(safeCards, rowCount);
-    // Same gaps-are-fixed-pixels accounting as layoutForRowCount above -- divide only the space
-    // left AFTER reserving the (unscaled) gaps between rows, never the raw stage height.
-    const rowHeight = Math.max(1, (safeHeight - gap * (rowsOfCards.length - 1)) / rowsOfCards.length);
-    const cells: MixedAspectCell[] = [];
-    let top = 0;
-
-    rowsOfCards.forEach((row) => {
-      let left = 0;
-      const sumRatio = row.reduce((sum, c) => sum + c.ratio, 0);
-      const naturalRowHeight = sumRatio > 0 ? (safeWidth - gap * (row.length - 1)) / sumRatio : rowHeight;
-      const effectiveHeight = Math.min(rowHeight, naturalRowHeight > 0 ? naturalRowHeight : rowHeight);
-
-      row.forEach((card) => {
-        const cardWidth = roundHalfPixel(card.ratio * effectiveHeight);
-
-        cells.push({ key: card.key, left, top, width: cardWidth, height: roundHalfPixel(effectiveHeight) });
-        left += cardWidth + gap;
-      });
-      top += rowHeight + gap;
-    });
-
-    const totalArea = cells.reduce((sum, c) => sum + c.width * c.height, 0);
-    const candidate: MixedAspectLayoutResult = { rows: rowsOfCards.length, cells, totalArea };
-
-    if (!smallest || candidate.totalArea > smallest.totalArea) smallest = candidate;
-  }
-
-  return smallest as MixedAspectLayoutResult;
-}
-
-const MIXED_ROW_SWITCH_GAIN = 0.08;
-
-/**
- * Stable version of calculateMixedAspectLayout: keeps the current row count unless a candidate
- * beats it by enough total area to be worth the disruption -- same hysteresis role
- * chooseStableLayout plays for the uniform case, just comparing row counts instead of columns.
- */
-export function chooseStableMixedAspectLayout(
-  cards: MixedAspectCardInput[], width: number, height: number, gap: number, currentRows: number | null,
-): MixedAspectLayoutResult {
-  const best = calculateMixedAspectLayout(cards, width, height, gap);
-
-  if (!currentRows) return best;
-
-  const held = layoutForRowCount(cards.length > 0 ? cards : [ { key: '__empty__', ratio: DEFAULT_CARD_RATIO } ], currentRows, Math.max(1, width), Math.max(1, height), gap);
-
-  if (!held) return best;
-  if (held.rows === best.rows) return held;
-
-  const improvement = (best.totalArea - held.totalArea) / Math.max(held.totalArea, 1);
-
-  return improvement < MIXED_ROW_SWITCH_GAIN ? held : best;
-}
-
-/**
- * React hook wrapping chooseStableMixedAspectLayout with the previous row count remembered across
- * renders, committed in a layout effect for the same StrictMode-safety reason as
- * useStableMeetingLayout below. The hold is discarded when the participant count changes (an
- * immediate re-fit on join/leave) but NOT on a ratio-only change for an existing participant --
- * that still goes through the normal improvement-gain comparison, so one phone rotating doesn't
- * necessarily reshuffle everyone else's row.
- */
-export function useStableMixedAspectLayout(
-  cards: MixedAspectCardInput[], width: number, height: number, gap = 12,
-): MixedAspectLayoutResult {
-  const committedRef = useRef<{ count: number; rows: number } | null>(null);
-  const committed = committedRef.current;
-  const heldRows = committed && committed.count === cards.length ? committed.rows : null;
-  const next = chooseStableMixedAspectLayout(cards, width, height, gap, heldRows);
-
-  useLayoutEffect(() => {
-    committedRef.current = { count: cards.length, rows: next.rows };
-  });
-
-  return next;
-}
-
 /**
  * React hook wrapping chooseStableLayout with the previous structure remembered across renders.
  * The remembered structure is committed in a layout effect, not written during render, so a render
@@ -611,105 +316,6 @@ export function useStableMixedAspectLayout(
  * Card geometry is recalculated every call; only columns/rows/ratio are held stable. Call once
  * per render with the latest measured width/height.
  */
-// --- Mobile aspect-aware two-column gallery packing -----------------------------------------
-// The general mixed-aspect engine above (calculateMixedAspectLayout) searches over ROW count and
-// lets each row's own height float freely to whatever makes that row's combined ratios fill the
-// stage width -- correct for the normal desktop gallery, but on a narrow mobile viewport it can
-// legitimately decide a single full-width row packs more total area than two narrower columns,
-// exactly the "everything stacks into one column" bug the mobile forced-2-column rule
-// (MeetingLayoutInput.forceColumns) exists to prevent for the uniform engine. Mobile 4+ Gallery
-// View needs that same hard two-column constraint, but -- unlike calculateForcedColumnLayout --
-// must still size each card to its OWN real ratio: a 9:16 portrait stream must render as a
-// genuinely 9:16 outer card, never cropped or stretched to fill a shared uniform cell (see
-// TOOWIX_MOBILE_PORTRAIT_GALLERY_FIX_PLAN.md section 4).
-//
-// Algorithm (plan section 4, "recommended first implementation"): pair cards into rows of up to
-// two, IN ORIGINAL ORDER -- preserves reading/swipe order, unlike a masonry/balanced-column
-// approach which would reorder cards unpredictably. Every card in a row shares the SAME column
-// width (half the stage width, minus one fixed gap); a row's height is the TALLER of its (up to
-// two) cards' natural heights at that column width, and the shorter card is vertically centered
-// within the row rather than stretched to match it. The whole stack is then uniformly scaled DOWN
-// (never up -- same "only ever shrink to fit" policy as every other engine in this file) if it
-// would otherwise overflow the stage height, so every card keeps its exact real ratio at every
-// stage size. A lone last-row card keeps the SAME column width as a paired row (never doubles to
-// fill the row), so it reads as "one tile at the same scale" rather than an unexpectedly giant crop.
-//
-// Gaps are fixed CSS pixels, not scaled with content -- consistent with layoutForRowCount's own
-// policy elsewhere in this file (the plan's own pseudocode flags a scaled-gap variant as an
-// alternative; fixed gaps were chosen for consistency with the rest of this module).
-//
-// No minimum-tile-size rejection here (unlike sizeForStructure/layoutForRowCount): exactly two
-// columns, up to 8 cards/page and real aspect ratios can be geometrically impossible to keep above
-// any given minimum tile size on a very small or unusual viewport. Phase 1 of the plan explicitly
-// chooses to keep 8/page with no scrolling and scale the whole page down rather than changing
-// pagination or cropping a card's real ratio -- so this function always returns a usable layout
-// rather than ever returning null.
-function safeAspectRatio(ratio: number): number {
-  return Number.isFinite(ratio) && ratio > 0 ? ratio : DEFAULT_CARD_RATIO;
-}
-
-function chunkPairs<T>(items: T[]): T[][] {
-  const pairs: T[][] = [];
-
-  for (let index = 0; index < items.length; index += 2) {
-    pairs.push(items.slice(index, index + 2));
-  }
-
-  return pairs;
-}
-
-export function calculateMobileAspectAwareLayout(
-  cards: MixedAspectCardInput[], width: number, height: number, gap = 12,
-): MixedAspectLayoutResult {
-  // Defensive clamp, same reasoning as calculateForcedColumnLayout's own: the caller is expected
-  // to already hand this at most one page's worth of cards, but this keeps a chunking bug from
-  // ever producing more rows than a single mobile page is supposed to hold.
-  const pageCards = cards.slice(0, MOBILE_GALLERY_TILES_PER_PAGE);
-  const safeCards = pageCards.length > 0 ? pageCards : [ { key: '__empty__', ratio: DEFAULT_CARD_RATIO } ];
-  const safeWidth = Math.max(1, width);
-  const safeHeight = Math.max(1, height);
-  const rowsOfCards = chunkPairs(safeCards);
-  const columnWidth = Math.max(1, (safeWidth - gap) / 2);
-
-  const rowNaturalHeights = rowsOfCards.map((row) => (
-    Math.max(...row.map((card) => columnWidth / safeAspectRatio(card.ratio)))
-  ));
-  const sumNaturalHeights = rowNaturalHeights.reduce((sum, h) => sum + h, 0);
-  const availableForRows = safeHeight - gap * Math.max(0, rowsOfCards.length - 1);
-  const scale = sumNaturalHeights > 0 && availableForRows > 0
-    ? Math.min(1, availableForRows / sumNaturalHeights)
-    : 1;
-  const cellWidth = roundHalfPixel(columnWidth * scale);
-  const scaledRowHeights = rowNaturalHeights.map((h) => roundHalfPixel(h * scale));
-  const totalContentHeight = scaledRowHeights.reduce((sum, h) => sum + h, 0) + gap * Math.max(0, rowsOfCards.length - 1);
-  const top0 = Math.max(0, roundHalfPixel((safeHeight - totalContentHeight) / 2));
-
-  const cells: MixedAspectCell[] = [];
-  let totalArea = 0;
-  let top = top0;
-
-  rowsOfCards.forEach((row, rowIndex) => {
-    const rowHeight = scaledRowHeights[rowIndex];
-    const rowContentWidth = row.length === 2 ? cellWidth * 2 + gap : cellWidth;
-    const left0 = Math.max(0, roundHalfPixel((safeWidth - rowContentWidth) / 2));
-
-    row.forEach((card, columnIndex) => {
-      // Derived directly from this card's own ratio (not clamped against rowHeight) so the
-      // rendered card is always EXACTLY its real ratio, never approximated -- rowHeight is by
-      // construction already the max over the row, so this is always <= rowHeight.
-      const cardHeight = roundHalfPixel(cellWidth / safeAspectRatio(card.ratio));
-      const cardTop = roundHalfPixel(top + (rowHeight - cardHeight) / 2);
-      const cardLeft = left0 + columnIndex * (cellWidth + gap);
-
-      cells.push({ key: card.key, left: cardLeft, top: cardTop, width: cellWidth, height: cardHeight });
-      totalArea += cellWidth * cardHeight;
-    });
-    top += rowHeight + gap;
-  });
-
-  return { rows: rowsOfCards.length, cells, totalArea };
-}
-
 export function useStableMeetingLayout(input: MeetingLayoutInput): MeetingLayoutResult {
   const committedRef = useRef<{ count: number; layout: MeetingLayoutResult } | null>(null);
   const count = Math.max(1, Math.floor(input.participantCount));
@@ -725,14 +331,14 @@ export function useStableMeetingLayout(input: MeetingLayoutInput): MeetingLayout
 }
 
 // --- Flexible full-fill gallery packing (TOOWIX_PHASE_1_2_FLEXIBLE_FULL_FILL_GALLERY_IMPLEMENTATION.md) ---
-// The engines above (uniform, mixed-aspect, mobile-aspect-aware) all treat a card's real/preferred
-// ratio as something to PRESERVE exactly, which necessarily leaves unfilled stage area whenever the
-// participant mix doesn't tile perfectly at that ratio (the "big empty bands" regression this
-// section fixes). This engine inverts the priority: ratio is only a PREFERENCE that nudges relative
-// tile proportions, while 100% of the usable stage (minus fixed gaps) is always tiled by construction.
+// The uniform engine above treats a card's real/preferred ratio as something to PRESERVE exactly,
+// which necessarily leaves unfilled stage area whenever the participant mix doesn't tile perfectly
+// at that ratio (the "big empty bands" regression this section fixes). This engine inverts the
+// priority: ratio is only a PREFERENCE that nudges relative tile proportions, while 100% of the
+// usable stage (minus fixed gaps) is always tiled by construction.
 //
 // Algorithm -- weighted row/column tessellation: partition the N cards into R rows (same stable,
-// original-order partitioning as partitionIntoRows below), then:
+// original-order partitioning as partitionFlexRows below), then:
 //   1. Each row's height is proportional to that row's total "tallness weight" (sum of 1/ratio over
 //      its cards), normalized so the rows' heights sum to EXACTLY the available height (not however
 //      much each row "wants"). A row containing portrait-preferring cards ends up taller; an all-
@@ -840,9 +446,8 @@ function cropPenaltyFor(croppedFraction: number): number {
   return (FLEX_CROP_WARN - FLEX_CROP_TARGET) * 20 + (croppedFraction - FLEX_CROP_WARN) * 400;
 }
 
-// Same stable, original-order partitioning as the mixed-aspect engine's partitionIntoRows: columns
-// = ceil(count / rows), every row that size except a shorter final row. Reused here (not imported,
-// to keep this section's dependency graph self-contained) under its own name for clarity.
+// Stable, original-order partitioning: columns = ceil(count / rows), every row that size except a
+// shorter final row.
 function partitionFlexRows<T>(cards: T[], rows: number): T[][] {
   const columns = Math.ceil(cards.length / rows);
   const partitions: T[][] = [];
@@ -1062,8 +667,8 @@ export function calculateFlexibleFillLayout(
 
 /**
  * Stable version: keeps the CURRENT row topology unless a competing one is cheap enough to be
- * worth the disruption -- same hysteresis role chooseStableLayout/chooseStableMixedAspectLayout
- * play for the other engines, just comparing this engine's own cost function instead of area.
+ * worth the disruption -- same hysteresis role chooseStableLayout plays for the uniform engine,
+ * just comparing this engine's own cost function instead of area.
  * This engine never rejects a row count outright (every candidate is "valid"), so the held
  * candidate is always comparable -- there is no "held no longer fits" fallback branch to handle.
  */
