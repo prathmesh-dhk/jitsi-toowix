@@ -37,6 +37,8 @@ import {
   verifyCameraCaptureOrientation,
   getCameraCaptureDebugInfo,
   getCameraDeviceCategory,
+  reconcileInitialPortraitCapture,
+  isRealCaptureLandscape,
   isMobileBrowser,
   clampVideoHeightForNetwork,
 } from './networkQuality';
@@ -446,18 +448,23 @@ async function acquireLocalTracks(
   }
 
   // Covers every path above -- adopted from the lobby's already-open stream, or freshly
-  // acquired -- with one check, right before this result is handed back to the caller. Reporting
-  // only -- never a retry/reacquire/crop. Mobile camera orientation now intentionally follows
-  // stock Jitsi Meet's own approach: request a normal capture and display whatever the camera
-  // delivers, uncropped (see MeetingParticipantCard's objectFit handling) -- a phone's own native
-  // app is the planned path for a genuinely forced-portrait capture, not this web client.
+  // acquired -- with one check, right before this result is handed back to the caller.
   verifyCameraCaptureOrientation(result.videoTrack?.getTrack?.());
+  // T1 (2026): reconcileInitialPortraitCapture was never actually wired into THIS path -- only
+  // into the lobby preview (useMediaPreview.ts) and the unreachable /meet-direct route
+  // (useLibJitsiConference.ts) -- so a real join never got even the cheap, no-crop
+  // applyConstraints retry this comment used to claim was deliberately left out. The heavier
+  // full-reacquire fix (useJitsiMeeting's own orientationchange listener, further below) was the
+  // only thing that ever corrected a landscape-on-first-grab camera, and only once the user
+  // physically rotated. Added here too, same one-shot/no-crop/no-reacquire semantics as the lobby
+  // preview's own call -- still never replaces the track or re-prompts for permission.
+  const portraitReconciled = await reconcileInitialPortraitCapture(result.videoTrack?.getTrack?.());
   // TEMPORARY diagnostic (see galleryOrientationDebug.ts) -- the real post-negotiation capture
   // settings vs what was requested, for every device category (not just the phone-only mismatch
   // warning above), so a capture-side investigation can see this before any receiver-side code
   // (videoOrientation.ts, the gallery) ever gets involved.
   logGalleryDebug('local capture settings', {
-    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath,
+    ...getCameraCaptureDebugInfo(result.videoTrack?.getTrack?.()), path: videoPath, portraitReconciled,
   });
 
   return result;
@@ -2636,6 +2643,33 @@ export function useJitsiMeeting({
       window.removeEventListener('orientationchange', onOrientationChange);
       (screen as any)?.orientation?.removeEventListener?.('change', onOrientationChange);
     };
+  }, [joined, switchDevice]);
+
+  // T1 fallback (2026): reconcileInitialPortraitCapture's cheap applyConstraints retry (see
+  // acquireLocalTracks) can report success while the camera driver never actually rotates the
+  // real delivered frame -- confirmed live on a real device. The only other thing that has ever
+  // actually fixed this is the full reacquire the orientationchange listener above triggers when
+  // the user physically rotates -- so this runs that SAME mechanism once, automatically, right
+  // after join, if the real decoded frame is still landscape. One-shot only (the ref below), since
+  // this has the same visible freeze/flash cost as any other device switch -- not something to
+  // repeat on every render, and the user's own rotation (handled above) remains the path for any
+  // later, real orientation change.
+  const initialPortraitFallbackAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!joined || initialPortraitFallbackAttemptedRef.current) return;
+    const track = localVideoTrackRef.current;
+
+    if (!track || track.isMuted?.()) return;
+    initialPortraitFallbackAttemptedRef.current = true;
+
+    void isRealCaptureLandscape(track.getTrack?.()).then((isLandscape) => {
+      if (!isLandscape || switchDeviceInFlightRef.current.videoInput) return;
+
+      void switchDevice('videoInput', deviceIdsRef.current.videoDeviceId || '').catch(() => {
+        // Best-effort -- the existing (wrongly-oriented) track keeps working either way.
+      });
+    });
   }, [joined, switchDevice]);
 
   // GO 3 give-up tier: shown when the performance governor turns the background effect off

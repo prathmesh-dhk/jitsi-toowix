@@ -1,16 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/settingsApi';
 import {
-  sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle,
-  inputStyle, SettingsFooterActions, Toggle, Toast, useSettingsDirty,
+  sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle,
+  SettingsFooterActions, Toggle, Toast, useSettingsDirty,
 } from './SettingsShared';
 import { useTheme } from '../../lib/theme';
 
 const DEFAULTS = {
-  cameraOffOnJoin: false, useHdVideo: true, displayParticipantNames: true,
-  muteMicOnJoin: false, autoAdjustMicVolume: true, playJoinLeaveSounds: true, noiseSuppression: true,
-  requireLobby: false, allowJoinBeforeHost: true, requireAuthenticatedUsers: false, allowExternalGuests: true,
-  autoAdmitInternalUsers: true, notifyHostOnLobbyEntry: true, defaultDurationMinutes: 30, defaultMeetingType: 'Internal' as 'Internal' | 'Guest',
+  cameraOffOnJoin: false, useHdVideo: true,
+  muteMicOnJoin: false, autoAdjustMicVolume: true, noiseSuppression: true,
 };
 type IForm = typeof DEFAULTS;
 
@@ -78,7 +76,6 @@ export function MeetingsSection() {
         <Section title="Video">
           <Toggle label="Camera off when joining" checked={form.cameraOffOnJoin} onChange={(v) => set('cameraOffOnJoin', v)} />
           <Toggle label="Use HD video when available" checked={form.useHdVideo} onChange={(v) => set('useHdVideo', v)} />
-          <Toggle label="Display participant names" checked={form.displayParticipantNames} onChange={(v) => set('displayParticipantNames', v)} />
         </Section>
 
         <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
@@ -86,39 +83,7 @@ export function MeetingsSection() {
         <Section title="Audio">
           <Toggle label="Mute microphone when joining" checked={form.muteMicOnJoin} onChange={(v) => set('muteMicOnJoin', v)} />
           <Toggle label="Automatically adjust microphone volume" checked={form.autoAdjustMicVolume} onChange={(v) => set('autoAdjustMicVolume', v)} />
-          <Toggle label="Play join and leave sounds" checked={form.playJoinLeaveSounds} onChange={(v) => set('playJoinLeaveSounds', v)} />
           <Toggle label="Noise suppression" checked={form.noiseSuppression} onChange={(v) => set('noiseSuppression', v)} />
-        </Section>
-
-        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
-
-        <Section title="Joining and access">
-          <Toggle label="Require guests to wait in the lobby" checked={form.requireLobby} onChange={(v) => set('requireLobby', v)} />
-          <Toggle label="Allow participants to join before the host" checked={form.allowJoinBeforeHost} onChange={(v) => set('allowJoinBeforeHost', v)} />
-          <Toggle label="Require authenticated company users" checked={form.requireAuthenticatedUsers} onChange={(v) => set('requireAuthenticatedUsers', v)} />
-          <Toggle label="Allow external guests" checked={form.allowExternalGuests} onChange={(v) => set('allowExternalGuests', v)} />
-          <Toggle label="Automatically admit internal users" checked={form.autoAdmitInternalUsers} onChange={(v) => set('autoAdmitInternalUsers', v)} />
-          <Toggle label="Notify the host when someone enters the lobby" checked={form.notifyHostOnLobbyEntry} onChange={(v) => set('notifyHostOnLobbyEntry', v)} />
-        </Section>
-
-        <div style={{ height: '1px', background: isDark ? '#1E293B' : '#F3F4F6', margin: '16px 0' }} />
-
-        <Section title="Defaults">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            <div>
-              <label style={labelStyle(isDark)}>Default meeting duration</label>
-              <select style={inputStyle(isDark)} value={form.defaultDurationMinutes} onChange={(e) => set('defaultDurationMinutes', Number(e.target.value))}>
-                {[15, 30, 45, 60, 90].map((m) => <option key={m} value={m}>{m} min</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle(isDark)}>Default meeting type</label>
-              <select style={inputStyle(isDark)} value={form.defaultMeetingType} onChange={(e) => set('defaultMeetingType', e.target.value as any)}>
-                <option value="Internal">Internal</option>
-                <option value="Guest">External</option>
-              </select>
-            </div>
-          </div>
         </Section>
 
         <SettingsFooterActions onCancel={() => { if (original) setForm(original); setDirty(false); }} onSave={handleSave} saving={saving} disabled={JSON.stringify(original) === JSON.stringify(form)} />

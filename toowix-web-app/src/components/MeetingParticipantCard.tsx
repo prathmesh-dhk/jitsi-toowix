@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Hand, Mic, MicOff, Phone, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
 import { useSpeaking } from '../lib/speakingStore';
@@ -79,8 +79,18 @@ export interface MeetingParticipantCardProps {
   cardHeight?: number;
 }
 
+function shallowObjectEqual(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const aKeys = Object.keys(a);
+
+  if (aKeys.length !== Object.keys(b).length) return false;
+
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
 /** Shared visual card used by gallery, pin and presentation participant layouts. */
-export function MeetingParticipantCard({
+function MeetingParticipantCardImpl({
   participantId, name, avatarUrl, stream, videoEnabled, muted, raisedHand, away, theme, style,
   compact = false, mirrored = false, speaking = false, isPinned = false, onPin,
   onDoubleClick, onMute, onVideoElement, adaptiveAspect = false, onAspectRatioChange,
@@ -246,3 +256,48 @@ export function MeetingParticipantCard({
     </div>
   );
 }
+
+// T1-5 (lighter-client audit): every call site (ParticipantGallery's local/remote cards,
+// MeetingRoomPage's pin/rail/presentation cards) passes `style`/`theme` as a fresh object literal
+// and `onPin`/`onDoubleClick`/`onMute`/`onAspectRatioChange` as a fresh closure on every render --
+// a plain memo() would never actually skip a re-render against props like that. Audited every
+// closure at every call site instead of demanding callers rewrite them all: each one only closes
+// over values that are themselves either already-stable (a useState setter, or a useCallback like
+// handleRemoteAudioControl/setCellRatio) or deterministic per this card's own identity
+// (participantId/remote.id, pinnedParticipantId's equality check) -- so a stale closure from a
+// skipped render is always behaviorally identical to a fresh one. This comparator therefore
+// value-compares the plain-data props (theme/style, shallow -- always flat CSS/color objects here)
+// and only checks PRESENCE (function vs. undefined), never identity, for every callback prop --
+// this still lets onMute correctly show/hide when its presence toggles (e.g. a remote participant
+// mutes themselves), which identity-only comparison would have missed.
+function arePropsEqual(prev: MeetingParticipantCardProps, next: MeetingParticipantCardProps): boolean {
+  const presenceEqual = (a: unknown, b: unknown) => Boolean(a) === Boolean(b);
+
+  return prev.participantId === next.participantId
+    && prev.name === next.name
+    && prev.avatarUrl === next.avatarUrl
+    && prev.stream === next.stream
+    && prev.videoEnabled === next.videoEnabled
+    && prev.muted === next.muted
+    && prev.raisedHand === next.raisedHand
+    && prev.away === next.away
+    && prev.compact === next.compact
+    && prev.mirrored === next.mirrored
+    && prev.speaking === next.speaking
+    && prev.isPinned === next.isPinned
+    && prev.adaptiveAspect === next.adaptiveAspect
+    && prev.layoutFit === next.layoutFit
+    && prev.videoBoundaryMode === next.videoBoundaryMode
+    && prev.cardWidth === next.cardWidth
+    && prev.cardHeight === next.cardHeight
+    && shallowObjectEqual(prev.theme as unknown as Record<string, unknown>, next.theme as unknown as Record<string, unknown>)
+    && shallowObjectEqual(prev.style as Record<string, unknown> | undefined, next.style as Record<string, unknown> | undefined)
+    && presenceEqual(prev.onPin, next.onPin)
+    && presenceEqual(prev.onDoubleClick, next.onDoubleClick)
+    && presenceEqual(prev.onMute, next.onMute)
+    && presenceEqual(prev.onVideoElement, next.onVideoElement)
+    && presenceEqual(prev.onAspectRatioChange, next.onAspectRatioChange);
+}
+
+/** Shared visual card used by gallery, pin and presentation participant layouts. */
+export const MeetingParticipantCard = memo(MeetingParticipantCardImpl, arePropsEqual);

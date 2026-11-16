@@ -58,12 +58,17 @@ import {
 } from 'lucide-react';
 import { fetchChatHistory, resolveChatImageUrl, resolveChatFileUrl } from '../lib/chatApi';
 import { getMeetingUrl } from '../lib/meeting-id';
-import { ChatPanel } from '../components/meeting/ChatPanel';
+// Lazy-loaded (T1-1, same pattern/reasoning as the modals below): the chat panel (845 lines) is
+// only ever rendered once the user opens it (gated on activePanel === 'chat' at its render site,
+// unchanged by this), so every join no longer has to download/parse it up front.
+const ChatPanel = lazy(() =>
+  import('../components/meeting/ChatPanel').then(m => ({ default: m.ChatPanel }))
+);
 import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } from '../components/meeting/RecordingControls';
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
 import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
-import { getNetworkStatusLabel, isMobileBrowser } from '../lib/networkQuality';
+import { getNetworkStatusLabel, isMobileBrowser, isSlowNetworkConnection } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
 import {
   playChatMessageTone,
@@ -94,9 +99,17 @@ import { ShareVideoDialog } from '../components/ShareVideoDialog';
 const SharedVideoManager = lazy(() =>
   import('../components/SharedVideoManager').then(m => ({ default: m.SharedVideoManager }))
 );
-import { MeetingSettingsDialog } from '../components/MeetingSettingsDialog';
-import { MeetingReadyDialog } from '../components/MeetingReadyDialog';
-import { getPref, notifyDesktop, getSavedBackground } from '../lib/meetingPrefs';
+// Lazy-loaded (T1-1): the full settings dialog (audio/video/general tabs, 331 lines) and the
+// post-join "you're in" ready dialog (82 lines) are both only needed once their own showX state
+// flips true -- their render sites below now gate on that state instead of always mounting them
+// with an isOpen prop, matching how the other on-demand modals in this file already work.
+const MeetingSettingsDialog = lazy(() =>
+  import('../components/MeetingSettingsDialog').then(m => ({ default: m.MeetingSettingsDialog }))
+);
+const MeetingReadyDialog = lazy(() =>
+  import('../components/MeetingReadyDialog').then(m => ({ default: m.MeetingReadyDialog }))
+);
+import { getPref, notifyDesktop } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 import { isOverlayDebugEnabled } from '../lib/virtualBackground/backgroundDebugTools';
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
@@ -126,7 +139,12 @@ import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/pa
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
-import { DocumentPipContent } from '../components/meeting/PictureInPicture';
+// Lazy-loaded (T1-1): the document Picture-in-Picture view (717 lines) is only ever rendered
+// inside the detached PiP window once the user actually activates it (already gated on
+// documentPipActive && documentPipWindowRef.current at its render site, unchanged by this).
+const DocumentPipContent = lazy(() =>
+  import('../components/meeting/PictureInPicture').then(m => ({ default: m.DocumentPipContent }))
+);
 import { ParticipantGallery } from '../components/meeting/ParticipantGallery';
 
 const RESIZE_DEBUG = false;
@@ -446,7 +464,15 @@ export function MeetingRoomPage() {
   // Google Meet call -- it still stays off for the REST of the current session the moment the
   // person turns it off themselves (this is still real React state, not reset on every render),
   // it just never again persists that choice into a future, unrelated meeting.
-  const [videoEnabled, setVideoEnabled] = useState(!isVoiceCall);
+  // T2-1 (lighter-client audit): on a connection the browser itself reports as 2G/slow-2G,
+  // joining with video on anyway is dishonest UX -- it just buys a landscape-grade POOR
+  // experience and the ultra-low policy (getMediaQualityPolicy) silently clamps it to 180p the
+  // moment the call starts. Default audio-first instead and SAY SO (see the banner below), with
+  // one tap to turn the camera on anyway if the person wants to. Captured once at mount, not
+  // re-checked live, so a connection that recovers mid-lobby doesn't yank the camera back on
+  // under someone who deliberately left it off.
+  const [slowNetworkAtJoin] = useState(() => isSlowNetworkConnection());
+  const [videoEnabled, setVideoEnabled] = useState(!isVoiceCall && !slowNetworkAtJoin);
   // P0 fix (see Toowix_Meet_Prioritized_Issue_Backlog.pdf, P0-2): Settings -> Meetings'
   // "Mute microphone on join" / "Turn off camera on join" saved nothing but their own preference
   // row -- this page never read it back, so the toggle visibly did nothing, which is a trust
@@ -484,14 +510,16 @@ export function MeetingRoomPage() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // P2-4 fix (Toowix_Meet_Prioritized_Issue_Backlog.pdf -- "Default off on mobile/slow network").
-  // The runtime CPU-governor (JitsiStreamBackgroundEffect's _perfCap, handleBackgroundGiveUp's
-  // "this device can't keep up" toast) already covers the OTHER half of that ticket ("prompt
-  // when CPU high") -- confirmed already in place, not new. What was missing: a background
-  // saved on a desktop session auto-restores on ANY device, including a phone, with no
-  // device-aware default at all. A phone now simply never auto-restores a saved background --
-  // the person can still turn one on manually from the modal, same governor still protects that.
-  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(() => (isMobileBrowser() ? null : getSavedBackground()));
+  // P2-4 fix (Toowix_Meet_Prioritized_Issue_Backlog.pdf -- "Default off on mobile/slow network"),
+  // then widened under T1-2 (lighter-client audit): the mobile/slow-network-only version left a
+  // background saved on a desktop/good-network session auto-restoring on every future, unrelated
+  // meeting with no way to say "just for that one call" -- the exact same accidental-persistence
+  // pattern already fixed for micEnabled/videoEnabled/audioId elsewhere in this file (see their
+  // own comments). Virtual background now never auto-restores on ANY device -- the runtime
+  // CPU-governor (JitsiStreamBackgroundEffect's _perfCap, handleBackgroundGiveUp's "this device
+  // can't keep up" toast) already covers "prompt when CPU high" regardless; the person can still
+  // turn a background on manually from the modal every time they actually want one.
+  const [prejoinBackground, setPrejoinBackground] = useState<IVirtualBackground | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showEndMeetingModal, setShowEndMeetingModal] = useState(false);
@@ -3512,7 +3540,11 @@ export function MeetingRoomPage() {
 
   const formattedRoomTitle = roomId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   const networkStatusLabel = getNetworkStatusLabel(jitsiMeeting.lowDataMode, jitsiMeeting.networkState);
-  const networkStatusColor = jitsiMeeting.networkState === 'POOR' || jitsiMeeting.lowDataMode === 'audio-only'
+  // T2-1: same ultra-low-tier condition getNetworkStatusLabel/getMediaQualityPolicy check -- the
+  // chip's color must agree with its own label, not just the classified state, or "Slow connection
+  // -- video limited" would confusingly render in the GOOD-network green.
+  const isUltraLowTier = jitsiMeeting.lowDataMode === 'auto' && jitsiMeeting.networkState !== 'POOR' && isSlowNetworkConnection();
+  const networkStatusColor = jitsiMeeting.networkState === 'POOR' || jitsiMeeting.lowDataMode === 'audio-only' || isUltraLowTier
     ? '#F9AB00'
     : jitsiMeeting.networkState === 'DEGRADED' || jitsiMeeting.networkState === 'RECOVERING'
       ? '#8AB4F8'
@@ -3950,25 +3982,6 @@ export function MeetingRoomPage() {
       }
     };
   }, [hasJoined, videoEnabled, prejoinBackground, media.stream, media.preview]);
-
-  // Carry the chosen background into the call: apply it to the live camera track once it exists.
-  const backgroundAppliedRef = useRef(false);
-  useEffect(() => {
-    if (!hasJoined) {
-      backgroundAppliedRef.current = false;
-      return;
-    }
-    // See prejoinBackground's own P2-4 comment -- same mobile-default-off rule applies here too,
-    // for whoever joins straight into the call (voice-call/audio-only entry, or a rejoin) rather
-    // than going through the prejoin lobby at all.
-    if (isMobileBrowser()) return;
-    const saved = getSavedBackground();
-
-    if (!saved || backgroundAppliedRef.current || !jitsiMeeting.localCameraStream) return;
-    backgroundAppliedRef.current = true;
-    jitsiMeeting.setVirtualBackground(saved).catch(() => { backgroundAppliedRef.current = false; });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasJoined, jitsiMeeting.localCameraStream]);
 
   // Push to talk: hold Space to unmute while muted; releasing re-mutes.
   const inCallMutedRef = useRef(false);
@@ -6593,21 +6606,23 @@ export function MeetingRoomPage() {
                      tab's chat (sender on the right, receiver on the left), so a call started
                      from a saved conversation looks identical in both places. */}
                 {activePanel === 'chat' && (
-                  <ChatPanel
-                    chatMessages={chatMessages}
-                    setChatMessages={setChatMessages}
-                    displayName={displayName}
-                    sessionId={sessionIdRef.current}
-                    roomId={roomId}
-                    // Images use the same inline preview/upload path in an ad-hoc instant/shared
-                    // room as in a dashboard-created meeting. Their live chat is still ephemeral:
-                    // the backend only stores the uploaded file for the active room lifetime.
-                    attachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
-                    // Generic files use the same ad-hoc allowance as images; they are never
-                    // persisted as conversation history when the room has no Meeting document.
-                    fileAttachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
-                    postRoomSignal={postRoomSignal}
-                  />
+                  <Suspense fallback={null}>
+                    <ChatPanel
+                      chatMessages={chatMessages}
+                      setChatMessages={setChatMessages}
+                      displayName={displayName}
+                      sessionId={sessionIdRef.current}
+                      roomId={roomId}
+                      // Images use the same inline preview/upload path in an ad-hoc instant/shared
+                      // room as in a dashboard-created meeting. Their live chat is still ephemeral:
+                      // the backend only stores the uploaded file for the active room lifetime.
+                      attachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
+                      // Generic files use the same ad-hoc allowance as images; they are never
+                      // persisted as conversation history when the room has no Meeting document.
+                      fileAttachmentsEnabled={Boolean(meetingInfo?.persisted) || roomId.startsWith('instant-') || roomId.startsWith('twx-')}
+                      postRoomSignal={postRoomSignal}
+                    />
+                  </Suspense>
                 )}
 
                 {/* 3. People Panel */}
@@ -8043,30 +8058,38 @@ export function MeetingRoomPage() {
           </Suspense>
         )}
 
-        <MeetingSettingsDialog
-          isOpen={showSettingsModal}
-          onClose={() => setShowSettingsModal(false)}
-          isDark={isDark}
-          devices={media.devices}
-          audioId={audioId}
-          videoId={videoId}
-          outputId={outputId}
-          onSelectAudio={handleSelectAudioDevice}
-          onSelectVideo={handleSelectVideoDevice}
-          onSelectOutput={handleSelectOutputDevice}
-          onSendResolution={applySendResolution}
-          onReceiveResolution={(h) => handlePerformanceSelect(h)}
-          onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
-        />
+        {showSettingsModal && (
+          <Suspense fallback={null}>
+            <MeetingSettingsDialog
+              isOpen={showSettingsModal}
+              onClose={() => setShowSettingsModal(false)}
+              isDark={isDark}
+              devices={media.devices}
+              audioId={audioId}
+              videoId={videoId}
+              outputId={outputId}
+              onSelectAudio={handleSelectAudioDevice}
+              onSelectVideo={handleSelectVideoDevice}
+              onSelectOutput={handleSelectOutputDevice}
+              onSendResolution={applySendResolution}
+              onReceiveResolution={(h) => handlePerformanceSelect(h)}
+              onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
+            />
+          </Suspense>
+        )}
 
-        <MeetingReadyDialog
-          isOpen={Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0 && !showMoreMenu && !showSettingsModal && !activePanel)}
-          onClose={() => setShowMeetingReady(false)}
-          onAddOthers={() => setShowShareModal(true)}
-          meetingUrl={getMeetingUrl(roomId)}
-          joinedAs={auth.currentUser?.email || ''}
-          isDark={isDark}
-        />
+        {Boolean(showMeetingReady && hasJoined && pendingQueue.length === 0 && !showMoreMenu && !showSettingsModal && !activePanel) && (
+          <Suspense fallback={null}>
+            <MeetingReadyDialog
+              isOpen
+              onClose={() => setShowMeetingReady(false)}
+              onAddOthers={() => setShowShareModal(true)}
+              meetingUrl={getMeetingUrl(roomId)}
+              joinedAs={auth.currentUser?.email || ''}
+              isDark={isDark}
+            />
+          </Suspense>
+        )}
 
         {/* Google-Meet-style "someone wants to join" prompt for the host */}
         {hasJoined && isModerator && pendingQueue.length > 0 && (
@@ -8595,28 +8618,30 @@ export function MeetingRoomPage() {
 
         {/* Document Picture-in-Picture Portal (Rendered into detached native window) */}
         {documentPipActive && documentPipWindowRef.current && createPortal(
-          <DocumentPipContent
-            isScreenSharing={isScreenSharing}
-            screenStream={screenStream || screenStreamRef.current}
-            remoteScreenStream={remoteScreenStream}
-            remotePresenterName={remotePresenterName}
-            inCallVideo={inCallVideo}
-            inCallStream={inCallStream || inCallStreamRef.current}
-            inCallMuted={inCallMuted}
-            displayName={displayName}
-            isHandRaised={isHandRaised}
-            remoteParticipants={remoteParticipants}
-            roomTitle={meetingInfo?.description || roomId}
-            avatarUrl={localAvatarUrl}
-            onToggleMic={handleToggleInCallMic}
-            onToggleVideo={handleToggleInCallVideo}
-            onToggleHand={handleToggleRaiseHand}
-            onReturnToMeeting={() => {
-              window.focus();
-              closePipRef.current?.();
-            }}
-            onLeaveMeeting={() => leaveMeeting()}
-          />,
+          <Suspense fallback={null}>
+            <DocumentPipContent
+              isScreenSharing={isScreenSharing}
+              screenStream={screenStream || screenStreamRef.current}
+              remoteScreenStream={remoteScreenStream}
+              remotePresenterName={remotePresenterName}
+              inCallVideo={inCallVideo}
+              inCallStream={inCallStream || inCallStreamRef.current}
+              inCallMuted={inCallMuted}
+              displayName={displayName}
+              isHandRaised={isHandRaised}
+              remoteParticipants={remoteParticipants}
+              roomTitle={meetingInfo?.description || roomId}
+              avatarUrl={localAvatarUrl}
+              onToggleMic={handleToggleInCallMic}
+              onToggleVideo={handleToggleInCallVideo}
+              onToggleHand={handleToggleRaiseHand}
+              onReturnToMeeting={() => {
+                window.focus();
+                closePipRef.current?.();
+              }}
+              onLeaveMeeting={() => leaveMeeting()}
+            />
+          </Suspense>,
           documentPipWindowRef.current.document.body
         )}
       </div>
@@ -9046,6 +9071,50 @@ export function MeetingRoomPage() {
               border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.1)' : '#E5E7EB'}`,
             }}
           >
+            {/* T2-1: honest heads-up for why video defaulted off, with a one-tap way to turn it
+                back on -- see slowNetworkAtJoin's own comment above for why this is a default,
+                not a silent cap. Only while video is actually still off; tapping Enable sets
+                videoEnabled true via the normal state, same as the toggle button below. */}
+            {slowNetworkAtJoin && !videoEnabled && !cameraPermissionError && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '12px',
+                  left: '12px',
+                  right: '12px',
+                  zIndex: 11,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  padding: '8px 12px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.16)',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                }}
+              >
+                <span style={{ fontSize: '12px', color: '#F59E0B', fontWeight: 500 }}>
+                  Slow connection — video limited.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setVideoEnabled(true)}
+                  style={{
+                    flexShrink: 0,
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: '#F59E0B',
+                    background: 'rgba(245, 158, 11, 0.16)',
+                    border: '1px solid rgba(245, 158, 11, 0.5)',
+                    borderRadius: '8px',
+                    padding: '4px 10px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Enable camera
+                </button>
+              </div>
+            )}
             {videoEnabled && !cameraPermissionError ? (
               <video
                 ref={previewVideoRef}
@@ -9486,22 +9555,26 @@ export function MeetingRoomPage() {
         </Suspense>
       )}
 
-      <MeetingSettingsDialog
-        tabs={['audio', 'video']}
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        isDark={isDark}
-        devices={media.devices}
-        audioId={audioId}
-        videoId={videoId}
-        outputId={outputId}
-        onSelectAudio={handleSelectAudioDevice}
-        onSelectVideo={handleSelectVideoDevice}
-        onSelectOutput={handleSelectOutputDevice}
-        onSendResolution={applySendResolution}
-        onReceiveResolution={(h) => handlePerformanceSelect(h)}
-        onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
-      />
+      {showSettingsModal && (
+        <Suspense fallback={null}>
+          <MeetingSettingsDialog
+            tabs={['audio', 'video']}
+            isOpen={showSettingsModal}
+            onClose={() => setShowSettingsModal(false)}
+            isDark={isDark}
+            devices={media.devices}
+            audioId={audioId}
+            videoId={videoId}
+            outputId={outputId}
+            onSelectAudio={handleSelectAudioDevice}
+            onSelectVideo={handleSelectVideoDevice}
+            onSelectOutput={handleSelectOutputDevice}
+            onSendResolution={applySendResolution}
+            onReceiveResolution={(h) => handlePerformanceSelect(h)}
+            onOpenBackgrounds={() => setShowVirtualBackgroundModal(true)}
+          />
+        </Suspense>
+      )}
 
       {/* Other Ways to Join Dialog */}
       {showOtherWaysModal && (

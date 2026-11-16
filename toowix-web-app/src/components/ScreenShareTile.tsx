@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { ScreenShare } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ScreenShare, Loader2 } from 'lucide-react';
 
 interface IProps {
   stream: MediaStream | null;
@@ -7,8 +7,18 @@ interface IProps {
   compact?: boolean;
 }
 
+// T2-2 (lighter-client audit): a remote share that's signaling-active but hasn't delivered a real
+// frame yet (still negotiating, or a slow/weak uplink on the presenter's end) rendered as a plain
+// black rectangle -- indistinguishable from a genuinely broken share. Anything under this long is
+// the ordinary, expected gap between "share started" and "first frame decoded" and isn't worth a
+// loading state flashing in and out; only a share that's STILL not delivering a frame after this
+// long gets the explicit "waiting" treatment.
+const SCREEN_SHARE_STALL_MS = 5000;
+
 export function ScreenShareTile({ stream, label, compact }: IProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [hasFrame, setHasFrame] = useState(false);
+  const [stalled, setStalled] = useState(false);
 
   useEffect(() => {
     const node = ref.current;
@@ -17,10 +27,48 @@ export function ScreenShareTile({ stream, label, compact }: IProps) {
       return;
     }
     node.srcObject = stream;
+    setHasFrame(false);
+    setStalled(false);
     if (stream) {
-      node.play().catch(() => { });
+      node.play().catch((err) => {
+        if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+          // eslint-disable-next-line no-console
+          console.warn('[ScreenShareTile] video.play() failed:', err?.name, err?.message, err);
+        }
+      });
     }
   }, [ stream ]);
+
+  // Real decoded-frame signal, not just "a stream object exists" -- a stream can be attached and
+  // signaling-active for several seconds before the first frame actually decodes.
+  useEffect(() => {
+    const node = ref.current;
+
+    if (!node || !stream) return undefined;
+    const onFrame = () => {
+      if (node.videoWidth > 0 && node.videoHeight > 0) setHasFrame(true);
+    };
+
+    node.addEventListener('loadedmetadata', onFrame);
+    node.addEventListener('resize', onFrame);
+    onFrame();
+
+    return () => {
+      node.removeEventListener('loadedmetadata', onFrame);
+      node.removeEventListener('resize', onFrame);
+    };
+  }, [ stream ]);
+
+  useEffect(() => {
+    if (!stream || hasFrame) {
+      setStalled(false);
+
+      return undefined;
+    }
+    const timer = setTimeout(() => setStalled(true), SCREEN_SHARE_STALL_MS);
+
+    return () => clearTimeout(timer);
+  }, [ stream, hasFrame ]);
 
   return (
     <div
@@ -44,6 +92,25 @@ export function ScreenShareTile({ stream, label, compact }: IProps) {
         muted
         style={{ width: '100%', height: '100%', objectFit: 'contain' }}
       />
+      {stalled && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '10px',
+            backgroundColor: 'rgba(0, 0, 0, 0.55)',
+          }}
+        >
+          <Loader2 size={compact ? 20 : 28} color="#8AB4F8" className="animate-spin" />
+          <span style={{ color: '#E8EAED', fontSize: compact ? '11px' : '13px', fontWeight: 500 }}>
+            Waiting for presenter's screen…
+          </span>
+        </div>
+      )}
       <div
         style={{
           position: 'absolute',
