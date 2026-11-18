@@ -2,23 +2,23 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './index.css';
+import { preconnectJitsi } from './lib/jitsi/ensureLibJitsiMeetLoaded';
+import { isMeetingRoutePathname } from './lib/meeting-id';
 
 // Opens the TLS connection to the Jitsi deployment before any meeting page even runs --
 // config.js/lib-jitsi-meet.min.js aren't requested until the lobby screen preloads them (see
 // ensureLibJitsiMeetLoaded), but the DNS lookup + TLS handshake can start the instant the app
 // boots, since the domain itself never depends on which page the person is on.
-try {
-  const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
-  // Port 80 has no TLS listener -- preconnecting https there just wastes a handshake attempt.
-  const scheme = jitsiDomain.endsWith(':80') ? 'http' : 'https';
-  const preconnect = document.createElement('link');
-
-  preconnect.rel = 'preconnect';
-  preconnect.href = `${scheme}://${jitsiDomain}`;
-  preconnect.crossOrigin = 'anonymous';
-  document.head.appendChild(preconnect);
-} catch {
-  // A blocked/unavailable DOM API here must never prevent the app from loading.
+//
+// P1-6 fix (2G/3G performance plan): this used to run unconditionally, on every page load --
+// including login/signup/dashboard/settings/marketing pages that never touch Jitsi at all, which
+// on a weak connection competed with whatever that page actually needed. Only worth doing here,
+// at boot, when this very page load already landed directly on a meeting route (a shared link
+// opened fresh, or a full reload). Client-side navigation INTO a meeting from elsewhere in the
+// SPA (the dashboard's "New meeting"/"Join" flow, which never re-runs this file) is covered
+// separately by MeetingRoomPage/DirectMeetingRoomPage calling preconnectJitsi() on mount instead.
+if (isMeetingRoutePathname(window.location.pathname)) {
+  preconnectJitsi(import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com');
 }
 
 // This site previously served the stock Jitsi web client under /meet. That client

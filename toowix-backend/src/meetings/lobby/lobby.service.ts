@@ -109,6 +109,20 @@ const endedMeetingSlugs = new Map<string, IMeetingEndReason>();
 const liveStatusCache = new SimpleCache<{ cancelled: boolean; ended: boolean; hostJoined: boolean; live: boolean; meetingStartedAt: number | null; reason: IMeetingEndReason | null }>(5000);
 const liveStatusCacheEnabled = () => process.env.CACHE_LIVE_STATUS !== 'false';
 
+// Ad-hoc (free/instant) rooms have no persisted Meeting document, so meetingStartedAt above has
+// nowhere to read a start time from for them. The free tier's 2-hour cap still needs ONE shared
+// clock every participant counts down to -- the same participant-agnostic reasoning as
+// meetingStartedAt, computed here from the room's own first real admission instead of a Meeting
+// document field. Real reported bug this replaces: the previous design broadcast this value
+// once, client-side, from whichever participant happened to be the moderator at join time, and
+// relied on the realtime signal buffer still holding it by the time a LATER participant's
+// subscription replayed it -- fragile for a value that must stay correct for up to 2 hours, not
+// the few seconds that buffer is actually sized for. Returning it from the server on every
+// admission/lookup instead removes that race entirely: every participant reads the identical
+// value directly from their own admission response, regardless of join order.
+const FREE_INSTANT_DURATION_MS = 2 * 60 * 60 * 1000;
+const freeInstantFirstSeenAt = new Map<string, number>();
+
 /**
  * Call at every write site that changes a meeting's endedAt/cancelledAt/hostJoined, so a cached
  * live-status answer is never served stale past that write.
@@ -644,6 +658,24 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       throw new Error('Lobby enforcement is required by company policy but this deployment has not attested that the server enforces it');
     }
     const recordingEnabled = !!meeting && moderator && policy?.recordingEnabled !== false && company?.limits?.featureFlags?.recordingEnabled !== false;
+    // See freeInstantFirstSeenAt's own comment above. Only ad-hoc rooms (no persisted Meeting
+    // document) are free-instant; a real admission (POST) establishes the clock the first time
+    // anyone actually joins, a metadata lookup (GET, e.g. the prejoin screen before Join is
+    // clicked) only ever reads whatever's already there, never starts it early.
+    let freeInstantExpiresAt: number | null = null;
+    if (!meeting) {
+      if (params.method === 'POST') {
+        let firstSeenAt = freeInstantFirstSeenAt.get(room);
+        if (!firstSeenAt) {
+          firstSeenAt = Date.now();
+          freeInstantFirstSeenAt.set(room, firstSeenAt);
+        }
+        freeInstantExpiresAt = firstSeenAt + FREE_INSTANT_DURATION_MS;
+      } else {
+        const firstSeenAt = freeInstantFirstSeenAt.get(room);
+        freeInstantExpiresAt = firstSeenAt ? firstSeenAt + FREE_INSTANT_DURATION_MS : null;
+      }
+    }
     const info = {
       type: meeting?.type || 'Guest', organizerId: meeting ? String(meeting.createdBy) : '',
       organizerName: '', description: meeting?.description || null,
@@ -662,6 +694,18 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       // public homepage's free instant meeting, or any bare room code), whose chat stays
       // ephemeral and is never written to the database.
       persisted: !!meeting,
+      // Null for a persisted (dashboard-created) meeting -- not applicable there. Set for any
+      // ad-hoc room, the instant every participant counts down to (see freeInstantFirstSeenAt).
+      freeInstantExpiresAt,
+      // True for any meeting meant to be joined right now, not at a scheduled future time --
+      // every ad-hoc room (no Meeting document at all) AND a persisted meeting created via the
+      // dashboard's "Start an instant meeting" button (which never sets scheduledAt, unlike
+      // "Schedule for later"). Real reported bug this covers: the share link / "Your meeting's
+      // ready" dialog for a dashboard-created instant meeting read as a plain "/<roomId>" link
+      // with no "instant" in it, even though the UI calls it an instant meeting -- `persisted`
+      // alone can't tell a right-now meeting apart from a scheduled one, since both have a real
+      // Meeting document.
+      isInstant: !meeting || !meeting.scheduledAt,
     };
     if (params.method === 'GET') {
       return { body: { meeting: info }, httpStatus: 200 };

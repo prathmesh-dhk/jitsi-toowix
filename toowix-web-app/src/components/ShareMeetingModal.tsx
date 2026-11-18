@@ -9,6 +9,7 @@ import { useTheme } from '../lib/theme';
 import { auth } from '../lib/firebase';
 import { ContactPicker } from './ContactPicker';
 import { inviteByEmail } from '../lib/contactsApi';
+import { copyTextToClipboard } from '../lib/clipboard';
 
 export interface IShareMeetingData {
   name: string;
@@ -110,22 +111,20 @@ export function ShareMeetingModal({ isOpen, onClose, meeting }: IShareMeetingMod
 
   const handleCopyPasscode = async () => {
     if (!meeting.passcode) return;
-    try {
-      await navigator.clipboard.writeText(meeting.passcode);
+    // See clipboard.ts's own comment -- Mac Safari can reject a bare
+    // navigator.clipboard.writeText() call (NotAllowedError); this used to only log that to the
+    // console with no visible fallback, so the button silently did nothing on Safari.
+    if (await copyTextToClipboard(meeting.passcode)) {
       setCopiedPasscode(true);
       setTimeout(() => setCopiedPasscode(false), 2000);
-    } catch (e) {
-      console.error('Failed to copy passcode:', e);
     }
   };
 
   const handleCopyPreview = async () => {
-    try {
-      await navigator.clipboard.writeText(fullMessage);
+    // Same Mac Safari fix as handleCopyPasscode above.
+    if (await copyTextToClipboard(fullMessage)) {
       setCopiedPreview(true);
       setTimeout(() => setCopiedPreview(false), 2000);
-    } catch (e) {
-      console.error('Failed to copy preview:', e);
     }
   };
 

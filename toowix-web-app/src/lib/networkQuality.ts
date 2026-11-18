@@ -108,16 +108,49 @@ export function getMediaQualityPolicy(
   // itself, not a noisy instantaneous sample, so there is nothing to debounce here. Does not
   // override an explicit 'audio-only' choice (strictly MORE conservative already) or mode ===
   // 'low-data' (same floor this produces anyway).
-  if (mode === 'auto' && state !== 'POOR' && isSlowNetworkConnection()) {
-    return {
-      audioOnly: false,
-      desktopFps: 3,
-      desktopMaxHeight: 360,
-      desktopMaxWidth: 640,
-      lastN: screenShareActive ? 1 : 0,
-      receiveMaxHeight: 180,
-      sendMaxHeight: 180
-    };
+  if (mode === 'auto' && state !== 'POOR') {
+    const startupProfile = getStartupNetworkProfile();
+
+    if (startupProfile === 'very-slow') {
+      return {
+        audioOnly: false,
+        desktopFps: 3,
+        desktopMaxHeight: 360,
+        desktopMaxWidth: 640,
+        lastN: screenShareActive ? 1 : 0,
+        receiveMaxHeight: 180,
+        sendMaxHeight: 180
+      };
+    }
+
+    // P0-2 fix: a '3g' effectiveType, or no Network Information API at all on a phone/tablet,
+    // used to fall straight through to the full GOOD-network policy below until real WebRTC
+    // stats accumulated. These two tiers start conservative instead (360p ceiling, reduced
+    // lastN/fps) without ever cutting the camera -- unlike 'very-slow' this is a respectful
+    // starting ceiling, not an audio-first fallback, matching the plan's "respect preference,
+    // conservative" policy for 3G.
+    if (startupProfile === 'slow') {
+      return {
+        audioOnly: false,
+        desktopFps: 12,
+        desktopMaxHeight: 720,
+        desktopMaxWidth: 1280,
+        lastN: screenShareActive ? 2 : 1,
+        receiveMaxHeight: 360,
+        sendMaxHeight: 360
+      };
+    }
+    if (startupProfile === 'unknown-mobile') {
+      return {
+        audioOnly: false,
+        desktopFps: 15,
+        desktopMaxHeight: 720,
+        desktopMaxWidth: 1280,
+        lastN: 2,
+        receiveMaxHeight: 360,
+        sendMaxHeight: 360
+      };
+    }
   }
 
   if (mode === 'audio-only') {
@@ -197,6 +230,34 @@ export function isSlowNetworkConnection(): boolean {
     return conn?.effectiveType === '2g' || conn?.effectiveType === 'slow-2g';
   } catch {
     return false;
+  }
+}
+
+// P0-2 fix (2G/3G performance plan): isSlowNetworkConnection above only ever recognized
+// 2g/slow-2g, so a browser reporting '3g' -- or a browser with no Network Information API at all
+// (Safari, Firefox), which is disproportionately a phone on cellular -- started with the same
+// full-quality policy as a GOOD connection, and only got capped later once classifyNetwork's
+// RTT/loss samples had time to accumulate and settle into POOR. 'very-slow' keeps isSlowNetworkConnection's
+// existing camera-off/noise-suppression-off behavior unchanged (nothing regresses there); 'slow'
+// and 'unknown-mobile' are new, strictly-less-conservative tiers that only affect the STARTUP
+// media-quality ceiling (see getMediaQualityPolicy below) -- real measured WebRTC stats still take
+// over and can upgrade quality once they've had time to settle, same as they already do for 2G.
+export type StartupNetworkProfile = 'very-slow' | 'slow' | 'unknown-mobile' | 'normal';
+
+export function getStartupNetworkProfile(): StartupNetworkProfile {
+  try {
+    const conn = (navigator as any)?.connection;
+    const effectiveType = conn?.effectiveType;
+    if (effectiveType === '2g' || effectiveType === 'slow-2g') return 'very-slow';
+    if (effectiveType === '3g') return 'slow';
+    if (effectiveType === '4g') return 'normal';
+    // No Network Information API support (Safari/Firefox) -- don't guess from user-agent text;
+    // only treat it as unknown-mobile (a conservative, not alarmist, starting point) when the
+    // device itself is a phone/tablet, since desktop/laptop Safari/Firefox on a normal
+    // connection should still start at the regular policy.
+    return isMobileBrowser() ? 'unknown-mobile' : 'normal';
+  } catch {
+    return 'normal';
   }
 }
 
@@ -291,11 +352,36 @@ export function getCameraOrientationDebugState(): { orientationType: string | nu
 // (MeetingParticipantCard's objectFit, see layoutFit="contain"/"adaptive") shows whatever shape
 // actually arrives without cropping either way, so a driver that ignores this never produces the
 // "zoomed/cropped" look a forced CROP fallback used to cause; it just stays landscape, uncropped.
-export function getCameraCaptureIdeal(): { frameRate: number; height: number; width: number } {
+// P0-3 fix (2G/3G performance plan): this used to request near-4K (desktop) or 1080p (phone)
+// regardless of the access network. The SENT video was already capped later by
+// getMediaQualityPolicy/getReceiveMaxHeightForCallSize, but the browser still had to CAPTURE,
+// scale and feed the encoder a needlessly large source first -- wasted CPU/battery/thermal
+// headroom for a frame that was going to be downscaled anyway. On a weak startup profile, ask the
+// camera for something close to what will actually be sent instead. `normal` keeps every existing
+// device-category ideal byte-for-byte unchanged -- this only adds a ceiling below that for the
+// weak-network tiers, which also applies to desktop (not just phones), per the plan's camera-cost
+// goal. Takes profile as a parameter (default: live getStartupNetworkProfile()) only so callers
+// that already resolved a profile elsewhere in the same tick don't pay for computing it twice.
+export function getCameraCaptureIdeal(profile: StartupNetworkProfile = getStartupNetworkProfile()): { frameRate: number; height: number; width: number } {
+  const portrait = getCameraCaptureOrientationPreference() === 'portrait';
+
+  // 'unknown-mobile' deliberately falls through to the normal per-device-category ideal below --
+  // it's a real conservative signal for the SEND/RECEIVE ceiling (see
+  // getStartupSendReceiveCeiling, which still applies there), but there is no confirmed network
+  // signal at all here (just an absent Network Information API), so guessing a reduced CAPTURE
+  // resolution from that alone isn't warranted -- only 'very-slow'/'slow' are real, confirmed
+  // effectiveType signals worth shrinking capture for.
+  if (profile === 'very-slow') {
+    return portrait ? { frameRate: 10, height: 320, width: 180 } : { frameRate: 10, height: 180, width: 320 };
+  }
+  if (profile === 'slow') {
+    return portrait ? { frameRate: 15, height: 640, width: 360 } : { frameRate: 15, height: 360, width: 640 };
+  }
+
   const category = getCameraDeviceCategory();
 
   if (category === 'phone') {
-    return getCameraCaptureOrientationPreference() === 'portrait'
+    return portrait
       ? { frameRate: 30, height: 1920, width: 1080 }
       : { frameRate: 30, height: 1080, width: 1920 };
   }
@@ -563,11 +649,34 @@ export function clampVideoHeightForNetwork(networkState: NetworkState, base: num
   return base;
 }
 
+// P0-4 fix (2G/3G performance plan): classifyNetwork's RTT/loss samples can legitimately read
+// GOOD on a real 3G/unknown-mobile connection (150-250ms RTT is healthy for that medium -- see
+// MOBILE_RTT_TOLERANCE_MULTIPLIER's own comment), so clampVideoHeightForNetwork('GOOD', ...)
+// above would hand a 3G/unknown-mobile join the exact same up-to-720p/1080p ceiling a real WiFi
+// GOOD connection gets, with nothing capping it until classifyNetwork itself later reclassifies
+// to DEGRADED/POOR from real measured samples (which a healthy-for-cellular RTT may never even
+// trigger). This is a SEPARATE ceiling, applied alongside clampVideoHeightForNetwork, not a
+// replacement for it -- real POOR/DEGRADED classification still applies its own (lower) clamp on
+// top. Screen share is deliberately excluded: it already has its own dedicated, more generous
+// floor (P0-1, see clampVideoHeightForNetwork's own comment above) and must never be re-clamped
+// down to a camera-tile ceiling here.
+export function getStartupSendReceiveCeiling(screenShareActive: boolean): number | null {
+  if (screenShareActive) return null;
+  const profile = getStartupNetworkProfile();
+  if (profile === 'very-slow') return 180;
+  if (profile === 'slow' || profile === 'unknown-mobile') return 360;
+
+  return null;
+}
+
 // Opus voice bitrate per network state. Voice stays intelligible far below the default, so on a
 // weak link it is lowered to protect the connection and raised again when the network recovers.
-export function getAudioMaxBitrateBps(state: NetworkState): number {
-  if (state === 'POOR') return 16000;
-  if (state === 'DEGRADED' || state === 'RECOVERING') return 24000;
+// P0-4 fix: also floors immediately for a 3G/unknown-mobile/2G STARTUP profile, for the same
+// reason getStartupSendReceiveCeiling exists above -- a healthy-for-cellular RTT can read as
+// GOOD before classifyNetwork ever gets a reason to lower it otherwise.
+export function getAudioMaxBitrateBps(state: NetworkState, startupProfile: StartupNetworkProfile = getStartupNetworkProfile()): number {
+  if (state === 'POOR' || startupProfile === 'very-slow') return 16000;
+  if (state === 'DEGRADED' || state === 'RECOVERING' || startupProfile === 'slow' || startupProfile === 'unknown-mobile') return 24000;
 
   return 40000;
 }
@@ -632,7 +741,7 @@ export function getNetworkStatusLabel(mode: LowDataMode, state: NetworkState): s
   // invisible here, so the chip could say "Good connection" while the call was silently capped.
   // Same condition getMediaQualityPolicy itself checks, so this label always matches the real
   // active policy.
-  if (mode === 'auto' && state !== 'POOR' && isSlowNetworkConnection()) return 'Slow connection — video limited';
+  if (mode === 'auto' && state !== 'POOR' && getStartupNetworkProfile() !== 'normal') return 'Slow connection — video limited';
   if (state === 'POOR') return 'Limited connection';
   if (state === 'DEGRADED' || state === 'RECOVERING') return 'Adjusting video quality';
 

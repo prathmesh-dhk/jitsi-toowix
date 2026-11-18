@@ -428,7 +428,15 @@ export function DashboardPage() {
     // deliberately NOT reset back to false here on success: this page is about to be left, and a
     // stray state update after that (or after this component unmounts) is exactly what causes a
     // "set state on an unmounted component" warning for no benefit.
-    navigate(buildMeetingPath(roomId), { state: { participation: "account" } });
+    //
+    // Real reported bug: this used to go through buildMeetingPath(roomId), which resolves a
+    // twx-xxx-xxx-xxx id to the bare "/<roomId>" path -- the exact same shape a scheduled
+    // meeting's room id gets, even though this is explicitly an instant meeting (see the
+    // backend's own isInstant field, lobby.service.ts). Navigating straight to /instant/ instead
+    // mirrors the public homepage's own "Start an instant meeting" flow (App.tsx's
+    // handleStartInstant) so the creator's own tab, and the share link MeetingRoomPage builds
+    // from it, both read "/instant/" consistently.
+    navigate(`/instant/${roomId}`, { state: { participation: "account" } });
   };
 
   const handleCreateMeetingForLater = async () => {

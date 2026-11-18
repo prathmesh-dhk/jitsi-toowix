@@ -141,3 +141,117 @@ test('mobile gets a wider RTT tolerance than desktop at the same measured RTT', 
   assert.equal(classifyNetwork(atRtt(100)), classifyNetwork(atRtt(100), false));
   assert.equal(classifyNetwork(atRtt(400)), classifyNetwork(atRtt(400), false));
 });
+
+// P0-2 fix (2G/3G performance plan): getStartupNetworkProfile and getMediaQualityPolicy's startup
+// branch need a fresh `navigator` per scenario, so each case gets its own vm context instead of
+// reusing the module-level exportsObject (which has no navigator at all, i.e. desktop/no-API).
+function loadWithNavigator(navigatorMock) {
+  const ctxExports = {};
+  vm.runInNewContext(code, { exports: ctxExports, navigator: navigatorMock });
+  return ctxExports;
+}
+
+test('getStartupNetworkProfile classifies effectiveType correctly', () => {
+  const desktopNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', connection: { effectiveType } });
+  const phoneNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', connection: effectiveType ? { effectiveType } : undefined });
+
+  assert.equal(loadWithNavigator(desktopNav('slow-2g')).getStartupNetworkProfile(), 'very-slow');
+  assert.equal(loadWithNavigator(desktopNav('2g')).getStartupNetworkProfile(), 'very-slow');
+  assert.equal(loadWithNavigator(desktopNav('3g')).getStartupNetworkProfile(), 'slow');
+  assert.equal(loadWithNavigator(desktopNav('4g')).getStartupNetworkProfile(), 'normal');
+
+  // No Network Information API at all: desktop stays 'normal' (don't guess from user-agent
+  // alone), a phone/tablet gets the conservative 'unknown-mobile' starting point.
+  assert.equal(loadWithNavigator(desktopNav(undefined)).getStartupNetworkProfile(), 'normal');
+  assert.equal(loadWithNavigator(phoneNav(undefined)).getStartupNetworkProfile(), 'unknown-mobile');
+  assert.equal(loadWithNavigator(phoneNav('3g')).getStartupNetworkProfile(), 'slow');
+});
+
+test('getMediaQualityPolicy starts conservative on 3g/unknown-mobile without cutting the camera', () => {
+  const phoneNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', connection: effectiveType ? { effectiveType } : undefined });
+
+  const threeG = loadWithNavigator(phoneNav('3g'));
+  const threeGPolicy = threeG.getMediaQualityPolicy('auto', 'GOOD', 2);
+  assert.equal(threeGPolicy.audioOnly, false);
+  assert.ok(threeGPolicy.sendMaxHeight <= 360, '3G startup must not exceed a 360p send ceiling');
+  assert.ok(threeGPolicy.receiveMaxHeight <= 360, '3G startup must not exceed a 360p receive ceiling');
+
+  const unknownMobile = loadWithNavigator(phoneNav(undefined));
+  const unknownMobilePolicy = unknownMobile.getMediaQualityPolicy('auto', 'GOOD', 2);
+  assert.equal(unknownMobilePolicy.audioOnly, false);
+  assert.ok(unknownMobilePolicy.sendMaxHeight <= 360, 'unknown-mobile startup must not exceed a 360p send ceiling');
+
+  // A real POOR classification (from actual WebRTC stats) still wins over the startup guess --
+  // the startup profile is only a ceiling for before those stats exist, never a floor that blocks
+  // the existing POOR-state policy from kicking in.
+  const poorOverride = threeG.getMediaQualityPolicy('auto', 'POOR', 2);
+  assert.equal(poorOverride.sendMaxHeight, 180);
+});
+
+// P0-3 fix: camera CAPTURE (getUserMedia ideal) must also shrink on a weak startup profile, for
+// both phone and desktop -- not just the SEND/RECEIVE ceiling applied after capture. Otherwise the
+// browser still captures/scales/encodes a needlessly large source even though it will be
+// downscaled before it's ever sent.
+test('getCameraCaptureIdeal shrinks capture resolution on weak startup profiles, for desktop and phone alike', () => {
+  const desktopNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', connection: { effectiveType } });
+  const phoneNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', connection: effectiveType ? { effectiveType } : undefined });
+
+  const desktopNormal = loadWithNavigator(desktopNav('4g')).getCameraCaptureIdeal();
+  assert.equal(desktopNormal.width, 3840);
+  assert.equal(desktopNormal.height, 2160);
+
+  const desktopVerySlow = loadWithNavigator(desktopNav('slow-2g')).getCameraCaptureIdeal();
+  assert.ok(desktopVerySlow.width <= 320 && desktopVerySlow.height <= 320, `very-slow desktop capture too large: ${desktopVerySlow.width}x${desktopVerySlow.height}`);
+
+  const desktopSlow = loadWithNavigator(desktopNav('3g')).getCameraCaptureIdeal();
+  assert.ok(desktopSlow.width <= 640 && desktopSlow.height <= 640, `3g desktop capture too large: ${desktopSlow.width}x${desktopSlow.height}`);
+  assert.ok(desktopSlow.width > desktopVerySlow.width, '3g capture should ask for more than very-slow/2g');
+
+  // Phone on 2G: still shrinks to the same very-slow ceiling, not its normal 1080p ideal.
+  const phoneVerySlow = loadWithNavigator(phoneNav('2g')).getCameraCaptureIdeal();
+  assert.ok(phoneVerySlow.width <= 320 && phoneVerySlow.height <= 320, `very-slow phone capture too large: ${phoneVerySlow.width}x${phoneVerySlow.height}`);
+
+  // Phone with no Network Information API at all (unknown-mobile) -- no confirmed network
+  // signal, so CAPTURE resolution stays at the device's normal ideal (the send/receive ceiling,
+  // not capture, is where unknown-mobile's conservatism applies -- see the dedicated test below).
+  // Separate vm contexts are separate realms (different Object.prototype), so compare fields
+  // individually rather than with a reference-sensitive deep-equality assertion across them.
+  const phoneUnknown = loadWithNavigator(phoneNav(undefined)).getCameraCaptureIdeal();
+  const phoneNormal = loadWithNavigator(phoneNav('4g')).getCameraCaptureIdeal();
+  assert.equal(phoneUnknown.width, phoneNormal.width);
+  assert.equal(phoneUnknown.height, phoneNormal.height);
+  assert.equal(phoneUnknown.frameRate, phoneNormal.frameRate);
+});
+
+// P0-4 fix: a GOOD classifyNetwork read (plausible on a healthy-for-cellular 3G RTT) must not let
+// the send/receive height bypass the startup profile's own ceiling -- this is the extra ceiling
+// useJitsiMeeting.ts intersects with clampVideoHeightForNetwork at/right after join.
+test('getStartupSendReceiveCeiling caps camera tiles immediately on a weak startup profile, but never touches screen share', () => {
+  const desktopNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', connection: { effectiveType } });
+
+  assert.equal(loadWithNavigator(desktopNav('4g')).getStartupSendReceiveCeiling(false), null);
+  assert.equal(loadWithNavigator(desktopNav('slow-2g')).getStartupSendReceiveCeiling(false), 180);
+  assert.equal(loadWithNavigator(desktopNav('3g')).getStartupSendReceiveCeiling(false), 360);
+
+  // Screen share must never be re-clamped down to the camera-tile startup ceiling -- P0-1's
+  // dedicated (more generous) screen-share floor stays the only thing governing it.
+  assert.equal(loadWithNavigator(desktopNav('slow-2g')).getStartupSendReceiveCeiling(true), null);
+  assert.equal(loadWithNavigator(desktopNav('3g')).getStartupSendReceiveCeiling(true), null);
+});
+
+test('getAudioMaxBitrateBps also floors immediately on a weak startup profile, not just a classified state', () => {
+  const desktopNav = (effectiveType) => ({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', connection: { effectiveType } });
+
+  const normal = loadWithNavigator(desktopNav('4g'));
+  assert.equal(normal.getAudioMaxBitrateBps('GOOD'), 40000);
+
+  const verySlow = loadWithNavigator(desktopNav('slow-2g'));
+  assert.equal(verySlow.getAudioMaxBitrateBps('GOOD'), 16000);
+
+  const slow = loadWithNavigator(desktopNav('3g'));
+  assert.equal(slow.getAudioMaxBitrateBps('GOOD'), 24000);
+
+  // A real POOR classification still wins (lowest tier) even if the startup profile would have
+  // asked for a merely-DEGRADED-equivalent bitrate.
+  assert.equal(slow.getAudioMaxBitrateBps('POOR'), 16000);
+});

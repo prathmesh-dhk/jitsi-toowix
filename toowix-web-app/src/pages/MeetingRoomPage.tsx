@@ -2,6 +2,9 @@ import { auth } from '../lib/firebase';
 import { settingsApi } from '../lib/settingsApi';
 import { useMediaPreview } from '../lib/useMediaPreview';
 import { ensureLibJitsiMeetLoaded, getRoomDeviceSessionId, useJitsiMeeting } from '../lib/useJitsiMeeting';
+import { preconnectJitsi } from '../lib/jitsi/ensureLibJitsiMeetLoaded';
+import { useMeetingMetadata, resolvePrejoinEndedDestination, isUnavailableMeetingResponse } from '../lib/useMeetingMetadata';
+import { copyTextToClipboard } from '../lib/clipboard';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
 import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
@@ -57,7 +60,6 @@ import {
   Volume2,
 } from 'lucide-react';
 import { fetchChatHistory, resolveChatImageUrl, resolveChatFileUrl } from '../lib/chatApi';
-import { getMeetingUrl } from '../lib/meeting-id';
 // Lazy-loaded (T1-1, same pattern/reasoning as the modals below): the chat panel (845 lines) is
 // only ever rendered once the user opens it (gated on activePanel === 'chat' at its render site,
 // unchanged by this), so every join no longer has to download/parse it up front.
@@ -68,7 +70,7 @@ import { RecordingToast, RecordingPillBadge, RecordingActivitiesPanelEntry } fro
 import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/DeviceMenus';
 import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
-import { getNetworkStatusLabel, isMobileBrowser, isSlowNetworkConnection } from '../lib/networkQuality';
+import { getNetworkStatusLabel, isMobileBrowser, isSlowNetworkConnection, getStartupNetworkProfile } from '../lib/networkQuality';
 import { isSpeakingNow } from '../lib/speakingStore';
 import {
   playChatMessageTone,
@@ -161,38 +163,10 @@ const REMOTE_JOIN_AUTO_PIN_GRACE_MS = 4000;
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-// Real reported bug: reopening the SAME link right after the host clicked "End Meeting for
-// Everyone" could still admit the person into a real Jitsi call, only to be ejected a few
-// seconds later by the live-status poll -- see admitToRoom's own fix (lobby.service.ts) for the
-// backend half of this. The other half is here: isUnavailableMeetingResponse's own message-
-// sniffing (below) already matched the backend's "Meeting has already ended" 403 against
-// /ended/i -- but routed EVERY such match to /meeting-link-expired, which is wrong for a real
-// host decision (must be /meeting-ended, exactly like the in-call HOST_ENDED/LINK_EXPIRED split
-// resolveMeetingEndReason already enforces elsewhere in this file). The backend now returns an
-// explicit, closed-enum `reason` (or `meeting.endReason` for the GET metadata shape) precisely so
-// this never has to guess from the message string again. Returns null when no explicit reason is
-// present, so the caller falls back to the existing isUnavailableMeetingResponse-driven
-// /meeting-link-expired path for every other unavailable case (cancelled, not found, etc.).
-function resolvePrejoinEndedDestination(data: any): '/meeting-ended' | '/meeting-link-expired' | null {
-  // Three real shapes reach this: the POST admission/knock error body (`{ error, reason }`), the
-  // unwrapped `meeting` object from a GET metadata lookup (`{ ended, endReason, ... }`), and
-  // (defensively) the full outer GET response wrapper (`{ meeting: { endReason } }`) in case a
-  // future caller passes that instead of already unwrapping it.
-  const reason = data?.reason ?? data?.endReason ?? data?.meeting?.endReason;
-
-  if (reason === 'LINK_EXPIRED') return '/meeting-link-expired';
-  if (reason === 'HOST_ENDED' || reason === 'DURATION_LIMIT') return '/meeting-ended';
-
-  return null;
-}
-
-// These responses mean that the URL cannot be used to enter a meeting. Keep access-policy
-// failures (for example, a valid private meeting that requires sign-in) in the lobby so the
-// user can act on them; only unavailable links belong on the expired-link page.
-function isUnavailableMeetingResponse(status: number, message?: string): boolean {
-  return status === 400 || status === 404 || status === 410
-    || (status === 403 && /\b(cancelled|ended|not found)\b/i.test(message || ''));
-}
+// resolvePrejoinEndedDestination and isUnavailableMeetingResponse (P1-8's useMeetingMetadata
+// extraction moved their definitions there -- see that file's own comments for the real bug
+// history behind both) are re-used here by the admission/join flow's own POST-driven lookups,
+// which are a separate concern from that hook's GET-driven one.
 
 // Shared style for the "More options" dropdown's menu buttons -- avoids repeating this object
 // literal at every one of the (now dozen-plus) menu items.
@@ -355,15 +329,10 @@ export function MeetingRoomPage() {
     }
   });
   const autoRejoinStartedRef = useRef(false);
-  // Real reported bug: the 2-hour warning toast/tone and countdown timer could silently never
-  // fire for a free instant meeting. Root cause -- this was a ref, not state: setting it inside
-  // an effect doesn't itself trigger a re-render, so effectiveExpiresAt (a plain const computed
-  // every render, not memoized) could stay closed over its stale `null` value inside the warning
-  // effects below until something ELSE happened to cause another render soon after join. In a
-  // quiet solo call that can take a while, which read as the warning "sometimes" not showing up.
-  // Real state guarantees the render (and therefore every effect reading it) picks up the real
-  // value the moment it's set, deterministically, every time.
-  const [freeInstantExpiresAt, setFreeInstantExpiresAt] = useState<number | null>(null);
+  // freeInstantExpiresAt itself is derived from meetingInfo (see its declaration further down)
+  // rather than its own useState -- meetingInfo is already real state, so deriving from it still
+  // re-renders (and updates every effect closure reading it) the moment the server value arrives,
+  // the same guarantee a separate useState gave, without a second piece of state to keep in sync.
   const tenMinuteWarningFiredRef = useRef(false);
   const [jwtToken, setJwtToken] = useState<string>();
   const [admissionError, setAdmissionError] = useState('');
@@ -2101,6 +2070,53 @@ export function MeetingRoomPage() {
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
+  // Full screen immersive toolbars: the top info bar and bottom control pill both slide out of
+  // view shortly after entering full screen (same "controls auto-hide, come back on movement"
+  // pattern as YouTube/Netflix/Zoom), rather than permanently occupying screen space over the
+  // video. Outside full screen, both bars stay exactly as they always have -- this state only
+  // has any visual effect while isFullscreen is true (see their own style blocks below).
+  const [toolbarsVisibleInFullscreen, setToolbarsVisibleInFullscreen] = useState(true);
+  const fullscreenAutoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      // Leaving full screen -- clear any pending hide timer and reset to visible so the bars
+      // are never caught mid-hide the next time full screen is entered.
+      if (fullscreenAutoHideTimerRef.current !== null) {
+        clearTimeout(fullscreenAutoHideTimerRef.current);
+        fullscreenAutoHideTimerRef.current = null;
+      }
+      setToolbarsVisibleInFullscreen(true);
+
+      return;
+    }
+    const FULLSCREEN_AUTO_HIDE_MS = 3000;
+    const revealAndScheduleHide = () => {
+      setToolbarsVisibleInFullscreen(true);
+      if (fullscreenAutoHideTimerRef.current !== null) {
+        clearTimeout(fullscreenAutoHideTimerRef.current);
+      }
+      fullscreenAutoHideTimerRef.current = setTimeout(() => {
+        setToolbarsVisibleInFullscreen(false);
+        fullscreenAutoHideTimerRef.current = null;
+      }, FULLSCREEN_AUTO_HIDE_MS);
+    };
+
+    revealAndScheduleHide();
+    // touchstart covers mobile/touch devices, which never fire mousemove.
+    window.addEventListener('mousemove', revealAndScheduleHide);
+    window.addEventListener('touchstart', revealAndScheduleHide);
+
+    return () => {
+      window.removeEventListener('mousemove', revealAndScheduleHide);
+      window.removeEventListener('touchstart', revealAndScheduleHide);
+      if (fullscreenAutoHideTimerRef.current !== null) {
+        clearTimeout(fullscreenAutoHideTimerRef.current);
+        fullscreenAutoHideTimerRef.current = null;
+      }
+    };
+  }, [isFullscreen]);
+
   useEffect(() => {
     toggleFullscreenRef.current = handleToggleFullscreen;
   }, [handleToggleFullscreen]);
@@ -2307,51 +2323,14 @@ export function MeetingRoomPage() {
   }, [cameraPermissionError]);
 
   const currentUserIdRef = useRef<string | null>(null);
-  const [meetingInfo, setMeetingInfo] = useState<{
-    type: string;
-    organizerId: string;
-    organizerName: string;
-    description: string | null;
-    inviteRestricted: boolean;
-    accessAllowed: boolean;
-    autoRecording: boolean;
-    recordingEnabled: boolean;
-    cancelled: boolean;
-    expired: boolean;
-    expiresAt: string | null;
-    passwordRequired: boolean;
-    locked?: boolean;
-    requireLobbyPolicy: boolean;
-    allowScreenShare: boolean;
-    micLockEnabled: boolean;
-    // True only for a meeting created from the dashboard (instant or "schedule for later") --
-    // has a saved conversation on the backend. False for an ad-hoc room (the public homepage's
-    // free instant meeting, or any bare room code), whose chat is never persisted.
-    persisted?: boolean;
-  } | null>(null);
-
-  const meetingInfoRef = useRef(meetingInfo);
-
-  // Free/unauthenticated instant meeting -- capped at 2 hours, like a free-tier call limit.
-  // Real reported bug: the countdown timer never showed up for anyone except the one browser tab
-  // that actually clicked the homepage's "New Meeting" button. Two wrong signals were tried and
-  // both broke for the exact same reason -- they only describe how the CREATOR'S OWN tab got
-  // here, not something every participant shares:
-  //   1. location.state.freeInstantMeeting -- only set by that one `navigate()` call; a guest
-  //      who opens the meeting from a shared link lands here with empty location.state.
-  //   2. location.pathname.startsWith('/instant/') -- the creator's own tab does land on that
-  //      route, but the share-link this app hands out for that SAME meeting does not: the
-  //      room id is the plain twx-xxx-xxx-xxx shape with no "instant-" prefix, so
-  //      buildMeetingPath (meeting-id.ts) resolves it to the bare "/<roomId>" route
-  //      (BareRoomRoute) for every guest who actually uses that link, not "/instant/<roomId>".
-  // meetingInfo.persisted is the one piece of information that is actually identical for every
-  // participant regardless of which URL shape got them here: the backend already computes it
-  // from whether this room has a real Meeting document (see lobby.service.ts's own `persisted:
-  // !!meeting`), true for a dashboard-created meeting and false for every kind of ad-hoc room --
-  // this app's "free instant meeting" tier by definition. `meetingInfo != null` guards against
-  // this reading true for the first render or two before the real admission response has come
-  // back, when it would otherwise default to true for every meeting type.
-  const isFreeInstantMeeting = meetingInfo != null && meetingInfo.persisted !== true;
+  const {
+    meetingInfo,
+    setMeetingInfo,
+    meetingInfoRef,
+    isFreeInstantMeeting,
+    freeInstantExpiresAt,
+    shareableMeetingUrl,
+  } = useMeetingMetadata({ roomId, isFromConversation, navigate, setAdmissionError });
 
   const accountHeaders = useCallback(async (): Promise<Record<string, string>> => {
     await auth.authStateReady();
@@ -2386,130 +2365,27 @@ export function MeetingRoomPage() {
     } catch { /* stay a guest */ }
   }, [meetingInfo?.organizerId]);
 
-  // Used only for the initial meeting-info lookup below: attaches a bearer token when signed in,
-  // regardless of the participation choice, so that lookup can tell us the meeting's organizerId
-  // (needed by the host-detection effect above) and correctly waive the password for the host,
-  // without that alone committing anyone to joining as their account.
-  const getInfoLookupHeaders = useCallback(async (): Promise<Record<string, string>> => {
-    await auth.authStateReady();
-    if (!auth.currentUser) return {};
-    try {
-      return {
-        Authorization: `Bearer ${await auth.currentUser.getIdToken()}`,
-        'X-Toowix-Session': localStorage.getItem('toowix_session_token') || '',
-      };
-    } catch {
-      return {};
-    }
-  }, []);
+  // P1-8 fix (2G/3G performance plan): the meeting-metadata fetch (unauthenticated probe +
+  // authenticated lookup, including P1-5's duplicate-request skip), the "preload Jitsi's own JS
+  // as soon as the lobby has something to show" effect, and the derived isFreeInstantMeeting/
+  // freeInstantExpiresAt/shareableMeetingUrl values all moved verbatim into useMeetingMetadata
+  // (src/lib/useMeetingMetadata.ts) -- see that file's own top-of-file comment. No behavior
+  // change: same requests, same effect timing, same returned values.
 
-  // Hoisted above the meeting-metadata effect below so the preload effect that follows it can use
-  // the same constant useJitsiMeeting is given further down -- it's a pure env read with no
-  // dependencies, so moving it earlier in the component body changes nothing about when it's
-  // computed.
+  // Hoisted here (not inside useMeetingMetadata) because useJitsiMeeting below and the preconnect
+  // effect both need this exact constant too -- it's a pure env read with no dependencies, so
+  // computing it twice (once here, once inside useMeetingMetadata) is harmless duplication, not a
+  // behavior change.
   const jitsiDomain = import.meta.env.VITE_JITSI_DOMAIN || 'talk.toowix.com';
 
-  // Fetch meeting metadata
+  // P1-6 fix: main.tsx only preconnects to the Jitsi host when a page load lands directly on a
+  // meeting route. Getting here via client-side SPA navigation (the dashboard's "New
+  // meeting"/"Join" flow) never re-runs main.tsx at all, so this mount-time call is what covers
+  // that path -- preconnectJitsi's own module-level guard makes the two call sites' overlap (a
+  // direct meeting link hits both) a safe no-op, not a duplicate.
   useEffect(() => {
-    if (window.location.search && !isFromConversation) window.history.replaceState(window.history.state, '', window.location.pathname);
-    let active = true;
-    setMeetingInfo(null);
-    meetingInfoRef.current = null;
-    setAdmissionError('');
-    // Existence checks must not wait for Firebase's auth restoration on a slow mobile link.
-    // Real reported delay: meetingInfo used to be set ONLY from the second, authenticated fetch
-    // below, which is gated behind `await auth.authStateReady()` -- Firebase restoring its local
-    // auth state, which can genuinely take a few hundred ms or more on a slow connection. The
-    // page sat blank/loading that whole time even though this FIRST, unauthenticated probe (which
-    // already has to run immediately, to fast-detect an ended/expired meeting) returns the exact
-    // same meeting document for everyone, guest or signed-in -- auth only adds organizerId-
-    // dependent extras (host password waiver, etc.), which the second fetch still applies when it
-    // resolves. Populating meetingInfo from THIS response too means the lobby screen shows real
-    // data as soon as the fast, auth-independent request completes, not after Firebase as well.
-    const probeController = new AbortController();
-    void fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}${isFromConversation ? '?fromConversation=1' : ''}`, {
-      signal: probeController.signal,
-    }).then(async response => {
-      const data = await response.json();
-
-      if (!active || isFromConversation) return;
-      if (response.ok && data.meeting && !meetingInfoRef.current) {
-        setMeetingInfo(data.meeting);
-        meetingInfoRef.current = data.meeting;
-      }
-      const endedDestination = resolvePrejoinEndedDestination(data.meeting);
-
-      if (endedDestination) {
-        navigate(endedDestination, endedDestination === '/meeting-ended'
-          ? { replace: true, state: { roomId, reason: 'This meeting has ended.' } }
-          : { replace: true });
-      } else if (isUnavailableMeetingResponse(response.status, data.error) || data.meeting?.expired || data.meeting?.cancelled) {
-        navigate('/meeting-link-expired', { replace: true });
-      }
-    }).catch(() => { /* Authenticated lookup below reports network errors. */ });
-    (async () => {
-      try {
-        const response = await fetch(`${BACKEND_URL}/api/meetings/room/${encodeURIComponent(roomId)}${isFromConversation ? '?fromConversation=1' : ''}`, {
-          headers: await getInfoLookupHeaders(),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          if (active && !isFromConversation && isUnavailableMeetingResponse(response.status, data.error)) {
-            navigate('/meeting-link-expired', { replace: true });
-            return;
-          }
-          throw new Error(data.error || 'Meeting lookup failed');
-        }
-        if (active) {
-          setMeetingInfo(data.meeting);
-          meetingInfoRef.current = data.meeting;
-          if (!isFromConversation) {
-            const endedDestination = resolvePrejoinEndedDestination(data.meeting);
-
-            if (endedDestination) {
-              navigate(endedDestination, endedDestination === '/meeting-ended'
-                ? { replace: true, state: { roomId, reason: 'This meeting has ended.' } }
-                : { replace: true });
-            } else if (data.meeting?.cancelled || data.meeting?.expired) {
-              navigate('/meeting-link-expired', { replace: true });
-            }
-          }
-        }
-      } catch (error) {
-        if (active) setAdmissionError(error instanceof Error ? error.message : 'Meeting lookup failed');
-      }
-    })();
-    return () => {
-      active = false;
-      probeController.abort();
-    };
-  }, [roomId, getInfoLookupHeaders, navigate, isFromConversation]);
-
-  // Real reported delay: Jitsi's own JS libraries only started downloading after the Join
-  // click, even though the person may have already been sitting on the lobby screen (reading
-  // the meeting name, typing their display name) for seconds doing nothing network-intensive.
-  // Preloading here, as soon as the lobby screen has something real to show, means the scripts
-  // are typically already cached by the time handleJoinMeeting's own ensureLibJitsiMeetLoaded
-  // call runs -- that later call is UNCHANGED and still the real source of truth (so a person who
-  // clicks Join before this preload finishes still joins correctly, just without the head start).
-  // Fire-and-forget: a slow or failed preload must never block the lobby screen from rendering,
-  // so no loading state is tied to this at all, and the catch below is only to keep an unhandled
-  // rejection out of the console (the real join flow's own error handling still applies if the
-  // script genuinely can't load). Guarded by a ref, not included in meetingInfo's own dependency
-  // array, so a later patch to the SAME meeting (e.g. passwordRequired flipping true) can't
-  // trigger a second, redundant call -- though scriptLoadPromise's own memoization would no-op it
-  // anyway.
-  const jitsiScriptsPreloadStartedRef = useRef(false);
-  useEffect(() => {
-    if (jitsiScriptsPreloadStartedRef.current) return;
-    if (!meetingInfo || meetingInfo.cancelled || (!isFromConversation && meetingInfo.expired)) return;
-    jitsiScriptsPreloadStartedRef.current = true;
-    void ensureLibJitsiMeetLoaded(jitsiDomain).catch(() => {
-      // Swallowed deliberately -- this is a head start, not a requirement. The real join flow's
-      // own ensureLibJitsiMeetLoaded call (inside useJitsiMeeting's connect effect) will retry
-      // and surface a real error through its normal error handling if the script truly can't load.
-    });
-  }, [meetingInfo, isFromConversation, jitsiDomain]);
+    preconnectJitsi(jitsiDomain);
+  }, [jitsiDomain]);
 
   // Mid-meeting lock: for dashboard meetings the backend enforces password + waiting room (like a
   // Private meeting); rooms with no saved meeting fall back to Jitsi's own room password.
@@ -2568,11 +2444,14 @@ export function MeetingRoomPage() {
     }
   };
 
-  const handleCopyMeetingLink = () => {
-    const url = getMeetingUrl(roomId);
-    navigator.clipboard.writeText(url);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
+  const handleCopyMeetingLink = async () => {
+    // See clipboard.ts's own comment -- Mac Safari can silently reject a bare
+    // navigator.clipboard.writeText() call (NotAllowedError) while this used to show "Copied"
+    // regardless, since the old code never checked whether the write actually succeeded.
+    if (await copyTextToClipboard(shareableMeetingUrl)) {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2500);
+    }
   };
 
   // ---------------------------------------------------------------------------
@@ -2644,6 +2523,15 @@ export function MeetingRoomPage() {
         setIsModerator(!!data.isHost || !!data.moderator);
         attendanceTokenRef.current = data.attendanceToken;
         attendanceEntryIdRef.current = data.participantEntryId;
+        // The earlier GET metadata lookup (prejoin, before Join was clicked) can't yet know the
+        // room's freeInstantExpiresAt for the very first person ever to join an ad-hoc room --
+        // the backend only starts that clock on a real POST admission. Merge this response's
+        // fresher `meeting` info back in now so that value (and anything else this POST learned
+        // that the earlier GET couldn't) is picked up immediately after actually joining.
+        if (data.meeting) {
+          setMeetingInfo((info) => (info ? { ...info, ...data.meeting } : data.meeting));
+          meetingInfoRef.current = { ...(meetingInfoRef.current || {}), ...data.meeting };
+        }
         // Deliberately NOT stopping mediaStreamRef's tracks here -- useJitsiMeeting adopts this
         // exact live prejoin stream (see the existingStream option below) instead of stopping it
         // and asking the browser for a fresh one, so real hardware never sees a
@@ -3036,13 +2924,6 @@ export function MeetingRoomPage() {
     leaveMeeting(hostEndedMessage);
   }, [resolveMeetingEndReason, navigate, leaveMeeting]);
 
-  // freeInstantExpiresAt itself is now set in two places, both further down in this file: the
-  // moderator computes-and-broadcasts it (right after postRoomSignal is defined, search for
-  // FREE_INSTANT_EXPIRES_AT) and every participant -- moderator included -- actually adopts
-  // whatever value arrives over the signal channel (handleIncomingSignal's FREE_INSTANT_EXPIRES_AT
-  // case) so the whole room counts down to the exact same moment instead of each client timing
-  // its own 2 hours from whenever it personally joined.
-
   // meetingInfo.expiresAt is still the meeting's ORIGINAL scheduled end time even when opened
   // via Conversations (only the join-time "expired" block is bypassed there, in admission.ts) --
   // for an old meeting that's long since passed, using it here would auto-end the call within
@@ -3172,9 +3053,11 @@ export function MeetingRoomPage() {
     if (!jitsiMeeting.joined || noiseSuppressionDefaultAppliedRef.current) return;
     noiseSuppressionDefaultAppliedRef.current = true;
     // RC-6: noise suppression is an extra always-on CPU cost (RNNoise track effect) -- never
-    // auto-enable it on a 2G/slow-2g connection even if the saved default says on; the person can
-    // still turn it on manually, same as a saved virtual background above.
-    if (!noiseSuppressionDefaultRef.current || userToggledNoiseSuppressionRef.current || jitsiMeeting.noiseSuppressionEnabled || isSlowNetworkConnection()) return;
+    // auto-enable it on a weak connection even if the saved default says on; the person can
+    // still turn it on manually, same as a saved virtual background above. P1-7 fix (2G/3G
+    // performance plan): widened from 2G/slow-2g only to every weak startup tier (3G and
+    // unknown-mobile too), matching the same ceiling P0-2/P0-4 already apply elsewhere.
+    if (!noiseSuppressionDefaultRef.current || userToggledNoiseSuppressionRef.current || jitsiMeeting.noiseSuppressionEnabled || getStartupNetworkProfile() !== 'normal') return;
     jitsiMeeting.toggleNoiseSuppression().catch(() => {
       // Best-effort -- e.g. AudioWorklet unsupported. Leaves noise suppression off, same as today.
     });
@@ -4229,26 +4112,6 @@ export function MeetingRoomPage() {
     [roomId, displayName]
   );
 
-  // The free-instant 2-hour cap must be the SAME countdown target for every participant, not
-  // each client's own "2 hours from when I personally joined" -- otherwise a guest who joins 20
-  // minutes after the host sees a timer running 20 minutes behind the host's, and a host who
-  // simply refreshes their tab would reset their own countdown back to a fresh 2 hours. The
-  // moderator -- the one role guaranteed to exist from the very start of an ad-hoc instant room
-  // (see isModerator's own comment) -- computes the target once and broadcasts it; every
-  // participant, moderator included, only ever actually displays the value that arrives via the
-  // FREE_INSTANT_EXPIRES_AT case in handleIncomingSignal below, never this local computation
-  // directly. A participant who joins later still gets it immediately: streamSignalsHandler
-  // replays every signal already posted for the room to a fresh subscriber, the same mechanism
-  // that already delivers chat history to late joiners.
-  const freeInstantBroadcastedRef = useRef(false);
-  useEffect(() => {
-    if (!isFreeInstantMeeting || !hasJoined || !isModerator || freeInstantBroadcastedRef.current) return;
-    freeInstantBroadcastedRef.current = true;
-    const expiresAt = Date.now() + 2 * 60 * 60 * 1000;
-    setFreeInstantExpiresAt((current) => current ?? expiresAt);
-    void postRoomSignal('FREE_INSTANT_EXPIRES_AT', { expiresAt });
-  }, [isFreeInstantMeeting, hasJoined, isModerator, postRoomSignal]);
-
   const handleRemoteAudioControl = useCallback((participantId: string) => {
     if (!isModerator) return;
     const room = jitsiMeeting.room.current;
@@ -4358,17 +4221,7 @@ export function MeetingRoomPage() {
       if (msgId && processedSignalIdsRef.current.has(msgId)) return;
       if (msgId) addProcessedSignalId(msgId);
 
-      if (type === 'FREE_INSTANT_EXPIRES_AT') {
-        // The moderator's authoritative countdown target (see the broadcasting effect right
-        // after postRoomSignal is defined) -- every other participant adopts it as-is instead of
-        // trusting its own locally-computed guess, so the whole room's timer counts down to the
-        // exact same moment. Unconditional set (not current ?? ...): this is the one value meant
-        // to win over any earlier local placeholder.
-        const expiresAt = Number(payload?.expiresAt);
-        if (Number.isFinite(expiresAt) && expiresAt > 0) {
-          setFreeInstantExpiresAt(expiresAt);
-        }
-      } else if (type === 'MEETING_ENDED_FOR_EVERYONE') {
+      if (type === 'MEETING_ENDED_FOR_EVERYONE') {
         // payload.reason is this app's own addition (see endMeetingForEveryoneOnBackend) --
         // absent entirely from an older client that predates it, which
         // handleMeetingTerminatedRemotely's own fallback already handles safely.
@@ -5293,6 +5146,17 @@ export function MeetingRoomPage() {
             justifyContent: 'space-between',
             zIndex: 10,
             boxSizing: 'border-box',
+            // Full-screen auto-hide: becomes an overlay (out of the normal flex flow, so tw-main
+            // can grow into the reclaimed space) only while full screen is active; outside full
+            // screen this stays exactly as it always was (position: static, in-flow).
+            ...(isFullscreen ? {
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              transform: toolbarsVisibleInFullscreen ? 'translateY(0)' : 'translateY(-100%)',
+              transition: 'transform 0.3s ease',
+            } : {}),
           }}
         >
           {/* Top-Left: Toowix Logo, Time, Divider, Meeting Code, Info Action */}
@@ -6635,14 +6499,17 @@ export function MeetingRoomPage() {
                           borderRadius: '10px',
                         }}
                       >
-                        {getMeetingUrl(roomId)}
+                        {shareableMeetingUrl}
                       </div>
                     </div>
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(getMeetingUrl(roomId));
-                        setCopiedLink(true);
-                        setTimeout(() => setCopiedLink(false), 2000);
+                      onClick={async () => {
+                        // See clipboard.ts's own comment -- same Mac Safari fix as
+                        // handleCopyMeetingLink above.
+                        if (await copyTextToClipboard(shareableMeetingUrl)) {
+                          setCopiedLink(true);
+                          setTimeout(() => setCopiedLink(false), 2000);
+                        }
                       }}
                       style={{
                         display: 'flex',
@@ -7160,7 +7027,14 @@ export function MeetingRoomPage() {
             position: 'absolute',
             bottom: '16px',
             left: '50%',
-            transform: 'translateX(-50%)',
+            // Full-screen auto-hide: already an absolute overlay (no flex-flow change needed
+            // here, unlike the top bar), so hiding it is just pushing the SAME horizontal
+            // centering transform further down and out of view. Outside full screen this is
+            // byte-for-byte the original 'translateX(-50%)'.
+            transform: isFullscreen && !toolbarsVisibleInFullscreen
+              ? 'translate(-50%, 150%)'
+              : 'translateX(-50%)',
+            transition: 'transform 0.3s ease',
             height: '72px',
             backgroundColor: '#202124',
             borderRadius: '36px',
@@ -7949,7 +7823,7 @@ export function MeetingRoomPage() {
               onClose={() => setShowShareModal(false)}
               meeting={{
                 name: formattedRoomTitle,
-                meetingUrl: getMeetingUrl(roomId),
+                meetingUrl: shareableMeetingUrl,
                 roomSlug: roomId,
                 hostName: meetingInfo?.organizerName || displayName || 'Organizer',
                 description: meetingInfo?.description || undefined,
@@ -8115,7 +7989,7 @@ export function MeetingRoomPage() {
             <EmbedMeetingModal
               isOpen={showEmbedModal}
               onClose={() => setShowEmbedModal(false)}
-              meetingUrl={getMeetingUrl(roomId)}
+              meetingUrl={shareableMeetingUrl}
             />
           </Suspense>
         )}
@@ -8195,7 +8069,7 @@ export function MeetingRoomPage() {
               isOpen
               onClose={() => setShowMeetingReady(false)}
               onAddOthers={() => setShowShareModal(true)}
-              meetingUrl={getMeetingUrl(roomId)}
+              meetingUrl={shareableMeetingUrl}
               joinedAs={auth.currentUser?.email || ''}
               isDark={isDark}
             />
@@ -8490,8 +8364,8 @@ export function MeetingRoomPage() {
           </div>
         )}
 
-        {/* Floating Toast Notification (Raise Hand, Away/Back, Recording, Participant Join/Leave, Time Limit, PiP Hint, Background Fallback/Give-up) */}
-        {(handRaisedToast || awayToast || recordingToast || participantToast || timeLimitToast || pipHintToast || jitsiMeeting.backgroundFallbackMessage || jitsiMeeting.backgroundGiveUpMessage) && (
+        {/* Floating Toast Notification (Raise Hand, Away/Back, Recording, Participant Join/Leave, Time Limit, PiP Hint, Background Fallback/Give-up, Weak-Network Effect Warning) */}
+        {(handRaisedToast || awayToast || recordingToast || participantToast || timeLimitToast || pipHintToast || jitsiMeeting.backgroundFallbackMessage || jitsiMeeting.backgroundGiveUpMessage || jitsiMeeting.weakNetworkEffectWarning) && (
           <div
             style={{
               position: 'fixed',
@@ -8628,6 +8502,23 @@ export function MeetingRoomPage() {
                   <Clock size={14} color="#FFFFFF" />
                 </div>
                 <span>{jitsiMeeting.backgroundFallbackMessage}</span>
+              </>
+            ) : jitsiMeeting.weakNetworkEffectWarning ? (
+              <>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: '#F9AB00',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Clock size={14} color="#202124" />
+                </div>
+                <span>{jitsiMeeting.weakNetworkEffectWarning}</span>
               </>
             ) : (
               <>
@@ -9626,7 +9517,7 @@ export function MeetingRoomPage() {
                 Joining Info
               </span>
               <div style={{ fontSize: '13px', color: isDark ? '#E8EAED' : '#202124', fontFamily: 'monospace', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                {getMeetingUrl(roomId)}
+                {shareableMeetingUrl}
               </div>
             </div>
 
@@ -9751,7 +9642,7 @@ export function MeetingRoomPage() {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {getMeetingUrl(roomId)}
+                    {shareableMeetingUrl}
                   </span>
                   <button
                     onClick={handleCopyMeetingLink}
