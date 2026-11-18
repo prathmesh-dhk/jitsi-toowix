@@ -3732,6 +3732,41 @@ export function MeetingRoomPage() {
     toggleScreenShareFullViewRef.current = toggleScreenShareFullView;
   }, [toggleScreenShareFullView]);
 
+  // 's' also engages the real browser Fullscreen API alongside the in-app full-view overlay above
+  // (entry only). Exiting full-view -- the 'X' button, pressing 's' again -- deliberately does NOT
+  // drop back out of real fullscreen: it returns to the normal in-meeting layout (toolbar, chat,
+  // participant filmstrip all back) while STAYING in fullscreen, the same way a "back" action
+  // inside a fullscreen session doesn't itself end the session. Fullscreen only ends by its own
+  // usual means (the 'f' toggle, Esc, the browser's own UI) -- never as a side effect of leaving
+  // full-view share mode.
+  const fullscreenEnteredByShareViewRef = useRef(false);
+  useEffect(() => {
+    if (screenShareFullView && !document.fullscreenElement) {
+      fullscreenEnteredByShareViewRef.current = true;
+      document.documentElement.requestFullscreen().catch(() => {
+        // Denied (not a user gesture, or an embedding iframe without allowfullscreen) -- the
+        // in-app full-view overlay still works fine entirely on its own.
+        fullscreenEnteredByShareViewRef.current = false;
+      });
+    }
+  }, [screenShareFullView]);
+  // Leaving real fullscreen some OTHER way (Esc, the browser's own UI) while full-view share is
+  // still showing should end full-view too -- there's no real fullscreen left for it to occupy.
+  // Only fires for a fullscreen session full-view itself started (see the ref above); a real-
+  // fullscreen session started independently via 'f' is never touched by full-view at all.
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement && fullscreenEnteredByShareViewRef.current) {
+        fullscreenEnteredByShareViewRef.current = false;
+        setScreenShareFullView(false);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
   // Synchronize screen share video stream to presentation video element
   useEffect(() => {
     if (presentationVideoRef.current) {
@@ -5140,13 +5175,15 @@ export function MeetingRoomPage() {
             boxSizing: 'border-box',
             // Full-screen auto-hide: becomes an overlay (out of the normal flex flow, so tw-main
             // can grow into the reclaimed space) only while full screen is active; outside full
-            // screen this stays exactly as it always was (position: static, in-flow).
-            ...(isFullscreen ? {
+            // screen this stays exactly as it always was (position: static, in-flow). Screen-share
+            // full view ('s') forces it permanently hidden instead of toolbarsVisibleInFullscreen's
+            // hover-to-reveal -- deliberately no way to bring it back except exiting the mode.
+            ...(isFullscreen || screenShareFullView ? {
               position: 'absolute',
               top: 0,
               left: 0,
               right: 0,
-              transform: toolbarsVisibleInFullscreen ? 'translateY(0)' : 'translateY(-100%)',
+              transform: screenShareFullView || !toolbarsVisibleInFullscreen ? 'translateY(-100%)' : 'translateY(0)',
               transition: 'transform 0.3s ease',
             } : {}),
           }}
@@ -5421,6 +5458,22 @@ export function MeetingRoomPage() {
                 gap: '16px',
                 alignItems: 'stretch',
                 justifyContent: 'center',
+                // Screen-share full view ('s'): reclaim the space the top bar / bottom toolbar /
+                // chat panel would otherwise reserve (170px height, 380px width) by just not
+                // reserving it -- the top bar and toolbar below are hidden via the SAME
+                // position:absolute + transform mechanism real (isFullscreen) full screen already
+                // uses elsewhere in this file (so tw-main naturally grows into that space, no
+                // separate escape-the-layout mechanism needed), and the chat panel's own render is
+                // gated off entirely while this is on. A real (isFullscreen) browser fullscreen is
+                // also triggered alongside this (see the effect pairing screenShareFullView with
+                // document.fullscreenElement above) for the actual edge-to-edge viewport -- NOT a
+                // separate position:fixed overlay here as well, which only fought that native
+                // transition and caused a visible flicker on entry/exit.
+                ...(screenShareFullView ? {
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  gap: 0,
+                } : {}),
               }}
             >
               {/* Primary Presentation Stage (Screen Share): Captures large screen space on the LEFT */}
@@ -5429,11 +5482,13 @@ export function MeetingRoomPage() {
                   flex: 1,
                   minWidth: 0,
                   height: '100%',
-                  borderRadius: '24px',
+                  // Edge-to-edge in full view -- no rounded corners/shadow floating inside what is
+                  // now the entire viewport.
+                  borderRadius: screenShareFullView ? 0 : '24px',
                   overflow: 'hidden',
                   position: 'relative',
                   backgroundColor: '#000000',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6)',
+                  boxShadow: screenShareFullView ? 'none' : '0 8px 32px rgba(0, 0, 0, 0.6)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -5441,7 +5496,10 @@ export function MeetingRoomPage() {
               >
                 {/* Only shown in full-view mode (the 's' shortcut) -- the in-app state has no
                     native Esc-key affordance the way real browser fullscreen does, so without
-                    this there would be no visible way back to the normal layout. */}
+                    this there would be no visible way back to the normal layout. Bottom-center,
+                    always on (no hover-to-reveal, matching every other piece of chrome in this
+                    mode being fully hidden rather than auto-hiding) -- the one deliberately
+                    visible, deliberately minimal way out. */}
                 {screenShareFullView && (
                   <button
                     type="button"
@@ -5449,24 +5507,24 @@ export function MeetingRoomPage() {
                     title="Exit full-screen share view (S)"
                     style={{
                       position: 'absolute',
-                      top: '16px',
-                      right: '16px',
+                      bottom: '24px',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
                       zIndex: 5,
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px',
-                      padding: '8px 14px',
-                      borderRadius: '20px',
-                      border: '1px solid rgba(255, 255, 255, 0.16)',
-                      backgroundColor: 'rgba(32, 33, 36, 0.76)',
-                      backdropFilter: 'blur(6px)',
-                      color: '#E8EAED',
-                      fontSize: '13px',
-                      fontWeight: 500,
+                      justifyContent: 'center',
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '50%',
+                      border: '1px solid rgba(255, 255, 255, 0.22)',
+                      backgroundColor: 'rgba(0, 0, 0, 0.35)',
+                      backdropFilter: 'blur(4px)',
+                      color: 'rgba(255, 255, 255, 0.85)',
                       cursor: 'pointer',
                     }}
                   >
-                    <X size={14} /> Exit full view
+                    <X size={18} />
                   </button>
                 )}
                 {primaryShare?.kind === 'local' ? (
@@ -6427,8 +6485,11 @@ export function MeetingRoomPage() {
           {/* ── Global Live Captions Overlay (works in ALL layouts) ── */}
           <CaptionsOverlay captionsEnabled={captionsEnabled} captionText={captionText} captionInterim={captionInterim} />
 
-          {/* Smooth Side Panels (Resizes main participant stage without covering controls) */}
-          {activePanel && (
+          {/* Smooth Side Panels (Resizes main participant stage without covering controls).
+              Hidden entirely during screen-share full view ('s') -- activePanel itself is left
+              untouched so chat/people reopens on the same tab once the person exits full view,
+              rather than forcing them to reselect it. */}
+          {activePanel && !screenShareFullView && (
             <div
               className="tw-panel"
               style={{
@@ -7022,8 +7083,9 @@ export function MeetingRoomPage() {
             // Full-screen auto-hide: already an absolute overlay (no flex-flow change needed
             // here, unlike the top bar), so hiding it is just pushing the SAME horizontal
             // centering transform further down and out of view. Outside full screen this is
-            // byte-for-byte the original 'translateX(-50%)'.
-            transform: isFullscreen && !toolbarsVisibleInFullscreen
+            // byte-for-byte the original 'translateX(-50%)'. Screen-share full view ('s') forces
+            // it permanently hidden, same as the top bar above.
+            transform: screenShareFullView || (isFullscreen && !toolbarsVisibleInFullscreen)
               ? 'translate(-50%, 150%)'
               : 'translateX(-50%)',
             transition: 'transform 0.3s ease',
