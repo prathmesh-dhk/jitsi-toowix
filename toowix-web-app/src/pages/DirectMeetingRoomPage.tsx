@@ -6,6 +6,7 @@ import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
 import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
+import { preconnectJitsi } from '../lib/jitsi/ensureLibJitsiMeetLoaded';
 
 // Direct lib-jitsi-meet meeting room -- no Jitsi IFrame. Real MediaStreamTracks attached
 // directly to our own <video> elements. New route (/meet-direct/:roomId), completely separate
@@ -145,6 +146,12 @@ export function DirectMeetingRoomPage() {
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   // Mobile camera orientation fix (Option A) -- see RemoteTile's own comment above.
   const localVideoOrientation = useCameraVideoAspect('local');
+
+  // P1-6 fix: see MeetingRoomPage's identical effect -- covers SPA navigation into this route
+  // that never re-runs main.tsx's own boot-time preconnect.
+  useEffect(() => {
+    preconnectJitsi(JITSI_DOMAIN);
+  }, []);
 
   useEffect(() => {
     if (!hasJoined) {

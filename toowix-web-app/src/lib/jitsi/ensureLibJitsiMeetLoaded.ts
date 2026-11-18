@@ -9,6 +9,34 @@ export function jitsiWsScheme(jitsiDomain: string): 'ws' | 'wss' {
   return jitsiDomain.endsWith(':80') ? 'ws' : 'wss';
 }
 
+// P1-6 fix (2G/3G performance plan): this used to run unconditionally from main.tsx on EVERY
+// page load -- login, signup, dashboard, settings, marketing pages included -- opening a TLS
+// connection to the Jitsi host that only a meeting page ever actually uses. On a weak connection
+// that competed with whatever the current (non-meeting) page actually needed to load. Callers now
+// decide WHEN this runs: main.tsx only calls it for a page load that's already a meeting route
+// (see isMeetingRoutePathname in meeting-id.ts), and MeetingRoomPage/DirectMeetingRoomPage call it
+// on mount to cover client-side SPA navigation into a meeting (e.g. the dashboard's "New
+// meeting"/"Join" flow) that never re-runs main.tsx at all. Module-level guard, same reasoning as
+// scriptLoadPromise below: whichever of those call sites gets there first wins, every later call
+// (including a redundant one from main.tsx AND a mount effect on the exact same page load) is a
+// safe no-op instead of appending a second <link> tag.
+let preconnected = false;
+
+export function preconnectJitsi(jitsiDomain: string): void {
+  if (preconnected) return;
+  preconnected = true;
+  try {
+    const preconnect = document.createElement('link');
+
+    preconnect.rel = 'preconnect';
+    preconnect.href = `${jitsiHttpScheme(jitsiDomain)}://${jitsiDomain}`;
+    preconnect.crossOrigin = 'anonymous';
+    document.head.appendChild(preconnect);
+  } catch {
+    // A blocked/unavailable DOM API here must never prevent the app from loading.
+  }
+}
+
 // Extracted out of useJitsiMeeting.ts (a large, meeting-room-only file lazy-loaded as its own
 // chunk) so the dashboard's "Start an instant meeting" flow can kick this download off the
 // moment the person clicks, without pulling that whole file -- and everything it in turn imports

@@ -41,6 +41,8 @@ import {
   isRealCaptureLandscape,
   isMobileBrowser,
   clampVideoHeightForNetwork,
+  getStartupSendReceiveCeiling,
+  getStartupNetworkProfile,
 } from './networkQuality';
 import { logGalleryDebug } from './galleryOrientationDebug';
 import { primeIceServers } from './iceServersPatch';
@@ -205,8 +207,13 @@ const EFFECT_SENDER_STEP_UP_MIN_INTERVAL_MS = 8000;
 function computeNonEffectSendHeight(networkState: NetworkState, base: number, screenShareActive = false): number {
   if (screenShareActive) return clampVideoHeightForNetwork(networkState, base, true);
   const height = clampVideoHeightForNetwork(networkState, base, false);
+  const floored = networkState === 'GOOD' ? Math.max(base, 720) : height;
+  // P0-4 fix: see getStartupSendReceiveCeiling's own comment -- a 3G/unknown-mobile/2G join can
+  // read as classifyNetwork GOOD before real stats ever lower it, so the 720p GOOD floor above
+  // must still not exceed what the startup profile itself allows.
+  const startupCeiling = getStartupSendReceiveCeiling(false);
 
-  return networkState === 'GOOD' ? Math.max(base, 720) : height;
+  return startupCeiling !== null ? Math.min(floored, startupCeiling) : floored;
 }
 const EMPTY_NETWORK_METRICS: INetworkMetrics = {
   availableOutgoingBitrateKbps: null,
@@ -942,6 +949,20 @@ export function useJitsiMeeting({
         // Quality controls remain useful even if a browser refuses to remove an effect.
       }
     }
+    // P1-7 fix (2G/3G performance plan): "stop the effect and release its loop/resources when
+    // switching to low-data or audio-only mode" -- this already did it for the virtual-background
+    // effect above but left noise suppression (also a standing CPU cost, see RC-6's own comment
+    // elsewhere) running. setNoiseSuppressionEnabled(false) keeps the exposed state in sync with
+    // what toggleNoiseSuppression's own manual-off path already does.
+    if (mode !== 'auto' && noiseSuppressionRef.current) {
+      noiseSuppressionRef.current = null;
+      setNoiseSuppressionEnabled(false);
+      try {
+        await localAudioTrackRef.current?.setEffect(undefined);
+      } catch {
+        // Quality controls remain useful even if a browser refuses to remove an effect.
+      }
+    }
     await qualityChange;
   }, [applyMediaQualityPolicy]);
 
@@ -1466,7 +1487,13 @@ export function useJitsiMeeting({
     // step it down / back up as the measured network state changes, so quality follows the
     // network in both directions. The bridge still picks what the bandwidth estimate can carry.
     const base = getReceiveMaxHeightForCallSize(remoteParticipantCount + 1, screenShareActive);
-    const height = clampVideoHeightForNetwork(networkState, base, screenShareActive);
+    // P0-4 fix: same startup-profile ceiling as the sender side (see
+    // getStartupSendReceiveCeiling's own comment) -- otherwise a 3G/unknown-mobile/2G join could
+    // briefly ask remote participants' video at the full GOOD-network receive height before
+    // classifyNetwork's own RTT/loss samples ever had a reason to lower it.
+    const startupReceiveCeiling = getStartupSendReceiveCeiling(screenShareActive);
+    const clampedHeight = clampVideoHeightForNetwork(networkState, base, screenShareActive);
+    const height = startupReceiveCeiling !== null ? Math.min(clampedHeight, startupReceiveCeiling) : clampedHeight;
     const lastN = networkState === 'POOR' ? Math.min(policy.lastN, 2) : policy.lastN;
 
     try {
@@ -2727,6 +2754,21 @@ export function useJitsiMeeting({
     setTimeout(() => setBackgroundFallbackMessage((current) => (current === message ? null : current)), 8000);
   }, []);
 
+  // P1-7 fix (2G/3G performance plan): "if the user manually enables an effect [on a weak
+  // connection], show a short warning that it can reduce call quality." Neither effect is ever
+  // auto-enabled on a weak network (virtual background never auto-restores at all; see
+  // prejoinBackground's own comment in MeetingRoomPage.tsx), so this only fires on an explicit,
+  // real enable while getStartupNetworkProfile() says the connection is weak -- same one-shot
+  // toast shape as the other background-related messages above.
+  const [weakNetworkEffectWarning, setWeakNetworkEffectWarning] = useState<string | null>(null);
+  const warnIfEnablingEffectOnWeakNetwork = useCallback((effectLabel: string) => {
+    if (getStartupNetworkProfile() === 'normal') return;
+    const message = `${effectLabel} uses extra CPU -- it may reduce your call quality on this connection.`;
+
+    setWeakNetworkEffectWarning(message);
+    setTimeout(() => setWeakNetworkEffectWarning((current) => (current === message ? null : current)), 8000);
+  }, []);
+
   // Applies (blur/image) or clears (null) a virtual background on the local camera track.
   // Re-thrown to the caller on failure (model download failed, WebAssembly unsupported, etc.) so
   // the UI can show an error instead of silently doing nothing.
@@ -2791,6 +2833,7 @@ export function useJitsiMeeting({
       return;
     }
 
+    warnIfEnablingEffectOnWeakNetwork('Background effects');
     const { createVirtualBackgroundEffect } = await import('./virtualBackground/createVirtualBackgroundEffect');
     // An old effect can finish a delayed fallback/give-up after the user has selected a newer
     // background. Its callback must never clear that newer track/effect.
@@ -2850,7 +2893,7 @@ export function useJitsiMeeting({
       setLocalCameraStream(trackToStream(track));
     }
     virtualBackgroundRef.current = { config, effect };
-  }, [handleBackgroundFallback, handleBackgroundGiveUp]);
+  }, [handleBackgroundFallback, handleBackgroundGiveUp, warnIfEnablingEffectOnWeakNetwork]);
 
   // Toggles mic noise suppression (RNNoise) on/off. Re-thrown to the caller on failure (e.g.
   // AudioWorklet unsupported) so the UI can show an error instead of silently doing nothing.
@@ -2867,6 +2910,7 @@ export function useJitsiMeeting({
       return;
     }
 
+    warnIfEnablingEffectOnWeakNetwork('Noise suppression');
     const { NoiseSuppressionEffect } = await import('./noiseSuppression/NoiseSuppressionEffect');
     const effect = new NoiseSuppressionEffect();
 
@@ -2875,7 +2919,7 @@ export function useJitsiMeeting({
     }
     noiseSuppressionRef.current = { effect };
     setNoiseSuppressionEnabled(true);
-  }, []);
+  }, [warnIfEnablingEffectOnWeakNetwork]);
 
   // Ported from jitsi-meet's playSharedVideo action: sends the "start" command and nothing else
   // -- local state (for the sender too) is set once the command echoes back through the
@@ -3121,6 +3165,7 @@ export function useJitsiMeeting({
     setVirtualBackground,
     backgroundGiveUpMessage,
     backgroundFallbackMessage,
+    weakNetworkEffectWarning,
     setLowDataMode,
     noiseSuppressionEnabled,
     toggleNoiseSuppression,

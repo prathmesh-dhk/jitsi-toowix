@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/verify-mediapipe-assets.cjs && tsc && vite build",
+    "build": "node scripts/verify-mediapipe-assets.cjs && tsc && vite build && node scripts/bundle-report.cjs",
     "verify-mediapipe-assets": "node scripts/verify-mediapipe-assets.cjs",
+    "bundle-report": "node scripts/bundle-report.cjs",
     "preview": "vite preview",
     "test:recording:e2e": "node tests/recording-e2e.cjs"
   },
