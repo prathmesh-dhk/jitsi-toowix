@@ -84,9 +84,13 @@ import settingsRoutes from './routes/settings.routes';
 import contactRoutes from './routes/contact.routes';
 import directChatRoutes from './routes/directChat.routes';
 import { internalSsoRouter } from './routes/internal-sso.routes';
+import { keycloakBackchannelLogoutRouter } from './routes/keycloak-backchannel-logout.routes';
 
 app.use('/api/auth', authRoutes);
 app.use('/api/internal', internalSsoRouter);
+// Keycloak itself POSTs here (OIDC Back-Channel Logout 1.0) -- public, authenticated only by the
+// Logout Token's own signature (verifyKeycloakLogoutToken), never a shared secret.
+app.use('/api/internal/keycloak/backchannel-logout', keycloakBackchannelLogoutRouter);
 app.use('/api/companies', companyRoutes);
 app.use('/api/meetings', meetingRoutes);
 app.use('/api/recordings', recordingRoutes);

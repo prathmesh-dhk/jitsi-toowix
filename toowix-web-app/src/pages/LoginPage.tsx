@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { signInWithEmailAndPassword, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
-import { isKeycloakSignInEnabled, signInWithToowix } from '../lib/keycloakAuth';
+import { attemptSilentSignIn, exchangeForToowixSession, isKeycloakSignInEnabled, signInWithToowix } from '../lib/keycloakAuth';
 import { useTheme } from '../lib/theme';
 
 const BACKEND_URL =
@@ -23,6 +23,26 @@ export function LoginPage() {
 
   const navigate = useNavigate();
   const keycloakSignInEnabled = isKeycloakSignInEnabled();
+
+  // The "already signed in elsewhere" experience: if this browser still holds a live Keycloak
+  // session (e.g. from signing into Mail earlier), silently exchange it for a Toowix session and
+  // skip the login screen entirely -- same as landing on YouTube already signed in because Gmail
+  // signed you in first. Runs once on mount, never blocks the visible login form from rendering,
+  // and fails silently (falls back to the normal screen) if there's no existing session.
+  useEffect(() => {
+    if (!keycloakSignInEnabled) return;
+    const alreadyLoggedIn = !!localStorage.getItem('toowix_user') || !!localStorage.getItem('toowix_session_token');
+    if (alreadyLoggedIn) return;
+    let cancelled = false;
+    void (async () => {
+      const session = await attemptSilentSignIn();
+      if (cancelled || !session) return;
+      const result = await exchangeForToowixSession(session);
+      if (!cancelled && result.ok) navigate('/dashboard', { replace: true });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Process Login Gate Verification with Toowix Backend
   const handleBackendLoginGate = async (idToken: string, firebaseUser?: FirebaseUser) => {

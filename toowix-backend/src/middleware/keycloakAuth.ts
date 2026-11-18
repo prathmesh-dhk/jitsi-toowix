@@ -138,3 +138,46 @@ export function resetKeycloakJwksCacheForTests(): void {
   cachedJwks = null;
   cachedJwksUrl = null;
 }
+
+const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
+
+export interface VerifiedLogoutToken {
+  sub?: string;
+  sid?: string;
+}
+
+/**
+ * Verifies an OIDC Back-Channel Logout 1.0 Logout Token Keycloak itself POSTs directly to this
+ * backend whenever the SSO session for a user linked to `toowix-meet` ends, by ANY means (this
+ * app's own logout, Keycloak's Account Console, an admin revoking a session, or SSO session
+ * expiry) -- the piece that makes "logout kills the session everywhere" true even when neither
+ * app's own /logout route was ever called. Spec: https://openid.net/specs/openid-connect-backchannel-1_0.html
+ *
+ * Same signature/issuer/algorithm verification as verifyKeycloakAccessToken above, plus the
+ * Logout-Token-specific checks the spec requires: an `events` claim carrying the
+ * backchannel-logout event URI, and `nonce` ABSENT (its presence would mean this isn't really a
+ * Logout Token). Throws on any failure -- callers must never treat a throw as "logged out".
+ */
+export async function verifyKeycloakLogoutToken(token: string): Promise<VerifiedLogoutToken> {
+  const config = getKeycloakConfig();
+  const { payload } = await jwtVerify(token, jwksFor(config.jwksUrl), {
+    issuer: config.issuer,
+    audience: config.meetClientId,
+    algorithms: ['RS256'],
+  });
+
+  const events = payload.events as Record<string, unknown> | undefined;
+  if (!events || typeof events !== 'object' || !(BACKCHANNEL_LOGOUT_EVENT in events)) {
+    throw new Error('Logout token is missing the backchannel-logout event claim');
+  }
+  if ('nonce' in payload) {
+    throw new Error('Logout token must not contain a nonce claim');
+  }
+  const sub = typeof payload.sub === 'string' ? payload.sub : undefined;
+  const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
+  if (!sub && !sid) {
+    throw new Error('Logout token has neither sub nor sid');
+  }
+
+  return { sub, sid };
+}

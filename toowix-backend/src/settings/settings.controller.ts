@@ -71,7 +71,7 @@ export const getStorageSettingsHandler = async (req: AuthenticatedRequest, res: 
  * POST /api/settings/security/password-changed
  */
 export const recordPasswordChangedHandler = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const result = await settingsService.recordPasswordChanged(req.firebaseUid);
+  const result = await settingsService.recordPasswordChanged(req.firebaseUid, req.get('X-Toowix-Session'));
   res.status(result.httpStatus).json(result.body);
 };
 

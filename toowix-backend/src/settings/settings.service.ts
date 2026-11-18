@@ -3,6 +3,7 @@ import { Company } from '../models/Company';
 import { Recording } from '../models/Recording';
 import { Session } from '../models/Session';
 import { persistAvatarIfDataUri } from '../uploads/avatarStorage';
+import { revokeMailSessionsByEmail } from '../lib/mailSsoClient';
 
 // All business rules for the Settings module (account/profile, preferences, storage, security
 // sessions) live here as plain functions -- no `req`/`res` anywhere in this file.
@@ -301,7 +302,7 @@ export async function getStorageSettings(firebaseUid: string | undefined): Promi
  * itself (Firebase requires the client SDK for that -- reauthenticate + updatePassword).
  * This just records the date so the UI can show "last changed".
  */
-export async function recordPasswordChanged(firebaseUid: string | undefined): Promise<IServiceResult> {
+export async function recordPasswordChanged(firebaseUid: string | undefined, currentToken: string | undefined): Promise<IServiceResult> {
   try {
     const user = await resolveUser(firebaseUid);
     if (!user) {
@@ -309,6 +310,16 @@ export async function recordPasswordChanged(firebaseUid: string | undefined): Pr
     }
     user.passwordChangedAt = new Date();
     await user.save();
+
+    // A password change invalidates every OTHER session this person had -- on Meet (keeping the
+    // browser that just made this change signed in, same as Google) AND on Mail, same as the
+    // reverse direction (Mail's forgot-password/reset) already revokes Meet's sessions too.
+    await Session.updateMany(
+      { userId: user._id, revokedAt: null, ...(currentToken ? { sessionToken: { $ne: currentToken } } : {}) },
+      { revokedAt: new Date() }
+    );
+    if (user.email) void revokeMailSessionsByEmail(user.email);
+
     return { body: { passwordChangedAt: user.passwordChangedAt }, httpStatus: 200 };
   } catch (error: any) {
     console.error('[Settings] Error recording password change:', error.message);

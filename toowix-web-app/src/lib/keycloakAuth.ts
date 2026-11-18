@@ -84,6 +84,81 @@ export function isKeycloakSignInEnabled(): boolean {
   return keycloakEnabled;
 }
 
+// Served statically (public/silent-check-sso.html), never through the SPA router -- it only
+// needs to exist and postMessage its own URL back to whoever loaded it in an iframe.
+const silentCheckUri = `${window.location.origin}/silent-check-sso.html`;
+
+/**
+ * The "already logged in elsewhere, so don't ask again" behavior Google/YouTube have: tries a
+ * Keycloak authorization request with `prompt=none` inside a hidden iframe. If this browser
+ * already holds a live Keycloak session (e.g. from signing into Mail earlier), Keycloak answers
+ * immediately with a code and no UI is ever shown. If there's no session, Keycloak responds with
+ * an `error` (login_required/interaction_required) just as fast, and this resolves to null so the
+ * caller falls back to the normal, visible sign-in button -- this never blocks or delays that.
+ * Runs independently of the visible sign-in's PKCE transaction (own verifier/state, own
+ * redirect_uri) so it can never collide with, or be mistaken for, a real callback.
+ */
+export async function attemptSilentSignIn(timeoutMs = 4000): Promise<KeycloakSession | null> {
+  if (!keycloakEnabled) return null;
+
+  const verifier = randomString();
+  const state = randomString();
+  const challenge = await challengeFor(verifier);
+
+  return new Promise<KeycloakSession | null>((resolve) => {
+    let settled = false;
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.setAttribute('aria-hidden', 'true');
+
+    const finish = (value: KeycloakSession | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('message', onMessage);
+      iframe.remove();
+      resolve(value);
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== iframe.contentWindow) return;
+      void (async () => {
+        try {
+          const url = new URL(String(event.data || ''));
+          if (url.searchParams.get('error')) {
+            finish(null); // No live Keycloak session (login_required/interaction_required) -- not an error.
+            return;
+          }
+          const code = url.searchParams.get('code');
+          const returnedState = url.searchParams.get('state');
+          if (!code || returnedState !== state) {
+            finish(null);
+            return;
+          }
+          const session = await tokenRequest(new URLSearchParams({
+            grant_type: 'authorization_code', client_id: clientId, code,
+            redirect_uri: silentCheckUri, code_verifier: verifier,
+          }));
+          finish(session);
+        } catch {
+          finish(null);
+        }
+      })();
+    };
+
+    const timer = window.setTimeout(() => finish(null), timeoutMs);
+    window.addEventListener('message', onMessage);
+
+    const url = new URL(`${authority}/protocol/openid-connect/auth`);
+    url.search = new URLSearchParams({
+      client_id: clientId, redirect_uri: silentCheckUri, response_type: 'code', scope: 'openid profile email',
+      state, code_challenge: challenge, code_challenge_method: 'S256', prompt: 'none',
+    }).toString();
+    iframe.src = url.toString();
+    document.body.appendChild(iframe);
+  });
+}
+
 function readTransaction(key: string): PkceTransaction | null {
   const raw = sessionStorage.getItem(key);
   if (!raw) return null;
