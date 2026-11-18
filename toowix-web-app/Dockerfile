@@ -23,7 +23,14 @@ ARG VITE_FIREBASE_STORAGE_BUCKET=toowix-meet-ff587.firebasestorage.app
 ARG VITE_FIREBASE_MESSAGING_SENDER_ID=227073296532
 ARG VITE_FIREBASE_APP_ID=1:227073296532:web:18ad80d461ae6d5a3f4c81
 ARG VITE_FIREBASE_MEASUREMENT_ID=G-7MSJNM4L0R
-ARG VITE_JITSI_DOMAIN=talk.toowix.com
+# CONFIRMED BUG: this used to default to talk.toowix.com, this app's OWN domain -- but
+# talk.toowix.com has no working Jitsi web/JVB/Jicofo stack behind it (config.js/libs/
+# lib-jitsi-meet.min.js 502 there), so every image built without an explicit
+# --build-arg VITE_JITSI_DOMAIN=... silently shipped a client that could never actually
+# join a call ("Failed to load https://talk.toowix.com/config.js"). The real, working Jitsi
+# deployment is reachable at meet.toowix.com (verified: config.js/libs both 200 there) --
+# that is the correct default until talk.toowix.com's own Jitsi stack is actually running.
+ARG VITE_JITSI_DOMAIN=meet.toowix.com
 ARG VITE_MONITORING_TELEMETRY_URL=
 ARG VITE_TELEMETRY_INGEST_TOKEN=
 
