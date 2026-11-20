@@ -3703,6 +3703,18 @@ export function MeetingRoomPage() {
     logGalleryDebug('active view mode', { viewMode, remoteParticipantCount: remoteParticipants.length, tileViewEnabled, hasActivePanel: Boolean(activePanel) });
   }, [ showShareStage, remoteParticipants.length, tileViewEnabled, activePanel ]);
   const [screenShareFullView, setScreenShareFullView] = useState(false);
+  // CONFIRMED (real-device recording): the top bar/toolbar's own 0.3s slide transition (shared
+  // with the normal hover-based full-screen reveal) was ALSO animating full-view's hide/show --
+  // stacked on top of the real browser fullscreen transition happening at the same moment, that
+  // read as a visible flicker/shrink. Full-view's own hide/show must be instant, never an
+  // animated slide; the normal hover-based reveal (toolbarsVisibleInFullscreen) should still
+  // animate smoothly. True for exactly the one render where screenShareFullView just flipped
+  // (either direction), then reverts to the normal transition for any render after that.
+  const prevScreenShareFullViewRef = useRef(screenShareFullView);
+  const screenShareFullViewJustToggled = prevScreenShareFullViewRef.current !== screenShareFullView;
+  useLayoutEffect(() => {
+    prevScreenShareFullViewRef.current = screenShareFullView;
+  });
   const tileBeforeShareRef = useRef(true);
   const wasSharingRef = useRef(false);
   useEffect(() => {
@@ -5184,7 +5196,7 @@ export function MeetingRoomPage() {
               left: 0,
               right: 0,
               transform: screenShareFullView || !toolbarsVisibleInFullscreen ? 'translateY(-100%)' : 'translateY(0)',
-              transition: 'transform 0.3s ease',
+              transition: screenShareFullViewJustToggled ? 'none' : 'transform 0.3s ease',
             } : {}),
           }}
         >
@@ -7093,7 +7105,7 @@ export function MeetingRoomPage() {
             transform: screenShareFullView || (isFullscreen && !toolbarsVisibleInFullscreen)
               ? 'translate(-50%, 150%)'
               : 'translateX(-50%)',
-            transition: 'transform 0.3s ease',
+            transition: screenShareFullViewJustToggled ? 'none' : 'transform 0.3s ease',
             height: '72px',
             backgroundColor: '#202124',
             borderRadius: '36px',
