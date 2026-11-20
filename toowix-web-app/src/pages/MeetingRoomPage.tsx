@@ -650,6 +650,16 @@ export function MeetingRoomPage() {
       if (e.ctrlKey || e.altKey || e.metaKey) {
         return;
       }
+      // CONFIRMED (console trace): holding a key even slightly longer than a quick tap fires the
+      // browser's own keyboard auto-repeat -- repeated keydown events with e.repeat === true for
+      // every firing after the first, all for the SAME physical press. With no guard here, each
+      // repeat re-ran the toggle, rapidly flipping screenShareFullView (and therefore the whole
+      // layout) back and forth for as long as the key felt "held" -- this, not any animation or
+      // fullscreen-transition timing, was the real "flickering when I press S" report. Every
+      // single-key shortcut below only ever acts on the first, real keydown of a press now.
+      if (e.repeat) {
+        return;
+      }
       if (e.key === 'w' || e.key === 'W') {
         e.preventDefault();
         toggleTileView();
@@ -2049,8 +2059,24 @@ export function MeetingRoomPage() {
   // capture) -- same as Google Meet/Zoom's "Full screen" toggle. Tracks the browser's own
   // fullscreenchange event so the button/icon stays correct even if the user exits via Esc or
   // the browser's native UI instead of clicking the button again.
+  // The ResizeObserver-driven gallery relayout (ParticipantGallery.tsx) commits synchronously on
+  // every single resize tick with zero debounce, by design, so a manual window drag-resize stays
+  // live. A native fullscreen transition (entering OR exiting, via 'f' here or the screen-share
+  // full-view effect further down) fires a rapid burst of resize ticks over its own native
+  // ~150-300ms animation -- each one forcing a full gallery relayout/repaint, which reads as a
+  // cascading flicker. True for the duration of that native transition (from the moment
+  // requestFullscreen()/exitFullscreen() is called until a short settle delay after the browser's
+  // own fullscreenchange event confirms it's done); ParticipantGallery uses this to suppress
+  // intermediate commits and apply only the final settled size once it clears. Ordinary manual
+  // resize (this stays false throughout) is completely unaffected.
+  const [fullscreenTransitionInFlight, setFullscreenTransitionInFlight] = useState(false);
+  const fullscreenSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const FULLSCREEN_SETTLE_MS = 150;
+
   const handleToggleFullscreen = useCallback(async () => {
     try {
+      if (fullscreenSettleTimerRef.current) clearTimeout(fullscreenSettleTimerRef.current);
+      setFullscreenTransitionInFlight(true);
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen();
       } else {
@@ -2059,15 +2085,29 @@ export function MeetingRoomPage() {
     } catch {
       // Fullscreen can be denied by the browser (e.g. not user-gesture-triggered, or an
       // embedding iframe without allowfullscreen) -- fail silently, nothing else to do.
+      setFullscreenTransitionInFlight(false);
     }
   }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const onFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+      // The native transition continues briefly even after this event fires -- a short settle
+      // delay before clearing the flag, not an instant clear, so ParticipantGallery's trailing
+      // commit lands on the truly-final size instead of one still mid-animation.
+      if (fullscreenSettleTimerRef.current) clearTimeout(fullscreenSettleTimerRef.current);
+      fullscreenSettleTimerRef.current = setTimeout(() => {
+        fullscreenSettleTimerRef.current = null;
+        setFullscreenTransitionInFlight(false);
+      }, FULLSCREEN_SETTLE_MS);
+    };
 
     document.addEventListener('fullscreenchange', onFullscreenChange);
 
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      if (fullscreenSettleTimerRef.current) clearTimeout(fullscreenSettleTimerRef.current);
+    };
   }, []);
 
   // Full screen immersive toolbars: the top info bar and bottom control pill both slide out of
@@ -3738,29 +3778,68 @@ export function MeetingRoomPage() {
     // A no-op when nothing is on the share stage, so the 's' shortcut can't silently arm a mode
     // that then kicks in confusingly the next time someone starts sharing.
     if (!showShareStage) return;
+    if (import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true') {
+      // eslint-disable-next-line no-console
+      console.info('[FullViewDiag] toggle pressed', {
+        t: performance.now().toFixed(1),
+        wasFullView: screenShareFullView,
+        isFullscreenNow: Boolean(document.fullscreenElement),
+      });
+    }
     setScreenShareFullView((value) => !value);
-  }, [showShareStage]);
+  }, [showShareStage, screenShareFullView]);
   useEffect(() => {
     toggleScreenShareFullViewRef.current = toggleScreenShareFullView;
   }, [toggleScreenShareFullView]);
 
   // 's' also engages the real browser Fullscreen API alongside the in-app full-view overlay above
-  // (entry only). Exiting full-view -- the 'X' button, pressing 's' again -- deliberately does NOT
-  // drop back out of real fullscreen: it returns to the normal in-meeting layout (toolbar, chat,
-  // participant filmstrip all back) while STAYING in fullscreen, the same way a "back" action
-  // inside a fullscreen session doesn't itself end the session. Fullscreen only ends by its own
-  // usual means (the 'f' toggle, Esc, the browser's own UI) -- never as a side effect of leaving
-  // full-view share mode.
+  // (entry only, and only when not ALREADY fullscreen -- pressing 's' right after 'f' must never
+  // issue a second, redundant request). CONFIRMED (real-device testing): the flicker previously
+  // blamed on this call was actually the stage container below snapping to its new size with no
+  // transition at all -- reproducible even with 'f' already active, where 's' triggers no new
+  // native transition whatsoever, proving the native call itself was never the real cause. That
+  // resize is now smoothed (see tw-main's and tw-stage-row's own transition comments) instead of
+  // removing real fullscreen entirely. Exiting full-view -- the 'X' button, pressing 's' again --
+  // deliberately does NOT drop back out of real fullscreen: it returns to the normal in-meeting
+  // layout while staying fullscreen, the same way a "back" action inside a fullscreen session
+  // doesn't itself end the session. Fullscreen only ends by its own usual means ('f', Esc, or the
+  // browser's own UI) -- never as a side effect of leaving full-view share mode.
   const fullscreenEnteredByShareViewRef = useRef(false);
+  const fullViewDiagEnabled = import.meta.env.DEV || import.meta.env.VITE_JITSI_DIAGNOSTICS === 'true';
   useEffect(() => {
+    if (fullViewDiagEnabled) {
+      // eslint-disable-next-line no-console
+      console.info('[FullViewDiag] render/effect eval', {
+        t: performance.now().toFixed(1),
+        screenShareFullView,
+        isFullscreenState: isFullscreen,
+        toolbarsVisibleInFullscreen,
+        realFullscreenElementNow: Boolean(document.fullscreenElement),
+      });
+    }
     if (screenShareFullView && !document.fullscreenElement) {
+      if (fullViewDiagEnabled) {
+        // eslint-disable-next-line no-console
+        console.info('[FullViewDiag] calling requestFullscreen()', { t: performance.now().toFixed(1) });
+      }
       fullscreenEnteredByShareViewRef.current = true;
-      document.documentElement.requestFullscreen().catch(() => {
+      setFullscreenTransitionInFlight(true);
+      document.documentElement.requestFullscreen().then(() => {
+        if (fullViewDiagEnabled) {
+          // eslint-disable-next-line no-console
+          console.info('[FullViewDiag] requestFullscreen() RESOLVED', { t: performance.now().toFixed(1) });
+        }
+      }).catch((err) => {
         // Denied (not a user gesture, or an embedding iframe without allowfullscreen) -- the
         // in-app full-view overlay still works fine entirely on its own.
         fullscreenEnteredByShareViewRef.current = false;
+        if (fullViewDiagEnabled) {
+          // eslint-disable-next-line no-console
+          console.info('[FullViewDiag] requestFullscreen() REJECTED', { t: performance.now().toFixed(1), err: String(err) });
+        }
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenShareFullView]);
   // Leaving real fullscreen some OTHER way (Esc, the browser's own UI) while full-view share is
   // still showing should end full-view too -- there's no real fullscreen left for it to occupy.
@@ -3768,6 +3847,14 @@ export function MeetingRoomPage() {
   // fullscreen session started independently via 'f' is never touched by full-view at all.
   useEffect(() => {
     const onFullscreenChange = () => {
+      if (fullViewDiagEnabled) {
+        // eslint-disable-next-line no-console
+        console.info('[FullViewDiag] native fullscreenchange event fired', {
+          t: performance.now().toFixed(1),
+          nowFullscreen: Boolean(document.fullscreenElement),
+          fullscreenEnteredByShareView: fullscreenEnteredByShareViewRef.current,
+        });
+      }
       if (!document.fullscreenElement && fullscreenEnteredByShareViewRef.current) {
         fullscreenEnteredByShareViewRef.current = false;
         setScreenShareFullView(false);
@@ -3777,6 +3864,7 @@ export function MeetingRoomPage() {
     document.addEventListener('fullscreenchange', onFullscreenChange);
 
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Synchronize screen share video stream to presentation video element
@@ -5407,6 +5495,15 @@ export function MeetingRoomPage() {
             // (see the top bar/toolbar/chat-panel changes above), so there is nothing left for it
             // to reserve room for; the stage should reach every edge of the viewport instead.
             padding: screenShareFullView ? 0 : '4px 16px 88px',
+            // CONFIRMED (real-device testing): an INSTANT (untransitioned) padding/size change
+            // here was the real remaining flicker source -- reported even with 'f' already
+            // fullscreen and 's' triggering no new native transition at all, so it could only be
+            // this container (and the <video> it holds) snapping to a new size in a single frame.
+            // A short transition smooths that resize into something the video compositor can
+            // keep up with, instead of an abrupt jump. Deliberately NOT 'none'/instant here --
+            // that fix was for the top bar/toolbar's own slide (a different kind of flicker,
+            // hiding the chrome), not for the stage's size.
+            transition: 'padding 0.18s ease',
             boxSizing: 'border-box',
             overflow: 'hidden',
           }}
@@ -5481,11 +5578,16 @@ export function MeetingRoomPage() {
                 // position:absolute + transform mechanism real (isFullscreen) full screen already
                 // uses elsewhere in this file (so tw-main naturally grows into that space, no
                 // separate escape-the-layout mechanism needed), and the chat panel's own render is
-                // gated off entirely while this is on. A real (isFullscreen) browser fullscreen is
-                // also triggered alongside this (see the effect pairing screenShareFullView with
-                // document.fullscreenElement above) for the actual edge-to-edge viewport -- NOT a
-                // separate position:fixed overlay here as well, which only fought that native
-                // transition and caused a visible flicker on entry/exit.
+                // gated off entirely while this is on. NOT a separate position:fixed overlay here
+                // -- that used to fight the real (isFullscreen) browser fullscreen transition this
+                // mode also triggers and caused a visible flicker on entry/exit.
+                //
+                // Short transition (not instant) on the size properties specifically -- see
+                // tw-main's own comment above for why: an abrupt, untransitioned resize of this
+                // container (and the <video> it holds) was the actually-confirmed remaining
+                // flicker source, independent of whether a native fullscreen transition is also
+                // happening.
+                transition: 'max-width 0.18s ease, max-height 0.18s ease, gap 0.18s ease',
                 ...(screenShareFullView ? {
                   maxWidth: '100%',
                   maxHeight: '100%',
@@ -6496,6 +6598,7 @@ export function MeetingRoomPage() {
               isModerator={isModerator}
               handleRemoteAudioControl={handleRemoteAudioControl}
               activePanel={activePanel}
+              fullscreenTransitionInFlight={fullscreenTransitionInFlight}
             />
           ))}
 

@@ -69,12 +69,20 @@ export interface IParticipantGalleryProps {
   isModerator: boolean;
   handleRemoteAudioControl: (participantId: string) => void;
   activePanel: 'chat' | 'people' | 'info' | 'host' | 'activities' | null;
+  // True for the duration of a native browser fullscreen transition (entering or exiting, via the
+  // 'f' toggle or screen-share full-view) -- see MeetingRoomPage.tsx's own comment on this state.
+  // While true, the stage ResizeObserver below tracks the latest size but skips committing it, so
+  // the rapid burst of resize ticks the native ~150-300ms transition animation produces doesn't
+  // force a full gallery relayout/repaint on every tick (a visible cascading flicker). The final,
+  // settled size is committed once when this clears. Optional so any other caller of this
+  // component is unaffected and keeps today's always-commit behavior.
+  fullscreenTransitionInFlight?: boolean;
 }
 
 export function ParticipantGallery({
   allShares, remoteParticipants, displayName, localAvatarUrl, inCallStream, inCallVideo, inCallMuted,
   isHandRaised, localTheme, isSpeaking, setInCallVideoNode, pinnedParticipantId, setPinnedManually,
-  setTileViewEnabled, isModerator, handleRemoteAudioControl, activePanel,
+  setTileViewEnabled, isModerator, handleRemoteAudioControl, activePanel, fullscreenTransitionInFlight,
 }: IParticipantGalleryProps) {
   // The gallery stage is the exact area the cards are placed in: a flex child with no padding,
   // inside the padded .tw-grid. Measuring it (not the window or the canvas) keeps the calculator
@@ -100,18 +108,40 @@ export function ParticipantGallery({
   const galleryStageRef = useRef<HTMLDivElement | null>(null);
   const [galleryStageNode, setGalleryStageNode] = useState<HTMLDivElement | null>(null);
   const [galleryStageSize, setGalleryStageSize] = useState({ width: 0, height: 0 });
+
+  const commitStageSize = useCallback((width: number, height: number) => {
+    setGalleryStageSize((previous) => (
+      Math.abs(previous.width - width) < 0.5 && Math.abs(previous.height - height) < 0.5
+        ? previous
+        : { width, height }
+    ));
+  }, []);
+
+  // T1 (lighter-client audit, Part B): a native browser fullscreen transition (entering or
+  // exiting) fires a rapid burst of resize ticks over its own ~150-300ms native animation --
+  // each one, uncapped, forcing a full gallery relayout/repaint below, which reads as a cascading
+  // flicker. Mirrored into a ref (not read directly from the prop) so the ResizeObserver callback
+  // further down -- created once per galleryStageNode, deliberately never torn down/recreated on
+  // every prop change -- always sees the LATEST value without needing to be in its own dependency
+  // array. pendingStageSizeRef holds the most recent size a tick reported WHILE suppressed, so it
+  // is never silently dropped -- it commits once, the instant the transition clears, landing on
+  // the final settled size instead of a stale intermediate one.
+  const fullscreenTransitionInFlightRef = useRef(Boolean(fullscreenTransitionInFlight));
+  const pendingStageSizeRef = useRef<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    fullscreenTransitionInFlightRef.current = Boolean(fullscreenTransitionInFlight);
+    if (!fullscreenTransitionInFlight && pendingStageSizeRef.current) {
+      const { width, height } = pendingStageSizeRef.current;
+
+      pendingStageSizeRef.current = null;
+      flushSync(() => commitStageSize(width, height));
+    }
+  }, [fullscreenTransitionInFlight, commitStageSize]);
+
   useEffect(() => {
     galleryStageRef.current = galleryStageNode;
     if (!galleryStageNode) return;
     const node = galleryStageNode;
-
-    const commitStageSize = (width: number, height: number) => {
-      setGalleryStageSize((previous) => (
-        Math.abs(previous.width - width) < 0.5 && Math.abs(previous.height - height) < 0.5
-          ? previous
-          : { width, height }
-      ));
-    };
     const initial = node.getBoundingClientRect();
 
     commitStageSize(initial.width, initial.height);
@@ -123,13 +153,21 @@ export function ParticipantGallery({
       // the old card geometry inside the new stage size.
       const box = entries[entries.length - 1]?.contentRect;
 
-      if (box) flushSync(() => commitStageSize(box.width, box.height));
+      if (!box) return;
+      if (fullscreenTransitionInFlightRef.current) {
+        // Suppressed: remember the latest size but skip the relayout for this intermediate tick --
+        // the effect above commits once, the moment the transition actually settles.
+        pendingStageSizeRef.current = { width: box.width, height: box.height };
+
+        return;
+      }
+      flushSync(() => commitStageSize(box.width, box.height));
     });
 
     observer.observe(node);
 
     return () => observer.disconnect();
-  }, [galleryStageNode]);
+  }, [galleryStageNode, commitStageSize]);
 
   // Gallery sizing is computed unconditionally (not gated on any parent condition) because
   // useStableMeetingLayout is a real hook. Its previous-structure ref must persist across renders.
