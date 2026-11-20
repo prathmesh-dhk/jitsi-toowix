@@ -5389,7 +5389,12 @@ export function MeetingRoomPage() {
             alignItems: 'center',
             justifyContent: 'center',
             position: 'relative',
-            padding: '4px 16px 88px',
+            // The normal 4px/16px/88px reserve (top/sides/bottom, the 88px specifically for the
+            // floating bottom toolbar) is exactly the "space left on bottom/left/right" in screen-
+            // share full view -- that toolbar (and everything else) is fully hidden in this mode
+            // (see the top bar/toolbar/chat-panel changes above), so there is nothing left for it
+            // to reserve room for; the stage should reach every edge of the viewport instead.
+            padding: screenShareFullView ? 0 : '4px 16px 88px',
             boxSizing: 'border-box',
             overflow: 'hidden',
           }}
