@@ -368,6 +368,22 @@ export function MeetingRoomPage() {
 
   // Meeting Stages & States
   const [hasJoined, setHasJoined] = useState(false);
+  // Safety net for the full-screen join overlay below: if video never becomes ready (camera
+  // denied, audio-only join, or a connection that's just slow) the overlay must not trap the
+  // person on a black screen forever. 8s comfortably covers a normal camera warm-up (typically
+  // 1-3s) and a slow-but-working connection, while still bounded enough that a genuinely stuck
+  // join falls through to the real UI (where callError/the existing error banner can surface
+  // what actually went wrong) instead of looking frozen.
+  const JOIN_OVERLAY_TIMEOUT_MS = 8000;
+  const [joinOverlayTimedOut, setJoinOverlayTimedOut] = useState(false);
+  useEffect(() => {
+    if (!hasJoined) {
+      setJoinOverlayTimedOut(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setJoinOverlayTimedOut(true), JOIN_OVERLAY_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [hasJoined]);
   const [inWaitingRoom, setInWaitingRoom] = useState(false);
   const [waitingRequestId, setWaitingRequestId] = useState('');
   const [waitingDenied, setWaitingDenied] = useState(false);
@@ -5130,55 +5146,58 @@ export function MeetingRoomPage() {
           }
         `}</style>
 
-        {/* Honest, real-state join-progress banner -- hasJoined flips true as soon as the
-            admission request succeeds (see handleJoinMeeting), dropping the person straight into
-            this full call UI (their own camera already shows via the adopted prejoin stream) even
-            though the actual Jitsi connection/conference-join/track-attach below can still take a
-            moment, especially on a slow network. Before this, that wait had zero visible
-            indication (the lobby screen's "Connecting..." button only ever covered the admission
-            request itself, not what happens after). Every stage here is a real, already-tracked
-            transition from useJitsiMeeting (connected/joined/hasVideoTrack) -- nothing fabricated,
-            and it hides itself the instant jitsiMeeting.joined is true (or immediately, on a fast
-            connection, if these happen to have already settled before the first paint). */}
+        {/* Full-screen "connecting" overlay -- hasJoined flips true as soon as the admission
+            request succeeds (see handleJoinMeeting), mounting this full call UI (and, with it,
+            the video elements useJitsiMeeting needs refs to in order to attach tracks) well
+            before the actual Jitsi connection/conference-join/track-attach below has finished.
+            Rather than exposing that gap as empty/avatar tiles, this opaque overlay covers the
+            whole screen (the gallery underneath keeps mounting and attaching tracks normally --
+            only its *visibility* is covered) until video is genuinely ready. Every stage here is
+            a real, already-tracked transition from useJitsiMeeting: connected (CONNECTION_
+            ESTABLISHED), joined (CONFERENCE_JOINED -- by this point the local mic is already
+            published, so audio to/from the room is live even while this screen still shows), and
+            hasVideoTrack (the local camera track has actually attached and can render). Audio
+            therefore becomes real one stage before video does, matching Google Meet's
+            audio-before-video join feel, without needing a separate visible sub-screen for it --
+            nothing changes on screen between "joined" and "camera ready" except the caption,
+            because audio has nothing further to visually reveal.
+            Hidden early by: a surfaced jitsiMeeting.error (let the real error banner show through
+            instead of hiding behind a wall), or joinOverlayTimedOut (the 8s fallback above) so a
+            stuck connection/denied camera/audio-only join never traps the user here. */}
         {(() => {
           const stage = !jitsiMeeting.connected ? 'Connecting to meeting…'
-            : !jitsiMeeting.joined ? 'Joining…'
-            : (videoEnabled && !cameraPermissionError && !jitsiMeeting.hasVideoTrack) ? 'Starting camera…'
+            : !jitsiMeeting.joined ? 'Joining meeting…'
+            : (videoEnabled && !cameraPermissionError && !jitsiMeeting.hasVideoTrack) ? 'Turning on your camera…'
             : null;
 
-          return stage && (
+          if (!stage || joinOverlayTimedOut || jitsiMeeting.error) return null;
+
+          return (
             <div
               style={{
                 position: 'fixed',
-                top: '16px',
-                left: '50%',
-                transform: 'translateX(-50%)',
+                inset: 0,
                 zIndex: 500,
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
-                gap: '8px',
-                backgroundColor: 'rgba(32, 33, 36, 0.92)',
-                backdropFilter: 'blur(8px)',
+                justifyContent: 'center',
+                gap: '20px',
+                backgroundColor: '#121212',
                 color: '#E8EAED',
-                fontSize: '13px',
-                fontWeight: 500,
-                padding: '8px 16px',
-                borderRadius: '20px',
-                boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-                border: '1px solid rgba(255,255,255,0.1)',
               }}
             >
               <span
                 style={{
-                  width: '14px',
-                  height: '14px',
-                  border: '2px solid rgba(255,255,255,0.25)',
+                  width: '40px',
+                  height: '40px',
+                  border: '3px solid rgba(255,255,255,0.2)',
                   borderTopColor: '#8AB4F8',
                   borderRadius: '50%',
                   animation: 'tw-join-spin 0.8s linear infinite',
                 }}
               />
-              {stage}
+              <span style={{ fontSize: '15px', fontWeight: 500 }}>{stage}</span>
             </div>
           );
         })()}
