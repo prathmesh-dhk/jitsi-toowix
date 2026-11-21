@@ -3530,7 +3530,23 @@ export function MeetingRoomPage() {
 
     poll();
     const interval = setInterval(poll, 10000);
-    return () => { cancelled = true; clearInterval(interval); };
+    // CONFIRMED REPORTED BUG: "End for everyone" delivers near-instantly via the real-time signal
+    // (see postRoomSignal/the SSE listener) to a participant whose tab is actively in the
+    // foreground, but someone who'd switched away to another tab/app only found out once this
+    // poll's own next 10s tick happened to land -- a real, visible lag that reads as "it should be
+    // instant, why is the other side still in the call". Re-checking the INSTANT the tab becomes
+    // visible again (not waiting for the next scheduled tick) closes that gap directly, independent
+    // of why the signal itself didn't get acted on while backgrounded.
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [hasJoined, roomId, leaveMeeting, handleMeetingTerminatedRemotely]);
 
   const formattedRoomTitle = roomId.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
