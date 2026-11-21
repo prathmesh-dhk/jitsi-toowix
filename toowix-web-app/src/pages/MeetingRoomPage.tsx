@@ -568,6 +568,47 @@ export function MeetingRoomPage() {
         : next;
     });
   }, [remoteParticipants]);
+
+  // Reported bug: ParticipantGallery's new-tile entrance animation never played for the single
+  // most common real case -- the other person joining while you're alone in the call -- because
+  // that transition is exactly where MeetingRoomPage's own render switches from the solo view to
+  // <ParticipantGallery>, mounting it fresh. On a fresh mount, ParticipantGallery has no record of
+  // what was on screen a moment ago, so its own local "is this key missing from last render"
+  // check can't tell that genuinely new arrival apart from the local participant's own cell (also
+  // missing on a first render) or from the ordinary case of joining a call that already has
+  // several people in it (where nothing should animate in). This tracks remote participant ids
+  // across any amount of solo-view <-> gallery-view mounting/unmounting and reports exactly which
+  // id(s), if any, are new AS OF each change -- seeded from whatever's already present the moment
+  // hasJoined flips true, so the initial batch already in the call is never flagged as "new".
+  const seenRemoteParticipantIdsRef = useRef<Set<string> | null>(null);
+  const [justJoinedParticipantIds, setJustJoinedParticipantIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!hasJoined) {
+      seenRemoteParticipantIdsRef.current = null;
+      setJustJoinedParticipantIds((previous) => (previous.length ? [] : previous));
+
+      return;
+    }
+
+    const currentIds = remoteParticipants.map((participant) => participant.id).filter(Boolean);
+
+    if (seenRemoteParticipantIdsRef.current === null) {
+      seenRemoteParticipantIdsRef.current = new Set(currentIds);
+
+      return;
+    }
+
+    const seen = seenRemoteParticipantIdsRef.current;
+    const newlyJoined = currentIds.filter((id) => !seen.has(id));
+    const currentIdSet = new Set(currentIds);
+
+    // Forget anyone who left, so if they rejoin later under the same id it's treated as new again.
+    Array.from(seen).forEach((id) => { if (!currentIdSet.has(id)) seen.delete(id); });
+    currentIds.forEach((id) => seen.add(id));
+
+    if (newlyJoined.length > 0) setJustJoinedParticipantIds(newlyJoined);
+  }, [hasJoined, remoteParticipants]);
+
   useEffect(() => () => {
     if (speakerRailPromotionTimerRef.current !== null) {
       clearTimeout(speakerRailPromotionTimerRef.current);
@@ -2856,6 +2897,16 @@ export function MeetingRoomPage() {
     }).catch(() => { });
   }, [roomId]);
 
+  // Reported bug: leaving (either end) always cut straight from the live call UI to the next
+  // page's content in the exact same frame -- a hard, jarring "jhatka" because nothing bridges
+  // the two completely different layouts. Fading this page to solid black FIRST, then navigating
+  // only once that fade has visibly finished, means the route swap underneath always happens
+  // while the screen is already black -- so whatever the next page looks like, there's a smooth
+  // dip-to-black instead of an instant cut. Applies to both a personal Leave and "end for
+  // everyone" (both funnel through this one function), and to a remotely-terminated meeting via
+  // handleMeetingTerminatedRemotely, which also calls this.
+  const LEAVE_FADE_MS = 260;
+  const [leavingFadeActive, setLeavingFadeActive] = useState(false);
   const leaveMeeting = useCallback(
     (reason: string = 'You have left the meeting.') => {
       if (leavingRef.current) return;
@@ -2870,17 +2921,20 @@ export function MeetingRoomPage() {
       // The lib-jitsi-meet connection/room itself is torn down by useJitsiMeeting's own
       // cleanup effect when this page unmounts (which navigate() below triggers) -- no
       // explicit hangup/dispose call needed here.
-      if (isFromConversation) {
-        // A call started from Conversations should drop you straight back into that same
-        // conversation, not the generic "meeting ended" screen -- covers both a plain Leave and
-        // ending the meeting for everyone, since both funnel through this same function.
-        navigate(`/dashboard?tab=conversations&room=${encodeURIComponent(roomId)}`, { replace: true });
-        return;
-      }
-      navigate('/meeting-ended', {
-        replace: true,
-        state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName, participation },
-      });
+      setLeavingFadeActive(true);
+      window.setTimeout(() => {
+        if (isFromConversation) {
+          // A call started from Conversations should drop you straight back into that same
+          // conversation, not the generic "meeting ended" screen -- covers both a plain Leave and
+          // ending the meeting for everyone, since both funnel through this same function.
+          navigate(`/dashboard?tab=conversations&room=${encodeURIComponent(roomId)}`, { replace: true });
+          return;
+        }
+        navigate('/meeting-ended', {
+          replace: true,
+          state: { roomId, reason, wasModerator: isModerator, durationMinutes: Math.round((meetingStartedAtRef.current ? Date.now() - meetingStartedAtRef.current : 0) / 60000), displayName, participation },
+        });
+      }, LEAVE_FADE_MS);
     },
     [navigate, recordAttendanceLeave, roomId, isModerator, displayName, participation, isFromConversation]
   );
@@ -5146,6 +5200,25 @@ export function MeetingRoomPage() {
           }
         `}</style>
 
+        {/* Full-screen fade-to-black played just before leaving/ending -- see leaveMeeting's
+            comment. Rendered unconditionally (not gated on leavingFadeActive) so the opacity
+            change is a CSS transition, not a mount/unmount -- a conditionally-rendered overlay
+            would itself pop in abruptly on the very frame this is meant to smooth over. */}
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            // Matches .tw-root's own backgroundColor (this page's base dark tone) rather than
+            // pure black -- fades the call UI down into the app's own surface color instead of a
+            // harsher dip through true black.
+            backgroundColor: '#121212',
+            opacity: leavingFadeActive ? 1 : 0,
+            transition: `opacity ${LEAVE_FADE_MS}ms ease`,
+            pointerEvents: leavingFadeActive ? 'auto' : 'none',
+          }}
+        />
+
         {/* Full-screen "connecting" overlay -- hasJoined flips true as soon as the admission
             request succeeds (see handleJoinMeeting), mounting this full call UI (and, with it,
             the video elements useJitsiMeeting needs refs to in order to attach tracks) well
@@ -6618,6 +6691,7 @@ export function MeetingRoomPage() {
             <ParticipantGallery
               allShares={allShares}
               remoteParticipants={remoteParticipants}
+              justJoinedParticipantIds={justJoinedParticipantIds}
               displayName={displayName}
               localAvatarUrl={localAvatarUrl}
               inCallStream={inCallStream}

@@ -77,12 +77,19 @@ export interface IParticipantGalleryProps {
   // settled size is committed once when this clears. Optional so any other caller of this
   // component is unaffected and keeps today's always-commit behavior.
   fullscreenTransitionInFlight?: boolean;
+  // Remote participant ids MeetingRoomPage has determined genuinely just joined the call (not
+  // the initial batch already present when the local participant joined) -- see its own comment
+  // for why this can't be derived locally from this component's own mount lifecycle alone. Used
+  // only to seed the entrance animation on this component's very FIRST render; every join after
+  // that is detected locally as usual (a key missing from the previous render's frames).
+  justJoinedParticipantIds?: string[];
 }
 
 export function ParticipantGallery({
   allShares, remoteParticipants, displayName, localAvatarUrl, inCallStream, inCallVideo, inCallMuted,
   isHandRaised, localTheme, isSpeaking, setInCallVideoNode, pinnedParticipantId, setPinnedManually,
   setTileViewEnabled, isModerator, handleRemoteAudioControl, activePanel, fullscreenTransitionInFlight,
+  justJoinedParticipantIds,
 }: IParticipantGalleryProps) {
   // The gallery stage is the exact area the cards are placed in: a flex child with no padding,
   // inside the padded .tw-grid. Measuring it (not the window or the canvas) keeps the calculator
@@ -169,6 +176,85 @@ export function ParticipantGallery({
     return () => observer.disconnect();
   }, [galleryStageNode, commitStageSize]);
 
+  // Soft exit fade -- symmetric counterpart to the join entrance animation further down (feedback:
+  // "check what happens when I leave and the other window is watching"). A participant who leaves
+  // disappears from the `remoteParticipants` prop the instant MeetingRoomPage hears about it, so
+  // without this their tile would just vanish instantly while everyone else snapped straight into
+  // the freed space in the same frame. Keeping their last known data around for
+  // DEPARTURE_DURATION_MS -- continuing to occupy their same layout slot via effectiveRemoteParticipants
+  // below -- lets their own tile fade+shrink out first; only once that finishes does the real
+  // removal happen, and the gallery's existing structural-change reposition animation then slides
+  // the remaining tiles into the gap. The two animations never overlap on the same tile.
+  const DEPARTURE_DURATION_MS = 220;
+  const DEPARTURE_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
+  const prevRemoteParticipantsRef = useRef<IParticipantGalleryRemote[]>(remoteParticipants);
+  const [departingRemotes, setDepartingRemotes] = useState<Map<string, IParticipantGalleryRemote>>(new Map());
+  const departingTimersRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    const prev = prevRemoteParticipantsRef.current;
+    const currentIds = new Set(remoteParticipants.map((r) => r.id));
+    const newlyDeparted = prev.filter((r) => r.id && !currentIds.has(r.id) && !departingTimersRef.current.has(r.id));
+
+    if (newlyDeparted.length > 0) {
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+      setDepartingRemotes((current) => {
+        const next = new Map(current);
+        newlyDeparted.forEach((r) => next.set(r.id, r));
+        return next;
+      });
+
+      newlyDeparted.forEach((r) => {
+        // The cell for this id is still in this same render's output (via departingRemotes below),
+        // but its DOM node only exists once that commit lands -- wait a frame before reading it.
+        requestAnimationFrame(() => {
+          const node = galleryStageRef.current?.querySelector<HTMLElement>(`[data-gallery-cell="remote:${r.id}"]`);
+
+          if (node && !reduceMotion) {
+            node.animate(
+              [
+                { opacity: 1, transform: 'scale(1)' },
+                { opacity: 0, transform: 'scale(0.92)' },
+              ],
+              { duration: DEPARTURE_DURATION_MS, easing: DEPARTURE_EASING, fill: 'forwards' },
+            );
+          }
+        });
+
+        const timer = window.setTimeout(() => {
+          departingTimersRef.current.delete(r.id);
+          setDepartingRemotes((current) => {
+            if (!current.has(r.id)) return current;
+            const next = new Map(current);
+
+            next.delete(r.id);
+
+            return next;
+          });
+        }, reduceMotion ? 0 : DEPARTURE_DURATION_MS);
+
+        departingTimersRef.current.set(r.id, timer);
+      });
+    }
+
+    prevRemoteParticipantsRef.current = remoteParticipants;
+    // Only reacting to remoteParticipants identity changes -- departingRemotes/departingTimersRef
+    // are refs/derived state read fresh each run, not drivers of when this effect should fire.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteParticipants]);
+
+  useEffect(() => () => {
+    departingTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  const effectiveRemoteParticipants = departingRemotes.size === 0
+    ? remoteParticipants
+    : [
+      ...remoteParticipants,
+      ...Array.from(departingRemotes.values()).filter((r) => !remoteParticipants.some((live) => live.id === r.id)),
+    ];
+
   // Gallery sizing is computed unconditionally (not gated on any parent condition) because
   // useStableMeetingLayout is a real hook. Its previous-structure ref must persist across renders.
   // Every gallery cell, in display order: screen shares first, then the local card, then remote participants.
@@ -177,7 +263,7 @@ export function ParticipantGallery({
   const galleryAllCellKeys = [
     ...allShares.map((share) => `share:${share.key}`),
     'local',
-    ...remoteParticipants.map((remote, idx) => `remote:${remote.id || idx}`),
+    ...effectiveRemoteParticipants.map((remote, idx) => `remote:${remote.id || idx}`),
   ];
 
   // Mobile tile view: 1-3 participants keep today's unconstrained layout untouched (see
@@ -459,10 +545,21 @@ export function ParticipantGallery({
     });
 
     const previousFrames = galleryFramesRef.current;
-    const structureChanged = galleryStructureRef.current !== '' && galleryStructureRef.current !== galleryStructureKey;
+    // The most common real case for the entrance animation -- going from alone (solo view, this
+    // component not mounted at all) to the second participant arriving -- makes THIS render
+    // ParticipantGallery's very first ever, with galleryStructureRef.current starting '' and
+    // previousFrames empty for every key including the new arrival. A plain "no `from` frame"
+    // check can't tell that genuinely-new remote apart from the local participant's own cell
+    // (also `from`-less on this same first render) or from the ordinary case of joining a call
+    // that already has several people in it (where nobody should animate in). justJoinedParticipantIds
+    // is MeetingRoomPage's own cross-mount answer to exactly that -- see its prop comment -- so this
+    // first render is allowed to process entrances too, but only for keys it explicitly names.
+    const isFirstRun = galleryStructureRef.current === '';
+    const structureChanged = !isFirstRun && galleryStructureRef.current !== galleryStructureKey;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const justJoinedKeys = new Set((justJoinedParticipantIds ?? []).map((id) => `remote:${id}`));
 
-    if (structureChanged) {
+    if (structureChanged || isFirstRun) {
       stage.querySelectorAll<HTMLElement>('[data-gallery-cell]').forEach((node) => {
         const key = node.dataset.galleryCell ?? '';
         const to = frames.get(key);
@@ -476,18 +573,18 @@ export function ParticipantGallery({
         cancelAnimation(key);
         if (reduceMotion) return;
 
-        // No `from` frame means this key is genuinely new (not a reposition of an existing
-        // cell) -- the `structureChanged` guard above already rules out the initial mount
-        // (galleryStructureRef.current starts '', so the very first render of everyone already
-        // in the gallery never reaches here), so this only fires for someone who joined after
-        // the local participant was already looking at the gallery. Play a separate scale+fade
-        // entrance instead of animateGalleryCell's translate-only FLIP (which deliberately never
-        // scales -- see galleryMotion.ts's comment on why non-uniform sx/sy would stretch the
-        // video). This scale is a single uniform factor on both axes applied to a cell whose
-        // width/height are already its final, correct size, so it shrinks/grows the whole box
-        // evenly without distorting the video's aspect ratio the way an independently-derived
-        // sx/sy reposition-scale would.
-        if (!from) {
+        // On an ordinary structure change, a missing `from` frame alone reliably means "genuinely
+        // new" (previousFrames reflects a real prior render). On the first run, it's true for
+        // every key, so it only counts as new when justJoinedKeys explicitly names it.
+        const isNewArrival = !from && (structureChanged || justJoinedKeys.has(key));
+
+        if (isNewArrival) {
+          // Play a separate scale+fade entrance instead of animateGalleryCell's translate-only
+          // FLIP (which deliberately never scales -- see galleryMotion.ts's comment on why
+          // non-uniform sx/sy would stretch the video). This scale is a single uniform factor on
+          // both axes applied to a cell whose width/height are already its final, correct size,
+          // so it shrinks/grows the whole box evenly without distorting the video's aspect ratio
+          // the way an independently-derived sx/sy reposition-scale would.
           const animation = node.animate(
             [
               { opacity: 0, transform: 'scale(0.92)', transformOrigin: 'center center' },
@@ -508,6 +605,12 @@ export function ParticipantGallery({
 
           return;
         }
+
+        // Not a new arrival: on the first run that just means this key (local, or a remote
+        // already in the call before justJoinedKeys started tracking) simply settles in silently.
+        // On a real structure change, `from` is guaranteed here (isNewArrival's own check already
+        // returned above when it was missing), so this is always a genuine reposition.
+        if (!from) return;
 
         // Read where the cell is visibly drawn before cancelling, so an interrupted slide continues from its
         // current place rather than snapping to a stale one.
@@ -622,7 +725,7 @@ export function ParticipantGallery({
                 />
               ),
             },
-            ...remoteParticipants.map((remote, idx) => {
+            ...effectiveRemoteParticipants.map((remote, idx) => {
               const remoteKey = `remote:${remote.id || idx}`;
 
               return {
