@@ -421,11 +421,24 @@ export function ParticipantGallery({
   const galleryFramesRef = useRef<Map<string, GalleryFrame>>(new Map());
   const galleryStructureRef = useRef('');
   const galleryAnimationsRef = useRef<Map<string, Animation>>(new Map());
+  // Keys whose one-shot entrance animation (see ENTRANCE_DURATION_MS below) is still playing.
+  // Real joins commonly trigger a SECOND structural change within that window -- a participant's
+  // cell first mounts avatar-only, then their video track attaches a beat later and changes their
+  // preferred aspect ratio, which this gallery's layout engine treats as its own structure change.
+  // Without this guard, that second change found the key already in previousFrames (no longer
+  // "new") and treated it as an ordinary reposition, cancelling the barely-started entrance mid-
+  // flight and snapping straight to full opacity/scale -- which read as "no animation" or a harsh
+  // flash rather than the intended smooth fade-in. While a key is in this set, a later structure
+  // change leaves its still-running entrance alone instead of interrupting it.
+  const enteringGalleryKeysRef = useRef<Set<string>>(new Set());
+  const ENTRANCE_DURATION_MS = 260;
+  const ENTRANCE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
   useLayoutEffect(() => {
     const animations = galleryAnimationsRef.current;
     const cancelAnimation = (key: string) => {
       animations.get(key)?.cancel();
       animations.delete(key);
+      enteringGalleryKeysRef.current.delete(key);
     };
     const stage = galleryStageRef.current;
 
@@ -452,11 +465,16 @@ export function ParticipantGallery({
     if (structureChanged) {
       stage.querySelectorAll<HTMLElement>('[data-gallery-cell]').forEach((node) => {
         const key = node.dataset.galleryCell ?? '';
-        const from = previousFrames.get(key);
         const to = frames.get(key);
 
+        if (!to) return;
+        // Let an in-flight entrance finish undisturbed -- see enteringGalleryKeysRef's comment.
+        if (enteringGalleryKeysRef.current.has(key)) return;
+
+        const from = previousFrames.get(key);
+
         cancelAnimation(key);
-        if (!to || reduceMotion) return;
+        if (reduceMotion) return;
 
         // No `from` frame means this key is genuinely new (not a reposition of an existing
         // cell) -- the `structureChanged` guard above already rules out the initial mount
@@ -472,15 +490,17 @@ export function ParticipantGallery({
         if (!from) {
           const animation = node.animate(
             [
-              { opacity: 0, transform: 'scale(0.85)', transformOrigin: 'center center' },
+              { opacity: 0, transform: 'scale(0.92)', transformOrigin: 'center center' },
               { opacity: 1, transform: 'scale(1)', transformOrigin: 'center center' },
             ],
-            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' },
+            { duration: ENTRANCE_DURATION_MS, easing: ENTRANCE_EASING, fill: 'backwards' },
           );
 
           animations.set(key, animation);
+          enteringGalleryKeysRef.current.add(key);
           const forget = () => {
             if (animations.get(key) === animation) animations.delete(key);
+            enteringGalleryKeysRef.current.delete(key);
           };
 
           animation.addEventListener('finish', forget);
