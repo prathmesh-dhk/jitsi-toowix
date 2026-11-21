@@ -454,13 +454,44 @@ export function ParticipantGallery({
         const key = node.dataset.galleryCell ?? '';
         const from = previousFrames.get(key);
         const to = frames.get(key);
-        // Read where the cell is visibly drawn before cancelling, so an interrupted slide continues from its
-        // current place rather than snapping to a stale one.
-        const visible = from ? readVisualFrame(node, from) : null;
 
         cancelAnimation(key);
-        if (!visible || !to || reduceMotion) return;
+        if (!to || reduceMotion) return;
 
+        // No `from` frame means this key is genuinely new (not a reposition of an existing
+        // cell) -- the `structureChanged` guard above already rules out the initial mount
+        // (galleryStructureRef.current starts '', so the very first render of everyone already
+        // in the gallery never reaches here), so this only fires for someone who joined after
+        // the local participant was already looking at the gallery. Play a separate scale+fade
+        // entrance instead of animateGalleryCell's translate-only FLIP (which deliberately never
+        // scales -- see galleryMotion.ts's comment on why non-uniform sx/sy would stretch the
+        // video). This scale is a single uniform factor on both axes applied to a cell whose
+        // width/height are already its final, correct size, so it shrinks/grows the whole box
+        // evenly without distorting the video's aspect ratio the way an independently-derived
+        // sx/sy reposition-scale would.
+        if (!from) {
+          const animation = node.animate(
+            [
+              { opacity: 0, transform: 'scale(0.85)', transformOrigin: 'center center' },
+              { opacity: 1, transform: 'scale(1)', transformOrigin: 'center center' },
+            ],
+            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' },
+          );
+
+          animations.set(key, animation);
+          const forget = () => {
+            if (animations.get(key) === animation) animations.delete(key);
+          };
+
+          animation.addEventListener('finish', forget);
+          animation.addEventListener('cancel', forget);
+
+          return;
+        }
+
+        // Read where the cell is visibly drawn before cancelling, so an interrupted slide continues from its
+        // current place rather than snapping to a stale one.
+        const visible = readVisualFrame(node, from);
         const animation = animateGalleryCell(node, visible, to);
 
         if (!animation) return;
