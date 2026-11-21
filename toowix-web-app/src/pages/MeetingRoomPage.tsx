@@ -7185,8 +7185,10 @@ export function MeetingRoomPage() {
             instant one alike -- just not when replaying a saved conversation (isFromConversation),
             which has no live "this meeting started at X" to time against. A free instant meeting
             has an actual reserved 2-hour cap (freeInstantExpiresAt), so it counts DOWN to that
-            instead of counting up from zero -- "reserved for 2 hours, going down", not elapsed. */}
-        {!isFromConversation && (
+            instead of counting up from zero -- "reserved for 2 hours, going down", not elapsed.
+            Also hidden during screen-share full view ('s') -- that mode's whole point is nothing
+            but the shared screen and the one way out. */}
+        {!isFromConversation && !screenShareFullView && (
           <MeetingDurationTimer
             startedAt={hasJoined ? meetingStartedAt : null}
             countdownTo={isFreeInstantMeeting ? freeInstantExpiresAt : null}
@@ -7850,7 +7852,12 @@ export function MeetingRoomPage() {
           </button>
         </div>
 
-        {/* 4. SEPARATE ROUNDED BOTTOM-RIGHT CONTROLS GROUP (Chat + Activities + Host Controls) */}
+        {/* 4. SEPARATE ROUNDED BOTTOM-RIGHT CONTROLS GROUP (Chat + Activities + Host Controls).
+            Hidden during screen-share full view ('s') -- same reasoning as the toolbar/top bar/
+            chat panel elsewhere in this file: that mode shows nothing but the shared screen and
+            the one way out (the X button on the stage itself), no hover-to-reveal, no exceptions.
+            This group was never wired into that hide logic before -- a real gap, not by design. */}
+        {!screenShareFullView && (
         <div
           className="tw-brgroup"
           style={{
@@ -7969,6 +7976,7 @@ export function MeetingRoomPage() {
             )}
           </button>
         </div>
+        )}
 
         {/* Floating Animated Reaction Emojis */}
         {floatingEmojis.map((item) => (
