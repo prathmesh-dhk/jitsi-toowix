@@ -187,6 +187,31 @@ function menuButtonStyle(active: boolean): React.CSSProperties {
   };
 }
 
+// Reported bug: on at least one real machine (a Bluetooth headset on Windows), the active track's
+// getSettings().deviceId came back empty -- a known Chromium limitation for some device/driver
+// combinations that this app has no way to force around. Used to resolve which row the mic/camera
+// device menu should highlight: an explicit pick wins outright; otherwise try the real deviceId,
+// and only when THAT is unavailable fall back to matching the active track's own label against the
+// same label already shown in the enumerated device list (commonly still populated even when
+// deviceId isn't).
+function resolveActiveDeviceIdForMenu(
+  explicitId: string,
+  activeId: string | undefined,
+  activeLabel: string | undefined,
+  devices: MediaDeviceInfo[],
+  kind: 'audioinput' | 'videoinput',
+): string {
+  if (explicitId) return explicitId;
+  if (activeId) return activeId;
+  if (activeLabel) {
+    const match = devices.find((d) => d.kind === kind && d.label === activeLabel);
+
+    if (match) return match.deviceId;
+  }
+
+  return '';
+}
+
 interface IWaitingParticipant {
   id: string;
   name: string;
@@ -7603,10 +7628,15 @@ export function MeetingRoomPage() {
             // Reported bug: opening this menu showed no highlighted row at all unless the person
             // had already explicitly picked a device from it once -- audioId stays '' (by design,
             // see its own comment) for the common case of just using whatever mic the browser
-            // picked by default, so audioId === d.deviceId never matched anything. Falls back to
-            // the REAL active device (read-only; does not call setAudioId, so this doesn't disable
-            // the auto-switch behavior that specifically checks whether audioId was ever set).
-            audioId={audioId || jitsiMeeting.getActiveAudioInputDeviceId?.() || ''}
+            // picked by default, so audioId === d.deviceId never matched anything. Resolves the
+            // real active device (read-only; never calls setAudioId, so this doesn't disable the
+            // auto-switch behavior that specifically checks whether audioId was ever set), with a
+            // label-matching fallback for devices whose deviceId Chromium won't report (see
+            // resolveActiveDeviceIdForMenu's own comment).
+            audioId={resolveActiveDeviceIdForMenu(
+              audioId, jitsiMeeting.getActiveAudioInputDeviceId?.(), jitsiMeeting.getActiveAudioInputLabel?.(),
+              media.devices, 'audioinput',
+            )}
             onSelectAudioDevice={handleSelectAudioDevice}
           />
 
@@ -7621,7 +7651,10 @@ export function MeetingRoomPage() {
             }}
             videoDevices={media.devices}
             // Same reasoning as the mic menu's audioId above.
-            videoId={videoId || jitsiMeeting.getActiveVideoInputDeviceId?.() || ''}
+            videoId={resolveActiveDeviceIdForMenu(
+              videoId, jitsiMeeting.getActiveVideoInputDeviceId?.(), jitsiMeeting.getActiveVideoInputLabel?.(),
+              media.devices, 'videoinput',
+            )}
             onSelectVideoDevice={handleSelectVideoDevice}
           />
 

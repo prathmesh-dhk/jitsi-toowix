@@ -3187,11 +3187,26 @@ export function useJitsiMeeting({
     return localAudioTrackRef.current?.getTrack?.()?.getSettings?.()?.deviceId;
   }, []);
 
+  // Reported bug: on at least one real machine (a Bluetooth headset on Windows), getSettings()
+  // reported no deviceId at all for the active mic track -- a known Chromium limitation for some
+  // device/driver combinations, not something this app can force the browser to report. The
+  // device menu's highlight fallback (MeetingRoomPage) needs a second signal in that case: the
+  // native MediaStreamTrack's own `.label` is commonly still populated even when deviceId isn't,
+  // and can be matched against the SAME label already shown in the enumerated device list.
+  const getActiveAudioInputLabel = useCallback((): string | undefined => {
+    return localAudioTrackRef.current?.getTrack?.()?.label || undefined;
+  }, []);
+
   // Same as getActiveAudioInputDeviceId but for the camera -- added so the toolbar's camera
   // device menu can highlight the real in-use device (see MeetingRoomPage's displayAudioId/
   // displayVideoId) even when nobody has ever explicitly picked one from that menu.
   const getActiveVideoInputDeviceId = useCallback((): string | undefined => {
     return localVideoTrackRef.current?.getTrack?.()?.getSettings?.()?.deviceId;
+  }, []);
+
+  // Same label-based fallback as getActiveAudioInputLabel, for the camera.
+  const getActiveVideoInputLabel = useCallback((): string | undefined => {
+    return localVideoTrackRef.current?.getTrack?.()?.label || undefined;
   }, []);
 
   return {
@@ -3203,7 +3218,9 @@ export function useJitsiMeeting({
     mutedButSpeaking,
     dismissMutedSpeakingNudge,
     getActiveAudioInputDeviceId,
+    getActiveAudioInputLabel,
     getActiveVideoInputDeviceId,
+    getActiveVideoInputLabel,
     localVideoMuted,
     hasVideoTrack,
     localCameraStream,
