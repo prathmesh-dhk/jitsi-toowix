@@ -5,6 +5,8 @@ interface IProps {
   stream: MediaStream | null;
   label: string;
   compact?: boolean;
+  onClick?: () => void;
+  title?: string;
 }
 
 // T2-2 (lighter-client audit): a remote share that's signaling-active but hasn't delivered a real
@@ -15,7 +17,7 @@ interface IProps {
 // long gets the explicit "waiting" treatment.
 const SCREEN_SHARE_STALL_MS = 5000;
 
-export function ScreenShareTile({ stream, label, compact }: IProps) {
+export function ScreenShareTile({ stream, label, compact, onClick, title }: IProps) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [stalled, setStalled] = useState(false);
@@ -72,6 +74,8 @@ export function ScreenShareTile({ stream, label, compact }: IProps) {
 
   return (
     <div
+      onClick={onClick}
+      title={title}
       style={{
         width: '100%',
         height: compact ? undefined : '100%',
@@ -83,6 +87,7 @@ export function ScreenShareTile({ stream, label, compact }: IProps) {
         backgroundColor: '#000000',
         boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
         flexShrink: 0,
+        cursor: onClick ? 'pointer' : undefined,
       }}
     >
       <video

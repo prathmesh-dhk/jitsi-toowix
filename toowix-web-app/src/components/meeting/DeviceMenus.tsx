@@ -6,7 +6,7 @@
 // periodic mic-health-check/auto-recovery logic (checkMicHealth/recoverMic) is untouched and still
 // lives in useJitsiMeeting.ts; this file only renders the manual device-picker UI, nothing that
 // observes or repairs device health on its own.
-import { ChevronUp, MicOff, Video, VideoOff } from 'lucide-react';
+import { Check, ChevronUp, MicOff, Video, VideoOff } from 'lucide-react';
 import { MicLevelIcon } from '../MicLevelIcon';
 
 // Windows commonly reports the SAME physical device three times under different labels --
@@ -101,18 +101,26 @@ export function MicDeviceButton({
                 width: '100%',
                 textAlign: 'left',
                 padding: '8px 10px',
-                background: audioId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
-                color: '#E8EAED',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                // Reported bug: this was too subtle (8% white) to actually read as "selected" --
+                // using the app's own accent blue at a visible tint, plus a checkmark, matches
+                // the same selected-state treatment used elsewhere in this app's menus.
+                background: audioId === d.deviceId ? 'rgba(138, 180, 248, 0.16)' : 'transparent',
+                color: audioId === d.deviceId ? '#8AB4F8' : '#E8EAED',
+                fontWeight: audioId === d.deviceId ? 600 : 400,
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '13px',
                 cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
               }}
             >
-              {d.label || `Microphone (${d.deviceId.slice(0, 5)})`}
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {d.label || `Microphone (${d.deviceId.slice(0, 5)})`}
+              </span>
+              {audioId === d.deviceId && <Check size={14} color="#8AB4F8" style={{ flexShrink: 0 }} />}
             </button>
           ))}
         </div>
@@ -224,18 +232,23 @@ export function CameraDeviceButton({
                 width: '100%',
                 textAlign: 'left',
                 padding: '8px 10px',
-                background: videoId === d.deviceId ? 'rgba(255,255,255,0.08)' : 'transparent',
-                color: '#E8EAED',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                background: videoId === d.deviceId ? 'rgba(138, 180, 248, 0.16)' : 'transparent',
+                color: videoId === d.deviceId ? '#8AB4F8' : '#E8EAED',
+                fontWeight: videoId === d.deviceId ? 600 : 400,
                 border: 'none',
                 borderRadius: '8px',
                 fontSize: '13px',
                 cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
               }}
             >
-              {d.label || `Camera (${d.deviceId.slice(0, 5)})`}
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {d.label || `Camera (${d.deviceId.slice(0, 5)})`}
+              </span>
+              {videoId === d.deviceId && <Check size={14} color="#8AB4F8" style={{ flexShrink: 0 }} />}
             </button>
           ))}
         </div>

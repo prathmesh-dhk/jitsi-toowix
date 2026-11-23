@@ -7,7 +7,12 @@ const preview = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'useMed
 const quality = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'networkQuality.ts'), 'utf8');
 
 assert.match(hook, /lowDataMode !== 'auto' \|\| manualMaxHeightRef\.current !== null/, 'baseline only in auto mode without a manual cap');
-assert.ok(hook.includes('room.setReceiverConstraints({ lastN, defaultConstraints: { maxHeight: height } })'), 'defaultConstraints.maxHeight must reach the bridge');
+// The literal setReceiverConstraints call moved into a shared applyReceiverConstraints helper
+// (also used to keep a known screen-sharer in `selectedEndpoints` across every policy change --
+// see that helper's own comment) -- checking its body still sends both lastN and
+// defaultConstraints.maxHeight, same as the direct call this replaced.
+assert.match(hook, /const applyReceiverConstraints = \(room: any, lastN: number, height: number\) => \{[\s\S]*?room\.setReceiverConstraints\(\{\s*lastN,\s*defaultConstraints: \{ maxHeight: height \}/, 'defaultConstraints.maxHeight must reach the bridge');
+assert.ok(hook.includes('applyReceiverConstraints(room, lastN, height)'), 'the auto-quality effect applies the shared receiver-constraint helper');
 assert.match(hook, /getReceiveMaxHeightForCallSize\(remoteParticipantCount \+ 1, screenShareActive\)/);
 // Prejoin now spreads the SAME shared constraint builder the in-call path uses (see
 // getPreferredCameraCaptureConstraints in networkQuality.ts -- this is the fix for the

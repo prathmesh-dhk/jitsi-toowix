@@ -3883,7 +3883,20 @@ export function MeetingRoomPage() {
     ...(isScreenSharing ? [ { key: 'local-share', kind: 'local' as const, stream: screenStream, name: `${displayName || 'You'} (You)`, startedAt: localShareStartedAt } ] : []),
     ...jitsiMeeting.remoteScreenShares.map((r) => ({ key: `share-${r.id}`, kind: 'remote' as const, stream: r.stream, name: r.presenterName, startedAt: r.startedAt }))
   ].sort((a, b) => b.startedAt - a.startedAt);
-  const primaryShare = allShares[0];
+  // Reported bug: with two active screen shares, the most-recently-started one always wins the
+  // main stage (see the sort above) -- the earlier share became unreachable in any form that
+  // the 's' full-view shortcut (which only ever acts on whatever the main stage shows) could
+  // apply to. Clicking an older share's thumbnail in the side rail now pins it here instead,
+  // making every active share -- not just the newest -- able to become the one 's' full-views.
+  const [manualPrimaryShareKey, setManualPrimaryShareKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (manualPrimaryShareKey && !allShares.some((s) => s.key === manualPrimaryShareKey)) {
+      setManualPrimaryShareKey(null);
+    }
+    // Only reacting to the pinned share actually ending, not every allShares identity change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manualPrimaryShareKey, allShares.map((s) => s.key).join(',')]);
+  const primaryShare = (manualPrimaryShareKey && allShares.find((s) => s.key === manualPrimaryShareKey)) || allShares[0];
   // Identifies whose camera the full-view floating presenter box (below) should show. Looked up
   // by id rather than carried on allShares itself, since allShares is shared with other render
   // paths that have no use for it.
@@ -4123,15 +4136,20 @@ export function MeetingRoomPage() {
     }
   }, [isScreenSharing, showShareStage, primaryShare?.kind]);
 
-  // Synchronize remote presentation stream to remote presentation video element
+  // Synchronize remote presentation stream to remote presentation video element. Deliberately
+  // reads primaryShare.stream (which follows the manual pin above) rather than the separate
+  // remoteScreenStream/useJitsiMeeting "most recent share" state -- that single winner-takes-all
+  // stream is exactly what made an older, manually-selected share impossible to actually display
+  // on the main stage even if every other piece of UI (name, presenter camera) pointed at it.
+  const primaryRemoteShareStream = primaryShare?.kind === 'remote' ? primaryShare.stream : null;
   useEffect(() => {
     if (remotePresentationVideoRef.current) {
-      remotePresentationVideoRef.current.srcObject = remoteScreenStream;
-      if (remoteScreenStream) {
+      remotePresentationVideoRef.current.srcObject = primaryRemoteShareStream;
+      if (primaryRemoteShareStream) {
         remotePresentationVideoRef.current.play().catch(() => { });
       }
     }
-  }, [remoteScreenStream, showShareStage, primaryShare?.kind]);
+  }, [primaryRemoteShareStream, showShareStage, primaryShare?.kind]);
 
   const handleToggleInCallMic = () => {
     jitsiMeeting.toggleAudio();
@@ -5662,7 +5680,7 @@ export function MeetingRoomPage() {
                         : 'Watching a shared video')
                       : primaryShare?.kind === 'local'
                         ? 'You are presenting your screen'
-                        : `${remotePresenterName || 'Participant'} is presenting their screen`}
+                        : `${primaryShare?.name || remotePresenterName || 'Participant'} is presenting their screen`}
                   </span>
                 </div>
                 {isScreenSharing && (
@@ -6031,9 +6049,19 @@ export function MeetingRoomPage() {
                   paddingRight: '2px',
                 }}
               >
-                {/* Other active screen shares (older than the one on stage) */}
-                {allShares.slice(1).map((share) => (
-                  <ScreenShareTile key={share.key} stream={share.stream} label={share.name} compact />
+                {/* Other active screen shares (older than the one on stage). Clicking one pins it
+                    as the primary stage share (see manualPrimaryShareKey above), so 's' full-view
+                    can work for whichever share you actually want to look at, not just the most
+                    recently started one. */}
+                {allShares.filter((share) => share.key !== primaryShare?.key).map((share) => (
+                  <ScreenShareTile
+                    key={share.key}
+                    stream={share.stream}
+                    label={share.name}
+                    compact
+                    onClick={() => setManualPrimaryShareKey(share.key)}
+                    title={`View ${share.name}'s screen share`}
+                  />
                 ))}
                 {/* Local user card */}
                 <MeetingParticipantCard
@@ -7572,7 +7600,13 @@ export function MeetingRoomPage() {
               setShowVideoMenu(false);
             }}
             audioDevices={media.devices}
-            audioId={audioId}
+            // Reported bug: opening this menu showed no highlighted row at all unless the person
+            // had already explicitly picked a device from it once -- audioId stays '' (by design,
+            // see its own comment) for the common case of just using whatever mic the browser
+            // picked by default, so audioId === d.deviceId never matched anything. Falls back to
+            // the REAL active device (read-only; does not call setAudioId, so this doesn't disable
+            // the auto-switch behavior that specifically checks whether audioId was ever set).
+            audioId={audioId || jitsiMeeting.getActiveAudioInputDeviceId?.() || ''}
             onSelectAudioDevice={handleSelectAudioDevice}
           />
 
@@ -7586,7 +7620,8 @@ export function MeetingRoomPage() {
               setShowAudioMenu(false);
             }}
             videoDevices={media.devices}
-            videoId={videoId}
+            // Same reasoning as the mic menu's audioId above.
+            videoId={videoId || jitsiMeeting.getActiveVideoInputDeviceId?.() || ''}
             onSelectVideoDevice={handleSelectVideoDevice}
           />
 

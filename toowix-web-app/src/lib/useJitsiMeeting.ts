@@ -641,6 +641,35 @@ export function useJitsiMeeting({
   const lastAppliedReceiverPolicyRef = useRef<{ height: number; lastN: number } | null>(null);
   const lastAppliedNonEffectSendHeightRef = useRef<number | null>(null);
   const lastAppliedAudioBitrateRef = useRef<number | null>(null);
+  // Reported bug: a participant joining via the native Jitsi mobile/desktop app and sharing their
+  // screen was visible to whoever happened to already be in JVB's own lastN selection, but NOT to
+  // everyone else -- who only ever saw it after a full rejoin. Root cause: this app's lastN tiers
+  // go as low as 0-2 (see getMediaQualityPolicy) to keep ordinary camera tiles light, and
+  // setReceiverConstraints below never passed `selectedEndpoints` -- so which endpoints' real
+  // video the bridge actually forwards was left entirely to JVB's own dominant-speaker ranking.
+  // A screen-sharer who isn't currently talking has no reason to rank inside a tiny lastN, so the
+  // bridge can signal their desktop track's existence (TRACK_ADDED still fires) while never
+  // forwarding its actual media -- a rejoin "fixed" it only by coincidentally re-negotiating a
+  // selection that happened to include them. Every id recomputeRemoteScreenShare currently
+  // considers an active screen-sharer is now ALWAYS kept in `selectedEndpoints`, regardless of
+  // lastN/network tier, so the bridge is explicitly told to forward their media no matter whether
+  // JVB's own speaker-ranking would otherwise have excluded them.
+  const selectedScreenShareEndpointsRef = useRef<string[]>([]);
+  const applyReceiverConstraints = (room: any, lastN: number, height: number) => {
+    if (typeof room.setReceiverConstraints === 'function') {
+      const selectedEndpoints = selectedScreenShareEndpointsRef.current;
+
+      room.setReceiverConstraints({
+        lastN,
+        defaultConstraints: { maxHeight: height },
+        ...(selectedEndpoints.length > 0 ? { selectedEndpoints } : {}),
+      });
+    } else {
+      room.setLastN?.(lastN);
+      room.setReceiverVideoConstraint?.(height);
+    }
+    lastAppliedReceiverPolicyRef.current = { height, lastN };
+  };
   const lowDataModeRef = useRef<LowDataMode>(lowDataMode);
   const networkMetricsRef = useRef<INetworkMetrics>(EMPTY_NETWORK_METRICS);
   const previousVideoStatsRef = useRef<IPreviousVideoStats | null>(null);
@@ -1013,6 +1042,28 @@ export function useJitsiMeeting({
 
     const entries = Object.entries(remoteDesktopTracksRef.current);
     void applyMediaQualityPolicy();
+
+    // Keep selectedScreenShareEndpointsRef (see its own comment) in lockstep with exactly who
+    // this client currently believes is sharing, and immediately re-push it to the bridge --
+    // this is what actually closes the "visible to some, not others, until they rejoin" gap,
+    // since TRACK_ADDED/promotion above already ran regardless of whether JVB was forwarding
+    // this participant's real media under its own lastN ranking.
+    {
+      const sharingIds = entries.map(([pid]) => pid).sort();
+      const previousSelected = selectedScreenShareEndpointsRef.current;
+      const selectedChanged = previousSelected.length !== sharingIds.length
+        || previousSelected.some((pid, i) => pid !== sharingIds[i]);
+
+      if (selectedChanged) {
+        selectedScreenShareEndpointsRef.current = sharingIds;
+        const room = roomRef.current;
+        const lastApplied = lastAppliedReceiverPolicyRef.current;
+
+        if (room && typeof room.setReceiverConstraints === 'function' && lastApplied) {
+          applyReceiverConstraints(room, lastApplied.lastN, lastApplied.height);
+        }
+      }
+    }
 
     if (entries.length === 0) {
       screenShareClearTimerRef.current = setTimeout(() => {
@@ -1426,6 +1477,7 @@ export function useJitsiMeeting({
       // A new room must get its first real receiver/sender policy applied, not compared against
       // (and possibly skipped for matching) the previous room's last-applied values.
       lastAppliedReceiverPolicyRef.current = null;
+      selectedScreenShareEndpointsRef.current = [];
       lastAppliedNonEffectSendHeightRef.current = null;
       lastAppliedAudioBitrateRef.current = null;
       lowDataPolicyActiveRef.current = false;
@@ -1508,13 +1560,10 @@ export function useJitsiMeeting({
         // setReceiverVideoConstraint() alone never reaches the bridge in multi-stream mode: the
         // ReceiverVideoConstraints message it produces carries only lastN, no maxHeight (seen on
         // the bridge channel), so JVB kept its 180p default. defaultConstraints is what carries it.
-        if (typeof room.setReceiverConstraints === 'function') {
-          room.setReceiverConstraints({ lastN, defaultConstraints: { maxHeight: height } });
-        } else {
-          room.setLastN?.(lastN);
-          room.setReceiverVideoConstraint?.(height);
-        }
-        lastAppliedReceiverPolicyRef.current = { height, lastN };
+        // applyReceiverConstraints also re-applies selectedScreenShareEndpointsRef every time, so
+        // a known screen-sharer's media keeps being explicitly requested across every lastN/height
+        // change this effect makes, not just the moment they were first detected.
+        applyReceiverConstraints(room, lastN, height);
       }
       // Our own uplink follows the same state: cap what we send when the network is weak and lift
       // the cap again (to the call-size ceiling) once it has recovered. While a background effect
@@ -3049,6 +3098,11 @@ export function useJitsiMeeting({
           Object.entries(perParticipant).map(([id, h]) => [id, { maxHeight: h }])
         );
       }
+      // Keep forcing any known screen-sharer's media through -- a manual Performance choice must
+      // not accidentally undo the lastN-independent guarantee applyReceiverConstraints sets up.
+      if (selectedScreenShareEndpointsRef.current.length > 0) {
+        constraints.selectedEndpoints = selectedScreenShareEndpointsRef.current;
+      }
       await room.setReceiverConstraints(constraints);
     } catch {
       // setReceiverConstraints isn't universally supported by every bridge version; degrade
@@ -3133,6 +3187,13 @@ export function useJitsiMeeting({
     return localAudioTrackRef.current?.getTrack?.()?.getSettings?.()?.deviceId;
   }, []);
 
+  // Same as getActiveAudioInputDeviceId but for the camera -- added so the toolbar's camera
+  // device menu can highlight the real in-use device (see MeetingRoomPage's displayAudioId/
+  // displayVideoId) even when nobody has ever explicitly picked one from that menu.
+  const getActiveVideoInputDeviceId = useCallback((): string | undefined => {
+    return localVideoTrackRef.current?.getTrack?.()?.getSettings?.()?.deviceId;
+  }, []);
+
   return {
     connected,
     joined,
@@ -3142,6 +3203,7 @@ export function useJitsiMeeting({
     mutedButSpeaking,
     dismissMutedSpeakingNudge,
     getActiveAudioInputDeviceId,
+    getActiveVideoInputDeviceId,
     localVideoMuted,
     hasVideoTrack,
     localCameraStream,
