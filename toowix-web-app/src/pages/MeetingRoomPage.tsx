@@ -7,7 +7,7 @@ import { useMeetingMetadata, resolvePrejoinEndedDestination, isUnavailableMeetin
 import { copyTextToClipboard } from '../lib/clipboard';
 import { startTelemetryPublisher } from '../lib/monitoring/telemetryPublisher';
 import { getTelemetryPublisherConfig } from '../lib/monitoring/telemetryConfig';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo, lazy, Suspense, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import {
@@ -833,6 +833,11 @@ export function MeetingRoomPage() {
   const [grantModeratorError, setGrantModeratorError] = useState<string | null>(null);
   const [showOtherWaysModal, setShowOtherWaysModal] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Hoisted ahead of its original declaration (further down, near the rest of screen-share-full-
+  // view's own state/effects) so the toolbarsVisibleInFullscreen auto-hide effect just below can
+  // read it without a temporal-dead-zone error -- that effect now also needs to arm its hide timer
+  // for screenShareFullView even when the real Fullscreen API request it tries failed/was denied.
+  const [screenShareFullView, setScreenShareFullView] = useState(false);
   const [showVirtualBackgroundModal, setShowVirtualBackgroundModal] = useState(false);
   const [showShareVideoDialog, setShowShareVideoDialog] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -2176,7 +2181,12 @@ export function MeetingRoomPage() {
   const fullscreenAutoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!isFullscreen) {
+    // Also engages for screenShareFullView even when the real Fullscreen API request it tries to
+    // make failed or was denied (no user gesture, embedded iframe without allowfullscreen, etc) --
+    // the in-app full-view overlay still activates in that case (see its own effect below), so
+    // isFullscreen alone would silently never arm this auto-hide, leaving the exit X button stuck
+    // permanently visible instead of fading like every other toolbar in this mode.
+    if (!isFullscreen && !screenShareFullView) {
       // Leaving full screen -- clear any pending hide timer and reset to visible so the bars
       // are never caught mid-hide the next time full screen is entered.
       if (fullscreenAutoHideTimerRef.current !== null) {
@@ -2212,7 +2222,7 @@ export function MeetingRoomPage() {
         fullscreenAutoHideTimerRef.current = null;
       }
     };
-  }, [isFullscreen]);
+  }, [isFullscreen, screenShareFullView]);
 
   useEffect(() => {
     toggleFullscreenRef.current = handleToggleFullscreen;
@@ -3796,6 +3806,15 @@ export function MeetingRoomPage() {
     ...jitsiMeeting.remoteScreenShares.map((r) => ({ key: `share-${r.id}`, kind: 'remote' as const, stream: r.stream, name: r.presenterName, startedAt: r.startedAt }))
   ].sort((a, b) => b.startedAt - a.startedAt);
   const primaryShare = allShares[0];
+  // Identifies whose camera the full-view floating presenter box (below) should show. Looked up
+  // by id rather than carried on allShares itself, since allShares is shared with other render
+  // paths that have no use for it.
+  const primaryShareRemoteId = primaryShare?.kind === 'remote'
+    ? jitsiMeeting.remoteScreenShares.find((r) => `share-${r.id}` === primaryShare.key)?.id
+    : undefined;
+  const presenterCameraParticipant = primaryShareRemoteId
+    ? remoteParticipants.find((r) => r.id === primaryShareRemoteId)
+    : undefined;
   const anyScreenShare = isScreenSharing || Boolean(remoteScreenStream);
   // Required behavior: a screen share always STARTS in the big focused stage view, regardless of
   // whatever tileViewEnabled was set to beforehand -- grid view is only reached afterward if the
@@ -3828,7 +3847,8 @@ export function MeetingRoomPage() {
 
     logGalleryDebug('active view mode', { viewMode, remoteParticipantCount: remoteParticipants.length, tileViewEnabled, hasActivePanel: Boolean(activePanel) });
   }, [ showShareStage, remoteParticipants.length, tileViewEnabled, activePanel ]);
-  const [screenShareFullView, setScreenShareFullView] = useState(false);
+  // screenShareFullView itself is declared earlier (near isFullscreen) -- see that declaration's
+  // own comment for why.
   // CONFIRMED (real-device recording): the top bar/toolbar's own 0.3s slide transition (shared
   // with the normal hover-based full-screen reveal) was ALSO animating full-view's hide/show --
   // stacked on top of the real browser fullscreen transition happening at the same moment, that
@@ -3877,6 +3897,64 @@ export function MeetingRoomPage() {
   useEffect(() => {
     toggleScreenShareFullViewRef.current = toggleScreenShareFullView;
   }, [toggleScreenShareFullView]);
+
+  // Real reported request: in full-view screen share (the whole stage is just the shared screen,
+  // no side people box), there was no way to see the presenter's own camera at all. A floating,
+  // draggable camera box fixes that without permanently reserving layout space the way the normal
+  // side people box does. Position persists while this share stays in full view (so a drag isn't
+  // undone by an unrelated re-render) and resets once full view is exited, so the next share
+  // starts from the same default corner rather than wherever it was last left.
+  const presentationStageRef = useRef<HTMLDivElement | null>(null);
+  const [presenterBoxPos, setPresenterBoxPos] = useState<{ x: number; y: number } | null>(null);
+  const [presenterBoxDragging, setPresenterBoxDragging] = useState(false);
+  const presenterBoxDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const PRESENTER_BOX_WIDTH = 220;
+  const PRESENTER_BOX_HEIGHT = 140;
+  const PRESENTER_BOX_MARGIN = 16;
+  const clampPresenterBoxPos = useCallback((x: number, y: number) => {
+    const stage = presentationStageRef.current;
+    const width = stage?.clientWidth || window.innerWidth;
+    const height = stage?.clientHeight || window.innerHeight;
+    const maxX = Math.max(width - PRESENTER_BOX_WIDTH - PRESENTER_BOX_MARGIN, PRESENTER_BOX_MARGIN);
+    const maxY = Math.max(height - PRESENTER_BOX_HEIGHT - PRESENTER_BOX_MARGIN, PRESENTER_BOX_MARGIN);
+
+    return {
+      x: Math.min(Math.max(x, PRESENTER_BOX_MARGIN), maxX),
+      y: Math.min(Math.max(y, PRESENTER_BOX_MARGIN), maxY),
+    };
+  }, []);
+  useEffect(() => {
+    if (!screenShareFullView) {
+      setPresenterBoxPos(null);
+      return;
+    }
+    if (presenterBoxPos) return;
+    // Default to the bottom-right corner, clear of the bottom-center exit button's own space.
+    setPresenterBoxPos(clampPresenterBoxPos(Infinity, window.innerHeight - PRESENTER_BOX_HEIGHT - 90));
+  }, [screenShareFullView, presenterBoxPos, clampPresenterBoxPos]);
+  useEffect(() => {
+    if (!screenShareFullView) return;
+    const onResize = () => setPresenterBoxPos((p) => (p ? clampPresenterBoxPos(p.x, p.y) : p));
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [screenShareFullView, clampPresenterBoxPos]);
+  const onPresenterBoxPointerDown = useCallback((event: ReactPointerEvent) => {
+    if (!presenterBoxPos) return;
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    presenterBoxDragRef.current = { startX: event.clientX, startY: event.clientY, originX: presenterBoxPos.x, originY: presenterBoxPos.y };
+    setPresenterBoxDragging(true);
+  }, [presenterBoxPos]);
+  const onPresenterBoxPointerMove = useCallback((event: ReactPointerEvent) => {
+    const drag = presenterBoxDragRef.current;
+
+    if (!drag) return;
+    setPresenterBoxPos(clampPresenterBoxPos(drag.originX + (event.clientX - drag.startX), drag.originY + (event.clientY - drag.startY)));
+  }, [clampPresenterBoxPos]);
+  const endPresenterBoxDrag = useCallback(() => {
+    presenterBoxDragRef.current = null;
+    setPresenterBoxDragging(false);
+  }, []);
 
   // 's' also engages the real browser Fullscreen API alongside the in-app full-view overlay above
   // (entry only, and only when not ALREADY fullscreen -- pressing 's' right after 'f' must never
@@ -5719,6 +5797,7 @@ export function MeetingRoomPage() {
             >
               {/* Primary Presentation Stage (Screen Share): Captures large screen space on the LEFT */}
               <div
+                ref={presentationStageRef}
                 style={{
                   flex: 1,
                   minWidth: 0,
@@ -5737,10 +5816,10 @@ export function MeetingRoomPage() {
               >
                 {/* Only shown in full-view mode (the 's' shortcut) -- the in-app state has no
                     native Esc-key affordance the way real browser fullscreen does, so without
-                    this there would be no visible way back to the normal layout. Bottom-center,
-                    always on (no hover-to-reveal, matching every other piece of chrome in this
-                    mode being fully hidden rather than auto-hiding) -- the one deliberately
-                    visible, deliberately minimal way out. */}
+                    this there would be no visible way back to the normal layout. Bottom-center.
+                    Shares the same hover-to-reveal behavior (toolbarsVisibleInFullscreen) as the
+                    normal top/bottom toolbars elsewhere in the app, rather than staying
+                    permanently on top of the shared screen. */}
                 {screenShareFullView && (
                   <button
                     type="button"
@@ -5763,10 +5842,57 @@ export function MeetingRoomPage() {
                       backdropFilter: 'blur(4px)',
                       color: 'rgba(255, 255, 255, 0.85)',
                       cursor: 'pointer',
+                      opacity: toolbarsVisibleInFullscreen ? 1 : 0,
+                      pointerEvents: toolbarsVisibleInFullscreen ? 'auto' : 'none',
+                      transition: 'opacity 0.3s ease',
                     }}
                   >
                     <X size={18} />
                   </button>
+                )}
+                {/* Real reported request: full-view hides the normal side people box entirely, so
+                    there was no way to see the presenter's own camera. A small, draggable,
+                    always-visible (not hover-gated, unlike the exit button above) floating box
+                    shows it instead -- reuses MeetingParticipantCard so it gets the exact same
+                    clear 'cover' video rendering, avatar fallback and mute/mirrored handling every
+                    other camera tile in the app already has, rather than a second, separate
+                    implementation. */}
+                {screenShareFullView && presenterBoxPos && primaryShare
+                  && (primaryShare.kind === 'local' || presenterCameraParticipant) && (
+                  <div
+                    onPointerDown={onPresenterBoxPointerDown}
+                    onPointerMove={onPresenterBoxPointerMove}
+                    onPointerUp={endPresenterBoxDrag}
+                    onPointerCancel={endPresenterBoxDrag}
+                    title="Drag to move"
+                    style={{
+                      position: 'absolute',
+                      left: presenterBoxPos.x,
+                      top: presenterBoxPos.y,
+                      width: `${PRESENTER_BOX_WIDTH}px`,
+                      height: `${PRESENTER_BOX_HEIGHT}px`,
+                      zIndex: 6,
+                      cursor: presenterBoxDragging ? 'grabbing' : 'grab',
+                      touchAction: 'none',
+                      borderRadius: '14px',
+                      overflow: 'hidden',
+                      boxShadow: '0 8px 28px rgba(0, 0, 0, 0.55)',
+                      border: '1px solid rgba(255, 255, 255, 0.18)',
+                    }}
+                  >
+                    <MeetingParticipantCard
+                      participantId={primaryShare.kind === 'local' ? 'local' : presenterCameraParticipant!.id}
+                      name={primaryShare.kind === 'local' ? `${displayName || 'You'} (You)` : presenterCameraParticipant!.name}
+                      avatarUrl={primaryShare.kind === 'local' ? localAvatarUrl : presenterCameraParticipant!.avatarUrl}
+                      stream={primaryShare.kind === 'local' ? inCallStream : presenterCameraParticipant!.stream}
+                      videoEnabled={primaryShare.kind === 'local' ? inCallVideo : presenterCameraParticipant!.video}
+                      muted={primaryShare.kind === 'local' ? Boolean(inCallMuted) : presenterCameraParticipant!.muted}
+                      theme={getParticipantColorTheme(primaryShare.kind === 'local' ? (displayName || 'You') : presenterCameraParticipant!.name, 0)}
+                      compact
+                      mirrored={primaryShare.kind === 'local'}
+                      style={{ width: '100%', height: '100%' }}
+                    />
+                  </div>
                 )}
                 {primaryShare?.kind === 'local' ? (
                   <video
