@@ -4753,6 +4753,18 @@ export function MeetingRoomPage() {
   const defaultDriftCheckInFlightRef = useRef(false);
 
   useEffect(() => {
+    // Real reported bug: on a Mac near a paired iPhone, macOS Continuity Mic/Camera re-advertises
+    // the iPhone's microphone to the Mac on its own background schedule (observed roughly every
+    // ~10 minutes), independent of anything this app does. Each re-advertisement makes the
+    // iPhone's mic disappear and reappear in enumerateDevices(), which looked exactly like "a
+    // brand-new device just connected" to the "auto-switch TO a newly appeared device" logic
+    // below -- so it kept getUserMedia-ing the Continuity mic back into the call every ~10
+    // minutes, even right after the person had explicitly declined/cancelled it from the iPhone
+    // itself. A real USB/Bluetooth device the person just plugged in should still auto-switch; an
+    // iPhone/iPad's Continuity input specifically should not be force-adopted this way -- it
+    // remains fully selectable by hand from the device menu, which uses the raw list below, not
+    // this filtered one.
+    const isContinuityDeviceLabel = (label: string | undefined) => /\b(iphone|ipad)\b/i.test(label || '');
     let cancelled = false;
     const refresh = async () => {
       const burstStartedAt = burstStartedAtRef.current;
@@ -4808,7 +4820,7 @@ export function MeetingRoomPage() {
         // previousIds is null only on the very first run (nothing to compare against yet, and
         // every device would look "new") -- skip auto-connecting until the second pass onward.
         if (previousIds) {
-          const isNew = (d: MediaDeviceInfo) => !previousIds.has(d.deviceId);
+          const isNew = (d: MediaDeviceInfo) => !previousIds.has(d.deviceId) && !isContinuityDeviceLabel(d.label);
           const newAudioIn = audioInput.find(isNew);
           const newAudioOut = audioOutput.find(isNew);
           const newVideoIn = videoInput.find(isNew);
@@ -4920,10 +4932,12 @@ export function MeetingRoomPage() {
 
                 if (!activeId) return;
                 const probeStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: 'default' } });
-                const probeDeviceId = probeStream.getAudioTracks()[0]?.getSettings?.()?.deviceId;
+                const probeTrack = probeStream.getAudioTracks()[0];
+                const probeDeviceId = probeTrack?.getSettings?.()?.deviceId;
+                const probeIsContinuity = isContinuityDeviceLabel(probeTrack?.label);
 
                 probeStream.getTracks().forEach((t) => t.stop());
-                if (cancelled || audioIdRef.current || !probeDeviceId || probeDeviceId === activeId) return;
+                if (cancelled || audioIdRef.current || !probeDeviceId || probeDeviceId === activeId || probeIsContinuity) return;
                 if (deviceSwitchDiagnosticsEnabled) {
                   console.info('[Toowix device-switch] default input drifted without a new deviceId, replacing track');
                 }
@@ -4967,7 +4981,7 @@ export function MeetingRoomPage() {
                     if (cancelled || !freshDevices || audioIdRef.current) return;
                     const freshAudioInputs = freshDevices.filter((d) => d.kind === 'audioinput' && d.deviceId);
                     const stillKnown = knownDeviceIdsRef.current || new Set<string>();
-                    const candidate = freshAudioInputs.find((d) => !stillKnown.has(d.deviceId));
+                    const candidate = freshAudioInputs.find((d) => !stillKnown.has(d.deviceId) && !isContinuityDeviceLabel(d.label));
 
                     if (!candidate) {
                       if (deviceSwitchDiagnosticsEnabled) {

@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { emailConfig } from '../config/email';
+import { emailConfig, emailSenders, resolveEmailCategory, EmailCategory } from '../config/email';
 import { renderEmailLayout, renderDedicatedTemplate, IRenderEmailOptions } from './renderer';
 import { EmailLog, EmailTemplateName, IEmailLogMetadata, IEmailLogDocument } from '../models/EmailLog';
 
@@ -15,6 +15,9 @@ const getTransporter = (): nodemailer.Transporter => {
       host: emailConfig.smtp.host,
       port: emailConfig.smtp.port,
       secure: emailConfig.smtp.secure,
+      // SES on 587 only accepts STARTTLS -- fail loudly instead of silently sending in plaintext
+      // if the server ever stops offering it.
+      requireTLS: !emailConfig.smtp.secure,
       auth: emailConfig.smtp.auth,
     });
   } else {
@@ -34,6 +37,8 @@ export interface ISendEmailOptions {
   renderOptions?: IRenderEmailOptions;
   templateVariables?: Record<string, string | number | undefined>;
   metadata?: IEmailLogMetadata;
+  /** Overrides the From identity. Defaults to the category implied by templateName. */
+  category?: EmailCategory;
 }
 
 export interface ISendEmailResult {
@@ -46,7 +51,7 @@ export interface ISendEmailResult {
  * Guarantees that the caller is NEVER blocked and errors NEVER crash the caller.
  */
 export const sendEmailAsync = async (options: ISendEmailOptions): Promise<ISendEmailResult> => {
-  const { to, templateName, subject, renderOptions, templateVariables, metadata = {} } = options;
+  const { to, templateName, subject, renderOptions, templateVariables, metadata = {}, category } = options;
 
   let logRecord: IEmailLogDocument | null = null;
   try {
@@ -77,9 +82,10 @@ export const sendEmailAsync = async (options: ISendEmailOptions): Promise<ISendE
       }
 
       const mailTransporter = getTransporter();
+      const sender = emailSenders[category || resolveEmailCategory(templateName)];
 
       const mailOptions = {
-        from: `"${emailConfig.fromName}" <${emailConfig.fromEmail}>`,
+        from: `"${sender.fromName}" <${sender.fromEmail}>`,
         to,
         subject,
         html,
