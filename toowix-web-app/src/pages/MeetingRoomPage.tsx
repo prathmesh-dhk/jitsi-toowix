@@ -641,6 +641,24 @@ export function MeetingRoomPage() {
   // Jitsi-style tile view toggle: ON (default) shows the equal-size participant grid; OFF shows
   // one large pinned participant with the rest in a filmstrip sidebar. Shortcut 'W' toggles.
   const [tileViewEnabled, setTileViewEnabled] = useState(true);
+  // Real reported request: switching tile view <-> speaker view is a hard structural swap (one
+  // branch unmounts, the other mounts), so it always cut instantly -- no amount of styling the two
+  // branches individually can smooth that over. Instead, the whole stage container (tw-main,
+  // below) briefly dips opacity/scale and eases back on every tileViewEnabled flip, giving a soft
+  // cross-dissolve feel around the cut rather than a hard jump. Skips the very first render (no
+  // flip has happened yet, nothing to transition from) and anything unrelated to this toggle
+  // (screen-share starting/stopping flips tileViewEnabled too, so the same smoothing applies there
+  // for free, which is consistent, not a special case to guard against).
+  const prevTileViewEnabledRef = useRef(tileViewEnabled);
+  const [viewSwitchTransitioning, setViewSwitchTransitioning] = useState(false);
+  useEffect(() => {
+    if (prevTileViewEnabledRef.current === tileViewEnabled) return;
+    prevTileViewEnabledRef.current = tileViewEnabled;
+    setViewSwitchTransitioning(true);
+    const raf = requestAnimationFrame(() => setViewSwitchTransitioning(false));
+
+    return () => cancelAnimationFrame(raf);
+  }, [tileViewEnabled]);
   const [pinnedParticipantId, setPinnedParticipantId] = useState<string | null>(null);
   // Real reported bug (2026-09-30): pinning a participant only lasted until the dominant speaker
   // changed again -- the auto speaker-view-follow effect below shared the SAME state as a manual
@@ -908,6 +926,66 @@ export function MeetingRoomPage() {
   }, [activePanel]);
   const [participantToast, setParticipantToast] = useState<string | null>(null);
   const [timeLimitToast, setTimeLimitToast] = useState<string | null>(null);
+  // Real reported request: the "You're muted" nudge should be movable, and remember where it was
+  // last dragged to so it reopens there in a later meeting too -- null means "never dragged, use
+  // the default bottom-center position" (its original style), not (0,0).
+  const MUTE_NUDGE_STORAGE_KEY = 'toowix_mute_nudge_pos';
+  const [muteNudgePos, setMuteNudgePos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const raw = localStorage.getItem(MUTE_NUDGE_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+
+      if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') return parsed;
+    } catch {
+      // Storage unavailable or corrupt -- fall back to the default position.
+    }
+
+    return null;
+  });
+  const [muteNudgeDragging, setMuteNudgeDragging] = useState(false);
+  const muteNudgeDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const muteNudgeElRef = useRef<HTMLDivElement | null>(null);
+  const clampMuteNudgePos = useCallback((x: number, y: number) => {
+    const el = muteNudgeElRef.current;
+    const width = el?.offsetWidth || 260;
+    const height = el?.offsetHeight || 48;
+    const margin = 8;
+    const maxX = Math.max(window.innerWidth - width - margin, margin);
+    const maxY = Math.max(window.innerHeight - height - margin, margin);
+
+    return { x: Math.min(Math.max(x, margin), maxX), y: Math.min(Math.max(y, margin), maxY) };
+  }, []);
+  const onMuteNudgePointerDown = useCallback((event: ReactPointerEvent) => {
+    const el = muteNudgeElRef.current;
+
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    muteNudgeDragRef.current = { startX: event.clientX, startY: event.clientY, originX: rect.left, originY: rect.top };
+    setMuteNudgeDragging(true);
+  }, []);
+  const onMuteNudgePointerMove = useCallback((event: ReactPointerEvent) => {
+    const drag = muteNudgeDragRef.current;
+
+    if (!drag) return;
+    setMuteNudgePos(clampMuteNudgePos(drag.originX + (event.clientX - drag.startX), drag.originY + (event.clientY - drag.startY)));
+  }, [clampMuteNudgePos]);
+  const endMuteNudgeDrag = useCallback(() => {
+    if (muteNudgeDragRef.current) {
+      setMuteNudgePos((pos) => {
+        try {
+          if (pos) localStorage.setItem(MUTE_NUDGE_STORAGE_KEY, JSON.stringify(pos));
+        } catch {
+          // Storage unavailable -- the position still applies for this meeting, just won't persist.
+        }
+
+        return pos;
+      });
+    }
+    muteNudgeDragRef.current = null;
+    setMuteNudgeDragging(false);
+  }, []);
   // Tracks who was already in the room so the very first roster population (when I join and see
   // everyone already present) never fires a flood of "joined" toasts/sounds -- only genuine
   // later joins/leaves do. Names are kept separately so a departed participant's name is still
@@ -3908,8 +3986,10 @@ export function MeetingRoomPage() {
   const [presenterBoxPos, setPresenterBoxPos] = useState<{ x: number; y: number } | null>(null);
   const [presenterBoxDragging, setPresenterBoxDragging] = useState(false);
   const presenterBoxDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
-  const PRESENTER_BOX_WIDTH = 220;
-  const PRESENTER_BOX_HEIGHT = 140;
+  // Circular (not the previous 220x140 rectangle) -- equal width/height so borderRadius: 50%
+  // below renders a true circle, not an ellipse.
+  const PRESENTER_BOX_WIDTH = 160;
+  const PRESENTER_BOX_HEIGHT = 160;
   const PRESENTER_BOX_MARGIN = 16;
   const clampPresenterBoxPos = useCallback((x: number, y: number) => {
     const stage = presentationStageRef.current;
@@ -5473,17 +5553,16 @@ export function MeetingRoomPage() {
             justifyContent: 'space-between',
             zIndex: 10,
             boxSizing: 'border-box',
-            // Full-screen auto-hide: becomes an overlay (out of the normal flex flow, so tw-main
-            // can grow into the reclaimed space) only while full screen is active; outside full
-            // screen this stays exactly as it always was (position: static, in-flow). Screen-share
-            // full view ('s') forces it permanently hidden instead of toolbarsVisibleInFullscreen's
-            // hover-to-reveal -- deliberately no way to bring it back except exiting the mode.
-            ...(isFullscreen || screenShareFullView ? {
+            // Reverted: real (isFullscreen) full screen no longer auto-hides this bar -- it stays
+            // static/always-visible (position: static, in-flow) exactly like outside full screen.
+            // Screen-share full view ('s') still forces it permanently hidden -- unrelated to real
+            // fullscreen, and not something this revert touches.
+            ...(screenShareFullView ? {
               position: 'absolute',
               top: 0,
               left: 0,
               right: 0,
-              transform: screenShareFullView || !toolbarsVisibleInFullscreen ? 'translateY(-100%)' : 'translateY(0)',
+              transform: 'translateY(-100%)',
               transition: screenShareFullViewJustToggled ? 'none' : 'transform 0.3s ease',
             } : {}),
           }}
@@ -5703,7 +5782,12 @@ export function MeetingRoomPage() {
             // keep up with, instead of an abrupt jump. Deliberately NOT 'none'/instant here --
             // that fix was for the top bar/toolbar's own slide (a different kind of flicker,
             // hiding the chrome), not for the stage's size.
-            transition: 'padding 0.18s ease',
+            // opacity/transform: the tile-view <-> speaker-view cross-dissolve (viewSwitchTransitioning,
+            // see its own declaration above) -- unrelated to the padding transition above, just
+            // sharing this one `transition` property list.
+            transition: 'padding 0.18s ease, opacity 0.28s ease, transform 0.28s ease',
+            opacity: viewSwitchTransitioning ? 0.35 : 1,
+            transform: viewSwitchTransitioning ? 'scale(0.98)' : 'scale(1)',
             boxSizing: 'border-box',
             overflow: 'hidden',
           }}
@@ -5874,7 +5958,7 @@ export function MeetingRoomPage() {
                       zIndex: 6,
                       cursor: presenterBoxDragging ? 'grabbing' : 'grab',
                       touchAction: 'none',
-                      borderRadius: '14px',
+                      borderRadius: '50%',
                       overflow: 'hidden',
                       boxShadow: '0 8px 28px rgba(0, 0, 0, 0.55)',
                       border: '1px solid rgba(255, 255, 255, 0.18)',
@@ -6111,6 +6195,11 @@ export function MeetingRoomPage() {
                     // isn't disturbed, it just moves into that stage's own filmstrip (see
                     // showShareStage's manual-pin check and the screen-share filmstrip card there).
                     onDoubleClick={() => { setPinnedManually(remote.id); setTileViewEnabled(false); }}
+                    // Real reported gap: the host could mute a participant from the normal gallery
+                    // (ParticipantGallery wires this exact same onMute), but not from this side
+                    // people box shown next to an active screen share -- same prop, same guard
+                    // (moderator only, and only when not already muted) as that other call site.
+                    onMute={isModerator && !remote.muted ? () => handleRemoteAudioControl(remote.id) : undefined}
                   />;
                   if (false) return (
                     <div
@@ -7451,12 +7540,10 @@ export function MeetingRoomPage() {
             position: 'absolute',
             bottom: '16px',
             left: '50%',
-            // Full-screen auto-hide: already an absolute overlay (no flex-flow change needed
-            // here, unlike the top bar), so hiding it is just pushing the SAME horizontal
-            // centering transform further down and out of view. Outside full screen this is
-            // byte-for-byte the original 'translateX(-50%)'. Screen-share full view ('s') forces
-            // it permanently hidden, same as the top bar above.
-            transform: screenShareFullView || (isFullscreen && !toolbarsVisibleInFullscreen)
+            // Reverted: real (isFullscreen) full screen no longer auto-hides this bar -- stays
+            // static/always-visible, byte-for-byte the original 'translateX(-50%)'. Screen-share
+            // full view ('s') still forces it permanently hidden, unrelated to this revert.
+            transform: screenShareFullView
               ? 'translate(-50%, 150%)'
               : 'translateX(-50%)',
             transition: screenShareFullViewJustToggled ? 'none' : 'transform 0.3s ease',
@@ -8976,11 +9063,12 @@ export function MeetingRoomPage() {
         clickable "Unmute" action. */}
         {jitsiMeeting.mutedButSpeaking && (
           <div
+            ref={muteNudgeElRef}
             style={{
               position: 'fixed',
-              bottom: '140px',
-              left: '50%',
-              transform: 'translateX(-50%)',
+              ...(muteNudgePos
+                ? { left: `${muteNudgePos.x}px`, top: `${muteNudgePos.y}px` }
+                : { bottom: '140px', left: '50%', transform: 'translateX(-50%)' }),
               backgroundColor: '#202124',
               color: '#FFFFFF',
               padding: '10px 12px 10px 16px',
@@ -8993,10 +9081,19 @@ export function MeetingRoomPage() {
               zIndex: 251,
               fontSize: '13px',
               fontWeight: 500,
-              animation: 'fadeIn 0.2s ease',
+              animation: muteNudgeDragging ? 'none' : 'fadeIn 0.2s ease',
             }}
           >
+            {/* Real reported request: movable, with its last dragged-to position cached (across
+                meetings, via localStorage) so it reopens there next time instead of always resetting
+                to the default bottom-center spot. This icon doubles as the drag handle -- the
+                Unmute/Dismiss buttons below stay click-only, undisturbed by drag handling. */}
             <div
+              onPointerDown={onMuteNudgePointerDown}
+              onPointerMove={onMuteNudgePointerMove}
+              onPointerUp={endMuteNudgeDrag}
+              onPointerCancel={endMuteNudgeDrag}
+              title="Drag to move"
               style={{
                 width: '24px',
                 height: '24px',
@@ -9006,6 +9103,8 @@ export function MeetingRoomPage() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
+                cursor: muteNudgeDragging ? 'grabbing' : 'grab',
+                touchAction: 'none',
               }}
             >
               <MicOff size={14} color="#FFFFFF" />
