@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   EmailAuthProvider, reauthenticateWithCredential, updatePassword, signOut,
 } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
+import { isKeycloakSignInEnabled, startKeycloakAccountLink } from '../../lib/keycloakAuth';
+import { backendLogout } from '../../lib/sessionLogout';
 import { settingsApi } from '../../lib/settingsApi';
 import { sectionHeaderStyle, sectionTitleStyle, sectionSubtitleStyle, cardStyle, labelStyle, inputStyle, Toast } from './SettingsShared';
-import { useTheme } from '../../lib/theme';
 import { Eye, EyeOff, Info, AlertTriangle, Monitor, X } from 'lucide-react';
+import { useTheme } from '../../lib/theme';
 
 function strengthOf(pw: string): { score: number; label: string; color: string } {
   let score = 0;
@@ -21,6 +24,8 @@ function strengthOf(pw: string): { score: number; label: string; color: string }
 
 export function SecuritySection() {
   const { isDark } = useTheme();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [account, setAccount] = useState<any>(null);
   const [showChangePw, setShowChangePw] = useState(false);
@@ -36,6 +41,8 @@ export function SecuritySection() {
   const [sessions, setSessions] = useState<any[] | null>(null);
   const [signingOutOthers, setSigningOutOthers] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [startingKeycloakLink, setStartingKeycloakLink] = useState(false);
+  const keycloakEnabled = isKeycloakSignInEnabled();
 
   const isGoogleUser = auth.currentUser?.providerData.some((p) => p.providerId === 'google.com');
 
@@ -50,6 +57,24 @@ export function SecuritySection() {
     settingsApi.get<any>('/').then((data) => setAccount(data.account)).catch(() => {});
     loadSessions();
   }, []);
+
+  useEffect(() => {
+    if ((location.state as { keycloakLinked?: boolean } | null)?.keycloakLinked) {
+      setToast({ message: 'Your Keycloak account is connected.', type: 'success' });
+      navigate('/settings/security', { replace: true, state: null });
+    }
+  }, [location.state, navigate]);
+
+  const handleStartKeycloakLink = async () => {
+    if (startingKeycloakLink) return;
+    setStartingKeycloakLink(true);
+    try {
+      await startKeycloakAccountLink();
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : 'Could not start Keycloak account linking.', type: 'error' });
+      setStartingKeycloakLink(false);
+    }
+  };
 
   const handleRevokeSession = async (id: string) => {
     if (revokingId) return;
@@ -113,6 +138,7 @@ export function SecuritySection() {
         // client SDK -- the closest real action is signing this session out too, which
         // forces a fresh sign-in everywhere. Being honest: this signs out *everywhere*,
         // not selectively "other" sessions.
+        await backendLogout();
         await signOut(auth);
         // See DashboardPage.tsx's own handleSignOut -- every stale "logged in" localStorage
         // signal must be cleared on sign-out, not just the Firebase session itself, or the next
@@ -151,6 +177,7 @@ export function SecuritySection() {
       const credential = EmailAuthProvider.credential(user.email, deactivatePw);
       await reauthenticateWithCredential(user, credential);
       await settingsApi.post('/security/deactivate');
+      await backendLogout();
       await signOut(auth);
       // See the matching comment above (handleChangePassword's own sign-out-everywhere branch).
       localStorage.removeItem('toowix_user');
@@ -244,6 +271,20 @@ export function SecuritySection() {
           </>
         ) : (
           <p style={{ fontSize: '12px', color: '#9CA3AF' }}>Not connected — you sign in with email and password.</p>
+        )}
+        {keycloakEnabled && (
+          <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${isDark ? '#1E293B' : '#F3F4F6'}` }}>
+            <p style={{ fontSize: '12px', color: isDark ? '#9CA3AF' : '#6B7280', margin: '0 0 10px 0' }}>
+              Connect a Keycloak identity to this existing Toowix account. Your account is linked only after both signed-in sessions are verified by Toowix.
+            </p>
+            <button
+              onClick={handleStartKeycloakLink}
+              disabled={startingKeycloakLink}
+              style={{ padding: '9px 16px', borderRadius: '8px', border: '1px solid #4F46E5', color: '#FFFFFF', background: '#4F46E5', fontSize: '13px', fontWeight: 700, cursor: startingKeycloakLink ? 'wait' : 'pointer', opacity: startingKeycloakLink ? 0.7 : 1 }}
+            >
+              {startingKeycloakLink ? 'Opening Keycloak…' : 'Connect Keycloak account'}
+            </button>
+          </div>
         )}
       </div>
 

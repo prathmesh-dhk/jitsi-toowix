@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8" /><title>Toowix silent sign-in check</title></head>
+<body>
+<script>
+  // Loaded only inside a hidden iframe by attemptSilentSignIn() (see src/lib/keycloakAuth.ts).
+  // Its only job is to hand its own URL (carrying Keycloak's ?code=/?error= response) back to the
+  // parent page, scoped to this exact origin -- the parent does the actual token exchange, this
+  // page never touches tokens or storage itself.
+  if (window.parent !== window) {
+    window.parent.postMessage(window.location.href, window.location.origin);
+  }
+</script>
+</body>
+</html>
