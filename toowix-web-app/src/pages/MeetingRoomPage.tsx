@@ -5940,9 +5940,11 @@ export function MeetingRoomPage() {
                     shows it instead -- reuses MeetingParticipantCard so it gets the exact same
                     clear 'cover' video rendering, avatar fallback and mute/mirrored handling every
                     other camera tile in the app already has, rather than a second, separate
-                    implementation. */}
+                    implementation. Only shown while the presenter's camera is actually ON -- a
+                    circle with just their avatar/initial inside it was deemed not worth the
+                    screen space when there's no live video to show. */}
                 {screenShareFullView && presenterBoxPos && primaryShare
-                  && (primaryShare.kind === 'local' || presenterCameraParticipant) && (
+                  && (primaryShare.kind === 'local' ? inCallVideo : Boolean(presenterCameraParticipant?.video)) && (
                   <div
                     onPointerDown={onPresenterBoxPointerDown}
                     onPointerMove={onPresenterBoxPointerMove}
