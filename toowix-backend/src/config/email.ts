@@ -36,10 +36,10 @@ export const emailConfig: IEmailConfig = {
     : undefined,
 };
 
-export type EmailCategory = 'ACCOUNTS' | 'NOTIFICATIONS' | 'BILLING';
+export type EmailCategory = 'ACCOUNTS' | 'NOTIFICATIONS';
 
-// All three identities authenticate with the same SMTP credentials (emailConfig.smtp) -- only
-// the From header differs, so recipients see which Toowix team an email is actually from.
+// Both identities authenticate with the same SMTP credentials (emailConfig.smtp) -- only the
+// From header differs, so recipients see which Toowix team an email is actually from.
 export const emailSenders: Record<EmailCategory, { fromName: string; fromEmail: string }> = {
   ACCOUNTS: {
     fromName: process.env.EMAIL_ACCOUNTS_FROM_NAME || 'Toowix Accounts',
@@ -49,15 +49,9 @@ export const emailSenders: Record<EmailCategory, { fromName: string; fromEmail: 
     fromName: process.env.EMAIL_NOTIFICATIONS_FROM_NAME || 'Toowix Notifications',
     fromEmail: process.env.EMAIL_NOTIFICATIONS_FROM_ADDRESS || 'notifications@toowix.com',
   },
-  BILLING: {
-    fromName: process.env.EMAIL_BILLING_FROM_NAME || 'Toowix Billing',
-    fromEmail: process.env.EMAIL_BILLING_FROM_ADDRESS || 'billing@toowix.com',
-  },
 };
 
 // OTPs/verification/reset/security alerts -> ACCOUNTS; everything else operational -> NOTIFICATIONS.
-// Nothing sends under BILLING yet (no invoice/payment email templates exist); callers that add
-// one should pass `category: 'BILLING'` explicitly in ISendEmailOptions.
 const templateCategoryMap: Record<EmailTemplateName, EmailCategory> = {
   E1_VERIFY_EMAIL: 'ACCOUNTS',
   E2_REG_RECEIVED: 'ACCOUNTS',
