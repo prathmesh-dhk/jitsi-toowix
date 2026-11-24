@@ -1928,15 +1928,54 @@ export function useJitsiMeeting({
     // succeeds without producing frames, which is the black self-view bug. Treat it as absent
     // and acquire a fresh camera track below instead.
     if (track && nativeTrack?.readyState !== 'ended') {
-      if (track.isMuted()) {
-        await Promise.resolve(track.unmute());
-        // Use a new MediaStream wrapper to force every mounted self-view/PiP video element to
-        // rebind and resume playback as soon as the browser emits frames again.
-        setLocalCameraStream(trackToStream(track));
-        setLocalVideoMuted(false);
-      } else {
-        await Promise.resolve(track.mute());
-        setLocalVideoMuted(true);
+      // CONFIRMED BUG, lives in lib-jitsi-meet itself (served live by the Jitsi media server at
+      // VITE_JITSI_DOMAIN, not bundled by this app -- see ensureLibJitsiMeetLoaded.ts), not in our
+      // own code: track.mute()/unmute() is never a cheap local toggle here, because
+      // BrowserCapabilities.doesVideoMuteByStreamRemove() returns true for every browser this app
+      // runs on. Every mute/unmute is a REAL SDP offer/answer renegotiation. When a screen share
+      // is simultaneously active there are two local video transceivers on the same peer
+      // connection (camera + desktop), and lib-jitsi-meet's own transceiver-reuse lookup
+      // (TraceablePeerConnection.replaceTrack) picks the wrong one on unmute -- confirmed live and
+      // via a wrapped-createAnswer diagnostic pass: the camera's original transceiver is left
+      // stuck recvonly and a brand new one is created instead, which permanently breaks the camera
+      // for every remote viewer. (An earlier attempt to just serialize this call changed nothing,
+      // which is what confirmed this isn't a race.) We can't patch the Jitsi media server's own
+      // copy of the library from here, so work around the one condition that actually triggers it:
+      // while a screen share is active, temporarily make doesVideoMuteByStreamRemove() report
+      // false for the duration of this one call. JitsiLocalTrack._setMuted's OTHER branch just
+      // flips the native MediaStreamTrack's `enabled` flag -- no stream teardown, no
+      // renegotiation, so the broken two-transceiver SDP path is never reached. Remote
+      // participants are still notified correctly either way: _setMuted calls _sendMuteStatus()
+      // and emits TRACK_MUTE_CHANGED on both branches. The override is restored right after (see
+      // finally below) so a plain camera toggle with no screen share keeps actually turning the
+      // camera hardware (and its light) off, which is what people expect to see outside this one
+      // broken scenario.
+      // The browser-capabilities singleton is exposed at JitsiMeetJS.util.browser on this build,
+      // not JitsiMeetJS.browser directly (confirmed via the live instance: Object.keys(JitsiMeetJS)
+      // has no `browser` key; Object.keys(JitsiMeetJS.util) is ['ScriptUtil', 'browser']).
+      const browserCaps = window.JitsiMeetJS?.util?.browser;
+      const isSharingScreen = Boolean(localDesktopTrackRef.current);
+      const originalDoesVideoMuteByStreamRemove = browserCaps?.doesVideoMuteByStreamRemove;
+
+      if (isSharingScreen && browserCaps && originalDoesVideoMuteByStreamRemove) {
+        browserCaps.doesVideoMuteByStreamRemove = () => false;
+      }
+
+      try {
+        if (track.isMuted()) {
+          await runSerializedRoomOperation(() => Promise.resolve(track.unmute()));
+          // Use a new MediaStream wrapper to force every mounted self-view/PiP video element to
+          // rebind and resume playback as soon as the browser emits frames again.
+          setLocalCameraStream(trackToStream(track));
+          setLocalVideoMuted(false);
+        } else {
+          await runSerializedRoomOperation(() => Promise.resolve(track.mute()));
+          setLocalVideoMuted(true);
+        }
+      } finally {
+        if (isSharingScreen && browserCaps && originalDoesVideoMuteByStreamRemove) {
+          browserCaps.doesVideoMuteByStreamRemove = originalDoesVideoMuteByStreamRemove;
+        }
       }
 
       return;
