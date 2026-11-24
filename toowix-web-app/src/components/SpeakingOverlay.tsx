@@ -7,7 +7,10 @@ interface IProps {
   compact?: boolean;
 }
 
-// Google-Meet-style talking cue: a soft pulsing ring around the tile plus three bouncing bars.
+// Google-Meet-style talking cue: three bouncing bars. The tile's own ring is now the
+// volume-reactive gradient glow (see speakingGlow.ts/SpeakingGlow.tsx) applied directly to the
+// card's box-shadow -- this component used to also draw its own flat blue pulsing ring here, which
+// is removed since it visually competed with (and this component can't see) the gradient glow.
 export function SpeakingOverlay({ id, active, compact }: IProps) {
   const remoteSpeaking = useSpeaking(id);
   const isSpeaking = id ? remoteSpeaking : Boolean(active);
@@ -21,20 +24,8 @@ export function SpeakingOverlay({ id, active, compact }: IProps) {
   return (
     <>
       <style>{`
-        @keyframes toowix-speak-ring { 0%,100% { box-shadow: inset 0 0 0 3px rgba(138,180,248,0.95), 0 0 0 0 rgba(138,180,248,0.35); } 50% { box-shadow: inset 0 0 0 3px rgba(138,180,248,0.95), 0 0 14px 2px rgba(138,180,248,0.5); } }
         @keyframes toowix-speak-bar { 0%,100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
       `}</style>
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: 0,
-          borderRadius: 'inherit',
-          pointerEvents: 'none',
-          zIndex: 11,
-          animation: 'toowix-speak-ring 1.2s ease-in-out infinite'
-        }}
-      />
       <div
         aria-label="Speaking"
         style={{

@@ -1,7 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Hand, Mic, MicOff, Phone, Pin } from 'lucide-react';
 import { SpeakingOverlay } from './SpeakingOverlay';
+import { SpeakingGlow } from './SpeakingGlow';
 import { useSpeaking } from '../lib/speakingStore';
+import { SPEAKING_AMBIENT_SHADOW, SPEAKING_GLOW_SHADOW, SPEAKING_GLOW_TRANSITION } from '../lib/speakingGlow';
 import { useCameraVideoAspect } from '../lib/videoOrientation';
 import { computeSmartVideoBoundary, type BoundaryMode } from '../lib/videoBoundary';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
@@ -133,6 +135,11 @@ function MeetingParticipantCardImpl({
   // duplicate orientation detection" instruction. Only computed while there's live video to
   // measure; camera-off (or no cardWidth/cardHeight yet) always falls back to 'normal' mode at the
   // card's own full width via computeSmartVideoBoundary's own safe-input handling.
+  // Host node for the volume-reactive speaking glow -- SpeakingGlow (below) writes this
+  // participant's live mic level straight to this node's style as CSS custom properties, bypassing
+  // React entirely for the ~10x/second ticks so only that tiny subscriber re-renders, never this
+  // card.
+  const glowHostRef = useRef<HTMLDivElement | null>(null);
   const boundaryModeRef = useRef<BoundaryMode>('normal');
   const boundary = videoBoundaryMode === 'smart-height' && hasLiveVideo
     ? computeSmartVideoBoundary(cardWidth ?? 0, cardHeight ?? 0, ratio, boundaryModeRef.current)
@@ -175,17 +182,18 @@ function MeetingParticipantCardImpl({
     <div
       data-participant-id={participantId}
       onDoubleClick={onDoubleClick}
+      ref={glowHostRef}
       style={{
         position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0,
         borderRadius: compact ? '16px' : '24px', backgroundColor: theme.tileBg,
-        boxShadow: isActivelySpeaking
-          ? `0 0 0 3px ${theme.ringColor}, 0 8px 32px rgba(0, 0, 0, 0.6)`
-          : '0 8px 32px rgba(0, 0, 0, 0.4)',
+        boxShadow: isActivelySpeaking ? SPEAKING_GLOW_SHADOW : SPEAKING_AMBIENT_SHADOW,
+        transition: SPEAKING_GLOW_TRANSITION,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         cursor: onDoubleClick || onPin ? 'pointer' : 'default',
         ...style,
       }}
     >
+      <SpeakingGlow participantId={participantId} hostRef={glowHostRef} />
       <SpeakingOverlay id={participantId} compact={compact} />
       {hasLiveVideo ? (
         <video

@@ -1,0 +1,148 @@
+import { useEffect, useRef, type RefObject } from 'react';
+
+// Toowix brand gradient (same diagonal stops as public/toowix-logo.svg's own paint0/paint1/paint2
+// gradients, indigo -> purple -> pink) used for the volume-reactive speaking glow on participant
+// cards, replacing the old flat single-color ringColor ring.
+const GLOW_INDIGO = '45, 1, 194'; // #2D01C2
+const GLOW_PURPLE = '149, 63, 250'; // #953FFA
+const GLOW_PINK = '254, 67, 165'; // #FE43A5
+
+// Static shape (how many shadow layers, their fixed offsets/direction) -- only the CSS custom
+// properties below (--tw-glow-blur/--tw-glow-spread/--tw-glow-a) change per audio-level tick, via
+// direct DOM writes (see applySpeakingGlowLevel), never through a React re-render. Keeping the
+// shadow LIST structure identical between the "on" and "off" states (just the vars changing) is
+// also what lets the boxShadow transition below interpolate smoothly instead of popping.
+//
+// `inset` is the whole point here: an inset shadow is confined to the element's own padding box
+// (and further clipped by its border-radius), so the glow bleeds INWARD from the card's edges --
+// matching the reference screenshots, where the tint sits inside the tile, never as a halo cast
+// outside it. A positive offset (dx, dy) leaves the uncovered/visible strip on the opposite edges
+// -- (8, 8) shows indigo along the top+left, (-8, -8) shows pink along the bottom+right, same
+// diagonal direction as the logo's own gradient -- with an all-around purple layer (0, 0) filling
+// the middle of that diagonal.
+export const SPEAKING_GLOW_SHADOW =
+  `inset 8px 8px var(--tw-glow-blur, 20px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, var(--tw-glow-a, 0.25)), ` +
+  `inset 0 0 calc(var(--tw-glow-blur, 20px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, var(--tw-glow-a, 0.25)), ` +
+  `inset -8px -8px var(--tw-glow-blur, 20px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, var(--tw-glow-a, 0.25)), ` +
+  '0 8px 32px rgba(0, 0, 0, 0.6)';
+
+export const SPEAKING_AMBIENT_SHADOW = '0 8px 32px rgba(0, 0, 0, 0.4)';
+
+export const SPEAKING_GLOW_TRANSITION = 'box-shadow 220ms ease-out';
+
+// Real reported bug: a literal fixed pixel reach (originally 20px for both low and loud volume)
+// was tuned by eye against a ~360px demo card and looked right there, but this same component
+// renders everywhere from ~90px-tall compact rail tiles up to a ~760px-tall full-screen solo stage
+// card -- 20px is a visible band on the former and imperceptible on the latter. The reach is now a
+// fraction of each card's OWN rendered size (see useSpeakingGlowSize below), so it reads as "the
+// same glow" at every size instead of a fixed pixel count; intensity (alpha/spread) still scales
+// with level alone, independent of size.
+const REACH_FRACTION = 0.14; // of the card's shorter side
+const MIN_REACH = 18;
+const MAX_REACH = 120;
+const MIN_SPREAD = 1;
+const MAX_SPREAD = 6;
+// Real reported issue: normal conversational volume rarely pins the mic meter near 1.0 -- a
+// linear alpha curve from MIN_ALPHA to MAX_ALPHA only reaches its brighter end at levels ordinary
+// speech almost never hits, so the glow looked (and was reported as) barely-there while actually
+// talking at a normal volume. INTENSITY_GAMMA < 1 front-loads the response curve (see
+// intensityCurve below) so a moderate level already reads as a clearly visible glow, reserving the
+// very top of MAX_ALPHA for genuinely loud speech.
+const MIN_ALPHA = 0.4;
+const MAX_ALPHA = 0.95;
+const INTENSITY_GAMMA = 0.55;
+// Exponential moving average factor -- smooths the store's quantised (0.05-step) level ticks into
+// a continuous glow instead of visibly stepping between them, same intent as MicLevelIcon's own
+// 80ms CSS transition on its fill height, just done in JS here since multiple shadow layers need
+// to move together.
+const SMOOTHING = 0.35;
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const intensityCurve = (t: number) => Math.pow(t, INTENSITY_GAMMA);
+
+// Writes the glow's current intensity straight to the host element's own style (CSS custom
+// properties the box-shadow above reads via var()) -- never through React state/props, so this can
+// run at mic-level tick rate (~10x/second) without re-rendering the card component that owns the
+// host element. Only alpha/spread (brightness) move here; the reach (--tw-glow-blur) is owned by
+// useSpeakingGlowSize below, since it depends on the card's size, not its current volume.
+export function applySpeakingGlowLevel(host: HTMLElement, rawLevel: number, smoothedRef: { current: number }) {
+  smoothedRef.current += (rawLevel - smoothedRef.current) * SMOOTHING;
+  const t = intensityCurve(Math.min(1, Math.max(0, smoothedRef.current)));
+
+  host.style.setProperty('--tw-glow-spread', `${lerp(MIN_SPREAD, MAX_SPREAD, t).toFixed(1)}px`);
+  host.style.setProperty('--tw-glow-a', lerp(MIN_ALPHA, MAX_ALPHA, t).toFixed(3));
+}
+
+// Shared hook: feeds a raw 0..1 level value (from wherever the caller already has it -- a store
+// subscription, a locally-polled meter) into the host's glow intensity. Keeping this in one place
+// means every call site uses the exact same smoothing/intensity mapping.
+export function useSpeakingGlowLevel(hostRef: RefObject<HTMLElement | null>, level: number) {
+  const smoothedRef = useRef(0);
+
+  useEffect(() => {
+    const host = hostRef.current;
+
+    if (host) {
+      applySpeakingGlowLevel(host, level, smoothedRef);
+    }
+  }, [level, hostRef]);
+}
+
+// Keeps the glow's reach proportional to the card's OWN rendered size (see REACH_FRACTION's own
+// comment) -- recomputed only when the card is actually resized, never on an audio-level tick, via
+// ResizeObserver rather than a render-time measurement so it stays correct through layout changes
+// (gallery reflow, window resize, entering/leaving presentation view) without re-rendering the card.
+export function useSpeakingGlowSize(hostRef: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    let observer: ResizeObserver | null = null;
+    let rafId: number | null = null;
+    let cancelled = false;
+
+    const apply = (host: HTMLElement, width: number, height: number) => {
+      const reach = Math.min(MAX_REACH, Math.max(MIN_REACH, Math.min(width, height) * REACH_FRACTION));
+
+      host.style.setProperty('--tw-glow-blur', `${reach.toFixed(1)}px`);
+    };
+
+    // Real reported bug: hostRef's identity never changes, so a plain `[hostRef]`-dependency
+    // effect only ever runs once, at THIS effect's own mount time -- if the caller's host element
+    // hasn't mounted yet (e.g. it's behind a later conditional render branch, as the solo-stage
+    // stage card is), `hostRef.current` reads null here, the effect bails, and the ResizeObserver
+    // is never attached for the rest of this component's lifetime. useSpeakingGlowLevel next door
+    // self-heals by re-running on every level tick, which is why only the blur/reach got stuck.
+    // Poll via rAF until the node actually exists, then attach exactly once -- cheap (stops the
+    // moment it finds the node) and works no matter when the host mounts relative to this hook.
+    const tryAttach = () => {
+      if (cancelled) {
+        return;
+      }
+      const host = hostRef.current;
+
+      if (!host) {
+        rafId = requestAnimationFrame(tryAttach);
+        return;
+      }
+      apply(host, host.clientWidth, host.clientHeight);
+      observer = new ResizeObserver(([entry]) => {
+        const box = entry.contentBoxSize?.[0];
+
+        if (box) {
+          apply(host, box.inlineSize, box.blockSize);
+        } else {
+          apply(host, entry.contentRect.width, entry.contentRect.height);
+        }
+      });
+      observer.observe(host);
+    };
+
+    tryAttach();
+
+    return () => {
+      cancelled = true;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      observer?.disconnect();
+    };
+  }, [hostRef]);
+}

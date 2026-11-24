@@ -71,7 +71,7 @@ import { MicDeviceButton, CameraDeviceButton } from '../components/meeting/Devic
 import { useCaptions, CaptionsOverlay, CaptionsToggleButton } from '../components/meeting/CaptionsOverlay';
 import { formatDuration } from '../lib/formatDuration';
 import { getNetworkStatusLabel, isMobileBrowser, isSlowNetworkConnection, getStartupNetworkProfile } from '../lib/networkQuality';
-import { isSpeakingNow } from '../lib/speakingStore';
+import { isSpeakingNow, useSpeaking, useAudioLevel } from '../lib/speakingStore';
 import {
   playChatMessageTone,
   playMeetingEndedTone,
@@ -115,6 +115,7 @@ import { getPref, notifyDesktop } from '../lib/meetingPrefs';
 import type { IVirtualBackground } from '../lib/virtualBackground/JitsiStreamBackgroundEffect';
 import { isOverlayDebugEnabled } from '../lib/virtualBackground/backgroundDebugTools';
 import { SpeakingOverlay } from '../components/SpeakingOverlay';
+import { SPEAKING_AMBIENT_SHADOW, SPEAKING_GLOW_SHADOW, SPEAKING_GLOW_TRANSITION, useSpeakingGlowLevel, useSpeakingGlowSize } from '../lib/speakingGlow';
 import { ScreenShareTile } from '../components/ScreenShareTile';
 import { applyFavicon, type FaviconMode } from '../lib/dynamicFavicon';
 const KeyboardShortcutsModal = lazy(() =>
@@ -2497,6 +2498,27 @@ export function MeetingRoomPage() {
 
   // Real-time media preview hook (cleaned up cleanly on joining)
   const media = useMediaPreview(hasJoined, micEnabled, videoEnabled, audioId, videoId);
+
+  // CONFIRMED BUG: media.level is useMediaPreview's OWN lobby-only level meter -- its mic-capture
+  // effect explicitly bails and calls setLevel(0) the moment `hasJoined` goes true (see
+  // useMediaPreview.ts), since ownership of the real mic track transfers to the conference at
+  // that point. So media.level reads 0 forever for the entire rest of any real call, no matter how
+  // loud or long someone actually talks -- it was never meant to track in-call speech at all. Read
+  // the real in-call level from the shared speaking store instead (the same 'local' key
+  // attachLocalSpeaking already feeds via its own AudioContext analyser once joined).
+  const localAudioLevel = useAudioLevel('local');
+
+  // Volume-reactive speaking glow for the solo-participant stage card (see its own JSX below) --
+  // called unconditionally here (not inside the `if (hasJoined)` render branch) since hasJoined
+  // toggling can't change this component's hook order.
+  const soloStageGlowRef = useRef<HTMLDivElement | null>(null);
+  useSpeakingGlowLevel(soloStageGlowRef, localAudioLevel);
+  useSpeakingGlowSize(soloStageGlowRef);
+  // Store-driven (onset/hold hysteresis), same value SpeakingOverlay's own badge below already
+  // reads -- ORed into the solo card's raw, un-debounced `isSpeaking` (see its own declaration)
+  // so the glow's visibility can't flicker out of sync with that badge during a normal pause
+  // between words.
+  const soloStageSpeakingStore = useSpeaking('local');
 
   // Persist every device choice as it's made, and drop a saved device id that no longer exists
   // (unplugged headset, swapped phone) back to "default" instead of silently failing. The mic/
@@ -5277,7 +5299,9 @@ export function MeetingRoomPage() {
 
   if (hasJoined) {
     const participantInitial = (displayName.trim() || 'Guest').charAt(0).toUpperCase();
-    const isSpeaking = media.level > 0.05 && !inCallMuted;
+    // See localAudioLevel's own comment above -- media.level is frozen at 0 for the entire
+    // duration of a real call, so this must read the shared in-call level, not the lobby preview.
+    const isSpeaking = localAudioLevel > 0.05 && !inCallMuted;
     const localTheme = getParticipantColorTheme(displayName || 'You', 0);
 
     return (
@@ -6392,6 +6416,7 @@ export function MeetingRoomPage() {
             /* Single Participant Stage Card (24px radius, 16:9 ratio, matched to avatar icon color) */
             <div
               className="tw-solo"
+              ref={soloStageGlowRef}
               style={{
                 flex: 1,
                 maxWidth: activePanel ? 'calc(100% - 380px)' : '1368px',
@@ -6402,10 +6427,8 @@ export function MeetingRoomPage() {
                 overflow: 'hidden',
                 position: 'relative',
                 backgroundColor: localTheme.tileBg,
-                boxShadow: isSpeaking
-                  ? `0 0 0 3px ${localTheme.ringColor}, 0 8px 32px rgba(0, 0, 0, 0.6)`
-                  : '0 8px 32px rgba(0, 0, 0, 0.4)',
-                transition: 'max-width 0.25s ease, box-shadow 0.2s ease, background-color 0.25s ease',
+                boxShadow: (isSpeaking || soloStageSpeakingStore) ? SPEAKING_GLOW_SHADOW : SPEAKING_AMBIENT_SHADOW,
+                transition: `max-width 0.25s ease, background-color 0.25s ease, ${SPEAKING_GLOW_TRANSITION}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
