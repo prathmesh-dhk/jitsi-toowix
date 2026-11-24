@@ -30,11 +30,11 @@ const GLOW_PINK = '254, 67, 165'; // #FE43A5
 // approximate that continuous blend by overlapping/alpha-compositing five adjacent steps instead
 // of three widely-spaced ones.
 export const SPEAKING_GLOW_SHADOW =
-  `inset 8px 8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, var(--tw-glow-a, 0.25)), ` +
-  `inset 4px 4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, var(--tw-glow-a, 0.25)), ` +
-  `inset 0 0 calc(var(--tw-glow-blur, 12px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, var(--tw-glow-a, 0.25)), ` +
-  `inset -4px -4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, var(--tw-glow-a, 0.25)), ` +
-  `inset -8px -8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, var(--tw-glow-a, 0.25)), ` +
+  `inset 8px 8px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, var(--tw-glow-a, 0.25)), ` +
+  `inset 4px 4px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, var(--tw-glow-a, 0.25)), ` +
+  `inset 0 0 calc(var(--tw-glow-blur, 8px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, var(--tw-glow-a, 0.25)), ` +
+  `inset -4px -4px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, var(--tw-glow-a, 0.25)), ` +
+  `inset -8px -8px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, var(--tw-glow-a, 0.25)), ` +
   '0 8px 32px rgba(0, 0, 0, 0.6)';
 
 // CONFIRMED BUG: this used to be a single flat '0 8px 32px rgba(0,0,0,0.4)' layer, directly
@@ -45,11 +45,11 @@ export const SPEAKING_GLOW_SHADOW =
 // offsets/blur-var, alpha simply at 0) lets every layer -- color, blur, spread -- interpolate
 // continuously, producing a genuine cross-fade in both directions.
 export const SPEAKING_AMBIENT_SHADOW =
-  `inset 8px 8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, 0), ` +
-  `inset 4px 4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, 0), ` +
-  `inset 0 0 calc(var(--tw-glow-blur, 12px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, 0), ` +
-  `inset -4px -4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, 0), ` +
-  `inset -8px -8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, 0), ` +
+  `inset 8px 8px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, 0), ` +
+  `inset 4px 4px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, 0), ` +
+  `inset 0 0 calc(var(--tw-glow-blur, 8px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, 0), ` +
+  `inset -4px -4px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, 0), ` +
+  `inset -8px -8px var(--tw-glow-blur, 8px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, 0), ` +
   '0 8px 32px rgba(0, 0, 0, 0.4)';
 
 // ease-in-out so the cross-fade reads as a gentle glow settling in/out rather than a sudden,
@@ -59,11 +59,11 @@ export const SPEAKING_AMBIENT_SHADOW =
 export const SPEAKING_GLOW_TRANSITION = 'box-shadow 260ms ease-in-out';
 
 // Real reported issue: the glow's reach was a wide, diffuse wash that scaled with the card's own
-// size (up to 120px on a large stage tile) -- reduced and fixed to a slim, constant 12px band
+// size (up to 120px on a large stage tile) -- reduced and fixed to a slim, constant 8px band
 // around the tile's edge at every card size, rather than a size-scaled diffuse glow.
 const REACH_FRACTION = 0.14; // of the card's shorter side
-const MIN_REACH = 12;
-const MAX_REACH = 12;
+const MIN_REACH = 8;
+const MAX_REACH = 8;
 const MIN_SPREAD = 1;
 const MAX_SPREAD = 6;
 // Real reported issue: normal conversational volume rarely pins the mic meter near 1.0 -- a
