@@ -222,6 +222,20 @@ function MeetingParticipantCardImpl({
           </div>
         </div>
       )}
+      {/* Real reported bug: an inset box-shadow paints behind a box's own children (CSS always
+          paints background/border/box-shadow before content), so the glow above was invisible
+          whenever the video (or this avatar background) filled the tile edge-to-edge -- there was
+          no visible margin left for an inward-bleeding tint to show through. This overlay is
+          rendered AFTER all tile content, so its own (identical) box-shadow paints on top instead
+          of underneath it. pointerEvents: 'none' keeps it from blocking clicks/drag on the card. */}
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute', inset: 0, borderRadius: 'inherit', pointerEvents: 'none',
+          boxShadow: isActivelySpeaking ? SPEAKING_GLOW_SHADOW : SPEAKING_AMBIENT_SHADOW,
+          transition: SPEAKING_GLOW_TRANSITION,
+        }}
+      />
       <div style={{
         position: 'absolute', left: compact ? '8px' : '16px', bottom: compact ? '8px' : '16px',
         maxWidth: 'calc(100% - 24px)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

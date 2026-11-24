@@ -4,7 +4,9 @@ import { useEffect, useRef, type RefObject } from 'react';
 // gradients, indigo -> purple -> pink) used for the volume-reactive speaking glow on participant
 // cards, replacing the old flat single-color ringColor ring.
 const GLOW_INDIGO = '45, 1, 194'; // #2D01C2
+const GLOW_INDIGO_PURPLE = '97, 32, 222'; // midpoint, indigo -> purple
 const GLOW_PURPLE = '149, 63, 250'; // #953FFA
+const GLOW_PURPLE_PINK = '202, 65, 208'; // midpoint, purple -> pink
 const GLOW_PINK = '254, 67, 165'; // #FE43A5
 
 // Static shape (how many shadow layers, their fixed offsets/direction) -- only the CSS custom
@@ -18,28 +20,50 @@ const GLOW_PINK = '254, 67, 165'; // #FE43A5
 // matching the reference screenshots, where the tint sits inside the tile, never as a halo cast
 // outside it. A positive offset (dx, dy) leaves the uncovered/visible strip on the opposite edges
 // -- (8, 8) shows indigo along the top+left, (-8, -8) shows pink along the bottom+right, same
-// diagonal direction as the logo's own gradient -- with an all-around purple layer (0, 0) filling
-// the middle of that diagonal.
+// diagonal direction as the logo's own gradient.
+//
+// CONFIRMED BUG: 3 widely-spaced layers (indigo / purple / pink, each a flat solid patch) read as
+// two or three separate colored blobs rather than one continuous blend, since box-shadow has no
+// true gradient interpolation between layers -- unlike the logo's own actual SVG linearGradient,
+// which blends every intermediate shade continuously. Two extra layers at the two literal RGB
+// midpoints (indigo-purple, purple-pink), placed at intermediate offsets along the same diagonal,
+// approximate that continuous blend by overlapping/alpha-compositing five adjacent steps instead
+// of three widely-spaced ones.
 export const SPEAKING_GLOW_SHADOW =
-  `inset 8px 8px var(--tw-glow-blur, 20px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, var(--tw-glow-a, 0.25)), ` +
-  `inset 0 0 calc(var(--tw-glow-blur, 20px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, var(--tw-glow-a, 0.25)), ` +
-  `inset -8px -8px var(--tw-glow-blur, 20px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, var(--tw-glow-a, 0.25)), ` +
+  `inset 8px 8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, var(--tw-glow-a, 0.25)), ` +
+  `inset 4px 4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, var(--tw-glow-a, 0.25)), ` +
+  `inset 0 0 calc(var(--tw-glow-blur, 12px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, var(--tw-glow-a, 0.25)), ` +
+  `inset -4px -4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, var(--tw-glow-a, 0.25)), ` +
+  `inset -8px -8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, var(--tw-glow-a, 0.25)), ` +
   '0 8px 32px rgba(0, 0, 0, 0.6)';
 
-export const SPEAKING_AMBIENT_SHADOW = '0 8px 32px rgba(0, 0, 0, 0.4)';
+// CONFIRMED BUG: this used to be a single flat '0 8px 32px rgba(0,0,0,0.4)' layer, directly
+// contradicting this file's own comment above about keeping the shadow list structure identical --
+// a browser cannot smoothly interpolate a box-shadow transition between lists of different lengths,
+// so every speaking on/off flip SNAPPED instantly instead of fading, no matter how long
+// SPEAKING_GLOW_TRANSITION's duration was set to. Matching the same layer structure (same
+// offsets/blur-var, alpha simply at 0) lets every layer -- color, blur, spread -- interpolate
+// continuously, producing a genuine cross-fade in both directions.
+export const SPEAKING_AMBIENT_SHADOW =
+  `inset 8px 8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO}, 0), ` +
+  `inset 4px 4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_INDIGO_PURPLE}, 0), ` +
+  `inset 0 0 calc(var(--tw-glow-blur, 12px) * 1.2) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE}, 0), ` +
+  `inset -4px -4px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PURPLE_PINK}, 0), ` +
+  `inset -8px -8px var(--tw-glow-blur, 12px) var(--tw-glow-spread, 0px) rgba(${GLOW_PINK}, 0), ` +
+  '0 8px 32px rgba(0, 0, 0, 0.4)';
 
-export const SPEAKING_GLOW_TRANSITION = 'box-shadow 220ms ease-out';
+// ease-in-out so the cross-fade reads as a gentle glow settling in/out rather than a sudden,
+// eye-catching pop -- paired with the now-matching shadow layer structure above, which is what
+// actually makes a smooth fade possible at all. 420ms read as too slow/laggy once it was actually
+// smooth; 260ms keeps the same gentle easing curve while settling noticeably quicker.
+export const SPEAKING_GLOW_TRANSITION = 'box-shadow 260ms ease-in-out';
 
-// Real reported bug: a literal fixed pixel reach (originally 20px for both low and loud volume)
-// was tuned by eye against a ~360px demo card and looked right there, but this same component
-// renders everywhere from ~90px-tall compact rail tiles up to a ~760px-tall full-screen solo stage
-// card -- 20px is a visible band on the former and imperceptible on the latter. The reach is now a
-// fraction of each card's OWN rendered size (see useSpeakingGlowSize below), so it reads as "the
-// same glow" at every size instead of a fixed pixel count; intensity (alpha/spread) still scales
-// with level alone, independent of size.
+// Real reported issue: the glow's reach was a wide, diffuse wash that scaled with the card's own
+// size (up to 120px on a large stage tile) -- reduced and fixed to a slim, constant 12px band
+// around the tile's edge at every card size, rather than a size-scaled diffuse glow.
 const REACH_FRACTION = 0.14; // of the card's shorter side
-const MIN_REACH = 18;
-const MAX_REACH = 120;
+const MIN_REACH = 12;
+const MAX_REACH = 12;
 const MIN_SPREAD = 1;
 const MAX_SPREAD = 6;
 // Real reported issue: normal conversational volume rarely pins the mic meter near 1.0 -- a
