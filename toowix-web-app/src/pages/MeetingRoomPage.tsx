@@ -7832,6 +7832,11 @@ export function MeetingRoomPage() {
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '4px',
+                  // Anchored above the toolbar (bottom: 56px) with no height cap, this ran off the
+                  // top of a short browser window before clipping/overflowing instead of scrolling.
+                  // calc() leaves headroom above (the anchor offset) and below (viewport edge).
+                  maxHeight: 'calc(100dvh - 96px)',
+                  overflowY: 'auto',
                 }}
               >
                 <button className="tw-mobile-only" onClick={() => { setShowMoreMenu(false); setActivePanel(activePanel === 'chat' ? null : 'chat'); }} style={menuButtonStyle(activePanel === 'chat')}>
@@ -7920,28 +7925,6 @@ export function MeetingRoomPage() {
                     Make someone a moderator
                   </button>
                 )}
-                <button
-                  onClick={() => {
-                    setShowSettingsModal(true);
-                    setShowMoreMenu(false);
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '8px 12px',
-                    background: 'transparent',
-                    border: 'none',
-                    borderRadius: '8px',
-                    color: '#E8EAED',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
-                >
-                  <Settings size={16} />
-                  Settings
-                </button>
                 <div
                   style={{
                     margin: '4px 0',
@@ -7988,6 +7971,32 @@ export function MeetingRoomPage() {
                     })}
                   </div>
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#9AA0A6', fontSize: '11px', padding: '4px 10px 0' }}>
+                  <Settings size={14} />
+                  Advanced settings
+                </div>
+                <button
+                  onClick={() => {
+                    setShowSettingsModal(true);
+                    setShowMoreMenu(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    borderRadius: '8px',
+                    color: '#E8EAED',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <Settings size={16} />
+                  Settings
+                </button>
                 {isModerator && (
                   <button
                     onClick={() => {
