@@ -321,7 +321,7 @@ export function useMediaPreview(
           return;
         }
 
-        const newTrack = media.getVideoTracks()[0];
+        let newTrack = media.getVideoTracks()[0];
         if (!newTrack) throw new Error('No video track returned');
         verifyCameraCaptureOrientation(newTrack);
 
@@ -329,6 +329,54 @@ export function useMediaPreview(
           ...getCameraCaptureDebugInfo(newTrack), ...getCameraOrientationDebugState(),
           path: 'lobby-fresh', requestedAtAcquisition: successfulRequest
         });
+
+        // CONFIRMED BUG (cross-OS, Mac/Safari especially): explicitVideoId above is resolved from
+        // enumerateDevices() BEFORE camera permission is granted. Safari (and some other browsers)
+        // withhold real deviceIds entirely until permission is granted, so on a genuinely first-ever
+        // join (no stored preference) explicitVideoId comes back undefined and the request above
+        // fell through to a bare, unconstrained attempt -- the browser's own "pick a default camera"
+        // resolution, which is exactly the unreliable behavior this file's top comment already
+        // documents for the SAME problem pre-permission. Now that permission is granted, the device
+        // list below is authoritative. If we went in blind (no explicit id AND no stored user
+        // preference), re-resolve against that authoritative list and, if the camera actually
+        // acquired isn't the one the list considers first/default, re-request with that specific
+        // deviceId explicitly -- the same treatment a manual reselect already gets.
+        try {
+          const list = await navigator.mediaDevices.enumerateDevices();
+          if (active) setDevices(list);
+
+          if (!explicitVideoId && !videoId) {
+            const resolvedId = list.find((d) => d.kind === 'videoinput' && d.deviceId)?.deviceId;
+            const actualId = newTrack.getSettings?.().deviceId;
+
+            if (resolvedId && resolvedId !== actualId) {
+              const reattempts: MediaStreamConstraints[] = [
+                { video: { deviceId: { exact: resolvedId }, ...getPreferredCameraCaptureConstraints() } },
+                { video: { deviceId: { exact: resolvedId }, ...getFallbackCameraCaptureConstraints() } },
+              ];
+              for (const attempt of reattempts) {
+                try {
+                  const resolvedMedia = await navigator.mediaDevices.getUserMedia(attempt);
+                  if (!active) {
+                    resolvedMedia.getTracks().forEach((t) => t.stop());
+                    break;
+                  }
+                  media.getVideoTracks().forEach((t) => t.stop());
+                  media = resolvedMedia;
+                  newTrack = media.getVideoTracks()[0];
+                  verifyCameraCaptureOrientation(newTrack);
+                  logGalleryDebug('local capture settings', {
+                    ...getCameraCaptureDebugInfo(newTrack), ...getCameraOrientationDebugState(),
+                    path: 'lobby-post-permission-reresolve',
+                  });
+                  break;
+                } catch {
+                  // Keep the originally-acquired track if the resolved device can't be re-opened.
+                }
+              }
+            }
+          }
+        } catch {}
 
         // Stop previous video track
         if (videoTrackRef.current) {
@@ -339,11 +387,6 @@ export function useMediaPreview(
         setCameraError('');
 
         updateCombinedStream();
-
-        try {
-          const list = await navigator.mediaDevices.enumerateDevices();
-          if (active) setDevices(list);
-        } catch {}
       } catch (err) {
         if (!active) return;
         setCameraError(getMediaErrorMessage('Camera', err));
