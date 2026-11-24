@@ -3869,6 +3869,18 @@ export function MeetingRoomPage() {
 
     return remoteParticipants.find((participant) => participant.id === pinnedParticipantId) || remoteParticipants[0] || null;
   }, [ pinnedParticipantId, remoteParticipants ]);
+  // Speaker-view's own hand-rolled pinned-stage card (below, outside MeetingParticipantCard) never
+  // had the volume-reactive glow at all -- only the solo-stage card and MeetingParticipantCard
+  // itself got it. useSpeaking/useAudioLevel already safely accept undefined (see their own
+  // signatures), so these are safe to call unconditionally here regardless of whether speaker view
+  // is the active branch. The pinned card can show EITHER the local user or a remote participant,
+  // so its glow has to react to whichever one is actually pinned, not always the local mic.
+  const isPinnedLocal = pinnedParticipantId === 'local';
+  const pinnedRemoteSpeaking = useSpeaking(pinnedRemoteParticipant?.id);
+  const pinnedRemoteAudioLevel = useAudioLevel(pinnedRemoteParticipant?.id || '');
+  const pinnedStageGlowRef = useRef<HTMLDivElement | null>(null);
+  useSpeakingGlowLevel(pinnedStageGlowRef, isPinnedLocal ? localAudioLevel : pinnedRemoteAudioLevel);
+  useSpeakingGlowSize(pinnedStageGlowRef);
   const pinnedRemoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const setPinnedRemoteVideoNode = useCallback((node: HTMLVideoElement | null) => {
     pinnedRemoteVideoRef.current = node;
@@ -6042,7 +6054,15 @@ export function MeetingRoomPage() {
                       theme={getParticipantColorTheme(primaryShare.kind === 'local' ? (displayName || 'You') : presenterCameraParticipant!.name, 0)}
                       compact
                       mirrored={primaryShare.kind === 'local'}
-                      style={{ width: '100%', height: '100%' }}
+                      // Real reported bug: the glow (and its own inset box-shadow) concentrates
+                      // color right at the card's two diagonal CORNERS -- exactly the regions this
+                      // wrapper's circular overflow:hidden clips away, since the card's own default
+                      // border-radius (16px, a rounded rect) doesn't match this wrapper's 50%
+                      // circle. Overriding borderRadius to 50% here makes the card's own shape (and
+                      // its glow overlay, which inherits it) an actual circle, so the diagonal glow
+                      // wraps the visible circular edge instead of being clipped off at corners
+                      // that no longer exist.
+                      style={{ width: '100%', height: '100%', borderRadius: '50%' }}
                     />
                   </div>
                 )}
@@ -6612,6 +6632,7 @@ export function MeetingRoomPage() {
                   <>
                     {/* Main pinned stage */}
                     <div
+                      ref={pinnedStageGlowRef}
                       // Double-click the big stage tile to go back to tile view -- the same
                       // gesture that pinned it in the first place toggles it back off.
                       onDoubleClick={() => setTileViewEnabled(true)}
@@ -6770,6 +6791,20 @@ export function MeetingRoomPage() {
                           <MicOff size={16} color="#F87171" />
                         </div>
                       )}
+                      {/* Real reported bug: speaker/"toggle" view's pinned stage never had the
+                          volume-reactive glow at all (not even the old flat ring) -- this card is
+                          hand-rolled outside MeetingParticipantCard, which is where the glow lives,
+                          so it never inherited the fix. Same overlay-after-content pattern as the
+                          solo-stage card above so it paints over the video/avatar instead of
+                          hidden behind it. */}
+                      <div
+                        aria-hidden
+                        style={{
+                          position: 'absolute', inset: 0, borderRadius: 'inherit', pointerEvents: 'none',
+                          boxShadow: (isLocalPinned ? soloStageSpeakingStore : pinnedRemoteSpeaking) ? SPEAKING_GLOW_SHADOW : SPEAKING_AMBIENT_SHADOW,
+                          transition: SPEAKING_GLOW_TRANSITION,
+                        }}
+                      />
                     </div>
 
                     {/* Filmstrip sidebar: local tile + everyone else, click to pin */}
