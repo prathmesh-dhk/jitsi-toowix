@@ -24,8 +24,12 @@ export interface IPipTile {
   isLocal: boolean;
 }
 
-// Live remote camera inside the Picture-in-Picture window.
-export function PipRemoteVideo({ stream }: { stream: MediaStream }) {
+// Live remote camera inside the Picture-in-Picture window. `mirrored` is only ever passed for the
+// local tile -- every other local self-view in the app (MeetingParticipantCard, the main stage,
+// the presenter floating circle) renders the camera flipped like a mirror; this one didn't, so
+// switching into PiP made your own camera appear to "flip" relative to how it just looked in the
+// main meeting view, even though nothing about the actual camera/outgoing stream changed.
+export function PipRemoteVideo({ stream, mirrored = false }: { stream: MediaStream; mirrored?: boolean }) {
   const nodeRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -43,7 +47,7 @@ export function PipRemoteVideo({ stream }: { stream: MediaStream }) {
       autoPlay
       playsInline
       muted
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', transform: mirrored ? 'scaleX(-1)' : undefined }}
     />
   );
 }
@@ -82,7 +86,7 @@ function PipTile({ tile, theme }: { tile: IPipTile; theme: { tileBg: string; ava
       }}
     >
       {tile.video && tile.stream ? (
-        <PipRemoteVideo stream={tile.stream} />
+        <PipRemoteVideo stream={tile.stream} mirrored={tile.isLocal} />
       ) : (
         <div
           style={{
@@ -670,7 +674,7 @@ export const DocumentPipContent = memo(function DocumentPipContent({
                   autoPlay
                   playsInline
                   muted
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
                 />
               ) : (
                 <div
@@ -734,7 +738,7 @@ export const DocumentPipContent = memo(function DocumentPipContent({
                 autoPlay
                 playsInline
                 muted
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }}
               />
             ) : (
               <div
