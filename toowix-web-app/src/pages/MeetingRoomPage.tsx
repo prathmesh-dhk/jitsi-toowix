@@ -58,6 +58,8 @@ import {
   Keyboard,
   Code2,
   Volume2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { fetchChatHistory, resolveChatImageUrl, resolveChatFileUrl } from '../lib/chatApi';
 // Lazy-loaded (T1-1, same pattern/reasoning as the modals below): the chat panel (845 lines) is
@@ -142,6 +144,11 @@ import { getParticipantColorTheme, type IParticipantColorTheme } from '../lib/pa
 import { useCameraVideoOrientation } from '../lib/videoOrientation';
 import { logGalleryDebug } from '../lib/galleryOrientationDebug';
 import { GalleryOrientationDebugOverlay } from '../components/GalleryOrientationDebugOverlay';
+// Imported from its own tiny module (not from the component file below) so drawPipFrame's
+// canvas/video fallback path (Safari/iOS, no documentPictureInPicture) can page its own
+// participant stack with the exact same page size, without statically pulling in any of that
+// lazy-loaded component module's own code into the main bundle.
+import { PIP_PAGE_SIZE } from '../lib/pipConstants';
 // Lazy-loaded (T1-1): the document Picture-in-Picture view (717 lines) is only ever rendered
 // inside the detached PiP window once the user actually activates it (already gated on
 // documentPipActive && documentPipWindowRef.current at its render site, unchanged by this).
@@ -1048,6 +1055,16 @@ export function MeetingRoomPage() {
   const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipRafRef = useRef<number>(0);
   const pipTimerRef = useRef<any>(null);
+  // Real reported request: the canvas/video fallback PiP (Safari/iOS, no documentPictureInPicture
+  // -- see the comment on this same component's main PiP setup) draws ALL participants stacked
+  // vertically with no paging at all, unlike the real-DOM documentPictureInPicture path
+  // (PipMultiParticipantPages), which the same request asked to be pageable + swipeable. This path
+  // can't receive drag gestures at all (it's just pixels piped into a native OS floating window --
+  // see drawPipFrame's own comment at its paging logic for why), so paging here is instead driven
+  // by a trigger on the MAIN app page (the prev/next buttons added near the PiP toggle), and the
+  // page CHANGE itself is animated across several drawn canvas frames rather than cut instantly.
+  const pipPageIndexRef = useRef(0);
+  const pipPageTransitionRef = useRef<{ from: number; to: number; startedAt: number } | null>(null);
   // Which window object's setInterval/clearInterval actually owns pipTimerRef's handle -- see
   // startPipDraw's own comment for why this is no longer always the ambient (opener) window.
   const pipTimerWindowRef = useRef<any>(null);
@@ -1616,15 +1633,60 @@ export function MeetingRoomPage() {
           raisedHand: !!r.raisedHand,
         })),
       ];
-      const count = allParticipants.length;
-      const availH = H - HEADER_H - TOOLBAR_H - PADDING * 2 - GAP * (count - 1);
-      const cardH = Math.floor(availH / Math.max(count, 1));
+      // Draws one PAGE's worth of participants (at most PIP_PAGE_SIZE), stacked vertically,
+      // shifted horizontally by xOffset -- xOffset is only ever non-zero mid-transition below, so
+      // a settled (non-transitioning) page always draws at xOffset 0 exactly like before paging
+      // existed. Sizing cards off THIS page's own count (not the grand total) is a deliberate
+      // change from the old no-paging behavior: since no page ever shows more than
+      // PIP_PAGE_SIZE now, cards stay comfortably sized instead of shrinking forever as more
+      // people join.
+      const drawParticipantPage = (page: typeof allParticipants, xOffset: number) => {
+        const pageCount = page.length;
+        const availH = H - HEADER_H - TOOLBAR_H - PADDING * 2 - GAP * (pageCount - 1);
+        const cardH = Math.floor(availH / Math.max(pageCount, 1));
 
-      allParticipants.forEach((p, i) => {
-        const cy = HEADER_H + PADDING + i * (cardH + GAP);
-        const videoEl = p.isLocal ? localVid : pipRemoteVideoRefs.current.get(p.id) || null;
-        drawParticipantCard(ctx, PADDING, cy, W - PADDING * 2, cardH, p.name, p.theme, videoEl, p.muted, p.raisedHand, isSpeakingNow(p.id));
-      });
+        page.forEach((p, i) => {
+          const cy = HEADER_H + PADDING + i * (cardH + GAP);
+          const videoEl = p.isLocal ? localVid : pipRemoteVideoRefs.current.get(p.id) || null;
+          drawParticipantCard(ctx, PADDING + xOffset, cy, W - PADDING * 2, cardH, p.name, p.theme, videoEl, p.muted, p.raisedHand, isSpeakingNow(p.id));
+        });
+      };
+      const pageCount = Math.max(1, Math.ceil(allParticipants.length / PIP_PAGE_SIZE));
+
+      if (pipPageIndexRef.current > pageCount - 1) pipPageIndexRef.current = Math.max(0, pageCount - 1);
+
+      const pageOf = (index: number) => allParticipants.slice(index * PIP_PAGE_SIZE, index * PIP_PAGE_SIZE + PIP_PAGE_SIZE);
+      const transition = pipPageTransitionRef.current;
+
+      // Clipped to the content area only (not the header/toolbar) so a mid-transition frame can
+      // never draw a card sliding out over either bar -- this is the canvas equivalent of the
+      // DOM carousel's own `overflow: hidden` wrapper.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, HEADER_H, W, H - HEADER_H - TOOLBAR_H);
+      ctx.clip();
+
+      if (transition) {
+        const PIP_PAGE_TRANSITION_MS = 320;
+        const elapsed = performance.now() - transition.startedAt;
+
+        if (elapsed >= PIP_PAGE_TRANSITION_MS) {
+          pipPageTransitionRef.current = null;
+          drawParticipantPage(pageOf(transition.to), 0);
+        } else {
+          // Same ease-out cubic the DOM carousel's own settle transition approximates, applied
+          // here across the drawn canvas frames instead of a CSS transition.
+          const t = elapsed / PIP_PAGE_TRANSITION_MS;
+          const eased = 1 - (1 - t) ** 3;
+          const dir = transition.to > transition.from ? 1 : -1;
+
+          drawParticipantPage(pageOf(transition.from), -dir * eased * W);
+          drawParticipantPage(pageOf(transition.to), dir * (1 - eased) * W);
+        }
+      } else {
+        drawParticipantPage(pageOf(pipPageIndexRef.current), 0);
+      }
+      ctx.restore();
     }
 
     // Header bar: meeting name + count overlay
@@ -1642,6 +1704,27 @@ export function MeetingRoomPage() {
     const isVideoOn = pipInCallVideoRef.current ?? true;
     drawPipToolbar(ctx, W, H, localMuted, isVideoOn, localHandRaised);
   };
+
+  // Real reported request: the canvas/video fallback PiP can't receive gestures at all (see
+  // pipPageIndexRef's own comment), so paging it has to be triggered from here, the MAIN app
+  // page's normal DOM -- not from inside the PiP surface itself. Direction is +1 (next) or -1
+  // (previous); clamped, no wraparound, same as the real-DOM carousel's own drag behavior.
+  // Recomputes the page count from the LIVE participant ref (not a stale render-time value) since
+  // this can be called any time PiP is open, long after the component that renders the trigger
+  // button last re-rendered.
+  const switchPipPage = useCallback((direction: 1 | -1) => {
+    const totalPipParticipants = pipRemoteParticipantsRef.current.length + 1;
+    const pageCount = Math.max(1, Math.ceil(totalPipParticipants / PIP_PAGE_SIZE));
+    const from = pipPageIndexRef.current;
+    const to = Math.max(0, Math.min(pageCount - 1, from + direction));
+
+    if (to === from) return;
+    pipPageTransitionRef.current = { from, to, startedAt: performance.now() };
+    pipPageIndexRef.current = to;
+    // Draw immediately instead of waiting for the next 100ms interval tick, so the transition
+    // visibly starts the instant the button is clicked.
+    drawPipFrame();
+  }, []);
 
   // PiP is a secondary view. Ten frames per second keeps names/active-video transitions smooth
   // while leaving more CPU/GPU headroom for the actual WebRTC encode/decode pipeline.
@@ -8102,6 +8185,38 @@ export function MeetingRoomPage() {
                     <LayoutGrid size={16} />
                     {isPiPActive ? 'Exit Picture-in-Picture' : 'Picture-in-Picture'}
                   </button>
+                )}
+                {/* Real reported request: the canvas/video fallback PiP (Safari/iOS, no
+                    documentPictureInPicture -- documentPipActive is false here) can't receive any
+                    drag/touch gesture at all, since it's just pixels piped into a native OS
+                    floating window. These two buttons are the trigger for that path instead, only
+                    shown while that specific PiP mode is the one actually active and there's more
+                    than one page of participants to page through. */}
+                {isPiPActive && !documentPipActive && Math.ceil((remoteParticipants.length + 1) / PIP_PAGE_SIZE) > 1 && (
+                  <div style={{ display: 'flex', gap: '6px', padding: '4px 12px 8px' }}>
+                    <button
+                      onClick={() => switchPipPage(-1)}
+                      title="Previous participants"
+                      style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
+                        padding: '6px', background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '8px',
+                        color: '#E8EAED', fontSize: '12px', cursor: 'pointer',
+                      }}
+                    >
+                      <ChevronLeft size={14} /> Prev
+                    </button>
+                    <button
+                      onClick={() => switchPipPage(1)}
+                      title="Next participants"
+                      style={{
+                        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
+                        padding: '6px', background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '8px',
+                        color: '#E8EAED', fontSize: '12px', cursor: 'pointer',
+                      }}
+                    >
+                      Next <ChevronRight size={14} />
+                    </button>
+                  </div>
                 )}
                 <button
                   onClick={() => {

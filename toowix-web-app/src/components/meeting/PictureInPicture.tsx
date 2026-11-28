@@ -1,14 +1,17 @@
 // Extracted from MeetingRoomPage.tsx (Track 3, Phase 2, item 2). Both pieces are pure/presentational
 // -- everything they need comes in as props, no closures over the page's own state -- which is what
 // made this the second-lowest-risk extraction in the plan. Moved verbatim; no behavior change.
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, memo, type PointerEvent as ReactPointerEvent } from 'react';
 import { ArrowLeft, Hand, Mic, MicOff, Phone, Video, VideoOff } from 'lucide-react';
 import { getParticipantColorTheme } from '../../lib/participantColorTheme';
+import { useSpeaking, useAudioLevel } from '../../lib/speakingStore';
+import { SPEAKING_AMBIENT_SHADOW, SPEAKING_GLOW_SHADOW, SPEAKING_GLOW_TRANSITION, useSpeakingGlowLevel, useSpeakingGlowSize } from '../../lib/speakingGlow';
+// Kept in its own tiny module, not defined here, so MeetingRoomPage.tsx's canvas/video fallback
+// PiP path (drawPipFrame) can import this one page-size constant statically without pulling in
+// this whole file's lazy-loaded component code into the main bundle.
+import { PIP_PAGE_SIZE } from '../../lib/pipConstants';
 
-// Matches the existing 2x2 grid's own visual design (local tile + up to 3 remote tiles) --
-// keeping the page size at 4 means a meeting with 4 or fewer participants looks identical to
-// before this change, no behavior change for the common case.
-const PIP_PAGE_SIZE = 4;
+export { PIP_PAGE_SIZE };
 
 export interface IPipTile {
   id: string;
@@ -51,6 +54,18 @@ export function PipRemoteVideo({ stream }: { stream: MediaStream }) {
 function PipTile({ tile, theme }: { tile: IPipTile; theme: { tileBg: string; avatarBg: string } }) {
   const initial = (tile.isLocal ? 'You' : tile.name).trim().charAt(0).toUpperCase() || 'P';
   const label = tile.isLocal ? `You ${tile.muted ? '(Muted)' : ''}` : (tile.name.length > 12 ? `${tile.name.slice(0, 11)}…` : tile.name);
+
+  // Real reported request: the main meeting view's volume-reactive speaking glow never reached
+  // the PiP window's own tiles. The PiP window shares the SAME JS/React context as the opener
+  // (that's what lets this file portal React components into it at all), so the existing
+  // speakingStore/speakingGlow modules already track live state for every one of these ids here
+  // too -- no separate wiring needed, just reusing them the same way MeetingParticipantCard does.
+  const isSpeaking = useSpeaking(tile.id);
+  const audioLevel = useAudioLevel(tile.id);
+  const glowRef = useRef<HTMLDivElement | null>(null);
+
+  useSpeakingGlowLevel(glowRef, audioLevel);
+  useSpeakingGlowSize(glowRef);
 
   return (
     <div
@@ -145,6 +160,18 @@ function PipTile({ tile, theme }: { tile: IPipTile; theme: { tileBg: string; ava
           ✕
         </span>
       )}
+      {/* Same overlay-after-content pattern as MeetingParticipantCard's own glow fix -- an inset
+          box-shadow paints behind a box's own children, so this has to render after the video/
+          avatar above to actually be visible instead of hidden underneath it. */}
+      <div
+        aria-hidden
+        ref={glowRef}
+        style={{
+          position: 'absolute', inset: 0, borderRadius: 'inherit', pointerEvents: 'none',
+          boxShadow: isSpeaking ? SPEAKING_GLOW_SHADOW : SPEAKING_AMBIENT_SHADOW,
+          transition: SPEAKING_GLOW_TRANSITION,
+        }}
+      />
     </div>
   );
 }
@@ -177,7 +204,14 @@ function PipMultiParticipantPages({
   localParticipantId?: string | null;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // Live pixel offset while an actual drag is in progress (0 the rest of the time). Applied
+  // alongside pageIndex's own percentage-based offset so the strip tracks the pointer 1:1 during
+  // a drag, with zero transition lag -- a CSS transition only ever applies during the settle
+  // after release (isSettling), never while a finger/cursor is actually still moving it.
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isSettling, setIsSettling] = useState(false);
+  const dragRef = useRef<{ pointerId: number; startX: number; startPageIndex: number; moved: boolean } | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
 
   const orderedTiles = useMemo(() => {
     const localTile: IPipTile = {
@@ -214,30 +248,90 @@ function PipMultiParticipantPages({
     return result.length ? result : [[]];
   }, [orderedTiles]);
 
-  // Clamp in case a page disappeared (e.g. people left and the strip got shorter) while scrolled
-  // further right than the new page count allows.
+  // Clamp in case a page disappeared (e.g. people left) while viewing a later page that no
+  // longer exists.
   useEffect(() => {
     if (pageIndex > pages.length - 1) setPageIndex(Math.max(0, pages.length - 1));
   }, [pageIndex, pages.length]);
 
-  const handleScroll = useCallback(() => {
-    const node = scrollerRef.current;
+  // Real reported request: Instagram-carousel-style swipe, not a native scrollbar/strip. Every
+  // page is laid out side by side in one flex row (clipped by the wrapper's own overflow:hidden
+  // below, which is why no scrollbar can ever appear -- this never uses native scroll at all),
+  // moved as one unit via `transform`. `settleTo` is the single place that ever actually commits
+  // to a new pageIndex; it clears the live drag offset and turns on the CSS transition for the
+  // one settle animation, which `onTransitionEnd` below turns back off once it finishes (so the
+  // NEXT drag tracks the pointer with zero lag again, same as this one did).
+  const settleTo = useCallback((target: number) => {
+    const clamped = Math.max(0, Math.min(pages.length - 1, target));
 
-    if (!node || !node.clientWidth) return;
-    setPageIndex(Math.round(node.scrollLeft / node.clientWidth));
-  }, []);
+    setIsSettling(true);
+    setDragOffset(0);
+    setPageIndex(clamped);
+  }, [pages.length]);
+
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pages.length <= 1) return;
+    (event.target as Element).setPointerCapture?.(event.pointerId);
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startPageIndex: pageIndex, moved: false };
+    setIsSettling(false);
+  }, [pages.length, pageIndex]);
+
+  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+
+    if (!drag) return;
+    const delta = event.clientX - drag.startX;
+
+    if (Math.abs(delta) > 3) drag.moved = true;
+    // Rubber-band to a third of the real distance past the first/last page, instead of either
+    // dragging forever into empty space or hard-stopping dead at the edge.
+    const atStart = drag.startPageIndex === 0 && delta > 0;
+    const atEnd = drag.startPageIndex === pages.length - 1 && delta < 0;
+
+    setDragOffset((atStart || atEnd) ? delta / 3 : delta);
+  }, [pages.length]);
+
+  const onPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+
+    dragRef.current = null;
+    if (!drag) return;
+    if (!drag.moved) {
+      // A plain tap/click (no real drag distance) still advances by one page -- the same
+      // convenience the earlier click-to-advance version had before real drag support existed.
+      settleTo(drag.startPageIndex + 1);
+      return;
+    }
+    const width = stripRef.current?.clientWidth || 1;
+    const delta = event.clientX - drag.startX;
+    const threshold = width * 0.2;
+
+    if (delta <= -threshold) settleTo(drag.startPageIndex + 1);
+    else if (delta >= threshold) settleTo(drag.startPageIndex - 1);
+    else settleTo(drag.startPageIndex);
+  }, [settleTo]);
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div
+      ref={stripRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      title={pages.length > 1 ? 'Drag to see other participants' : undefined}
+      style={{
+        width: '100%', height: '100%', position: 'relative', overflow: 'hidden',
+        cursor: pages.length > 1 ? 'grab' : 'default', touchAction: pages.length > 1 ? 'pan-y' : 'auto',
+      }}
+    >
       <div
-        ref={scrollerRef}
-        onScroll={handleScroll}
+        onTransitionEnd={() => setIsSettling(false)}
         style={{
+          display: 'flex',
           width: '100%',
           height: '100%',
-          display: 'flex',
-          overflowX: 'auto',
-          scrollSnapType: 'x mandatory',
+          transform: `translate3d(calc(${-pageIndex * 100}% + ${dragOffset}px), 0, 0)`,
+          transition: isSettling ? 'transform 280ms cubic-bezier(0.2, 0, 0, 1)' : 'none',
         }}
       >
         {pages.map((page, pageNum) => (
@@ -248,7 +342,6 @@ function PipMultiParticipantPages({
               flex: '0 0 100%',
               width: '100%',
               height: '100%',
-              scrollSnapAlign: 'start',
               display: 'grid',
               gridTemplateColumns: page.length === 1 ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
               gridTemplateRows: 'repeat(2, minmax(0, 1fr))',
@@ -271,12 +364,22 @@ function PipMultiParticipantPages({
           }}
         >
           {pages.map((_, i) => (
-            <span
+            <button
               // eslint-disable-next-line react/no-array-index-key
               key={i}
+              type="button"
+              title={`Page ${i + 1}`}
+              // Jumps straight to that page. stopPropagation keeps the click from also reaching
+              // the strip's own pointerup-based tap-to-advance handler above.
+              onClick={(event) => {
+                event.stopPropagation();
+                settleTo(i);
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
               style={{
-                width: '6px', height: '6px', borderRadius: '50%',
+                width: '8px', height: '8px', padding: 0, borderRadius: '50%', border: 'none',
                 backgroundColor: i === pageIndex ? '#8AB4F8' : 'rgba(255,255,255,0.35)',
+                cursor: 'pointer',
               }}
             />
           ))}
