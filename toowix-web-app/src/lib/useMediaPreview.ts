@@ -152,8 +152,15 @@ export function useMediaPreview(
       try {
         let media: MediaStream;
         const explicitAudioId = await resolveExplicitPreviewDeviceId('audioinput', audioId);
+        // CONFIRMED BUG, same class as the camera fix above: `ideal` is only a soft preference,
+        // so a browser can freely keep whatever mic is already active instead of actually
+        // switching -- confirmed live, selecting a different microphone in Settings updated
+        // localStorage but the live mic track's deviceId never changed. `exact` forces the real
+        // switch; the existing catch below already falls back to a bare `{audio: true}` request
+        // if the exact device throws OverconstrainedError, so an unavailable mic still degrades
+        // gracefully instead of silently ignoring the user's choice.
         const constraints: MediaTrackConstraints = explicitAudioId
-          ? { deviceId: { ideal: explicitAudioId } }
+          ? { deviceId: { exact: explicitAudioId } }
           : {};
 
         if (!active) return;
@@ -281,8 +288,17 @@ export function useMediaPreview(
         const explicitVideoId = await resolveExplicitPreviewDeviceId('videoinput', videoId);
 
         if (!active) return;
+        // CONFIRMED BUG: `ideal` is only ever a soft preference -- a browser is free to ignore it
+        // and keep whatever camera is already active/default if it judges the request "close
+        // enough" (confirmed: selecting a different camera from Settings in the lobby updated
+        // localStorage immediately but the live preview never actually switched devices). `exact`
+        // forces the browser to either use that specific camera or reject with
+        // OverconstrainedError -- already handled by the attempts cascade below, which falls
+        // through to progressively looser constraints (and finally a bare `{video: true}` with no
+        // deviceId at all) if the exact device can't be satisfied, so a genuinely unavailable
+        // camera still falls back gracefully instead of silently ignoring the user's choice.
         const constraints: MediaTrackConstraints = explicitVideoId
-          ? { deviceId: { ideal: explicitVideoId } }
+          ? { deviceId: { exact: explicitVideoId } }
           : {};
 
         // Highest quality first, then progressively safer requests. A camera or driver that
