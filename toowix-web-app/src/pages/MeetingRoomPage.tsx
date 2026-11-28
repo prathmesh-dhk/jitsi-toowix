@@ -9325,10 +9325,21 @@ export function MeetingRoomPage() {
 
         {/* "You're muted" nudge (Google-Meet-style) -- shown when speaking into a muted mic.
         Its own banner, not the shared non-interactive toast above, since it needs a real
-        clickable "Unmute" action. */}
-        {jitsiMeeting.mutedButSpeaking && (
+        clickable "Unmute" action. Portaled straight to <body>: tw-main (its DOM ancestor here)
+        carries a permanent `transform: scale(...)` (even at rest that's scale(1), which still
+        establishes a CSS containing block) plus `overflow: hidden`, so a `position: fixed` child
+        of it is actually fixed to tw-main's own box, not the viewport -- the drag math below
+        computes/stores viewport-space coordinates (getBoundingClientRect), which the browser then
+        misapplies relative to tw-main, and tw-main's overflow:hidden clips the nudge the moment a
+        drag carries it past that box's edge. A real document.body portal sidesteps both. */}
+        {jitsiMeeting.mutedButSpeaking && createPortal(
           <div
             ref={muteNudgeElRef}
+            onPointerDown={onMuteNudgePointerDown}
+            onPointerMove={onMuteNudgePointerMove}
+            onPointerUp={endMuteNudgeDrag}
+            onPointerCancel={endMuteNudgeDrag}
+            title="Drag to move"
             style={{
               position: 'fixed',
               ...(muteNudgePos
@@ -9347,18 +9358,16 @@ export function MeetingRoomPage() {
               fontSize: '13px',
               fontWeight: 500,
               animation: muteNudgeDragging ? 'none' : 'fadeIn 0.2s ease',
+              cursor: muteNudgeDragging ? 'grabbing' : 'grab',
+              touchAction: 'none',
             }}
           >
             {/* Real reported request: movable, with its last dragged-to position cached (across
                 meetings, via localStorage) so it reopens there next time instead of always resetting
-                to the default bottom-center spot. This icon doubles as the drag handle -- the
-                Unmute/Dismiss buttons below stay click-only, undisturbed by drag handling. */}
+                to the default bottom-center spot. The drag handlers are on the whole bar now (not
+                just the mic icon) -- the Unmute/Dismiss buttons stop the pointerdown from bubbling
+                so a tap on either still registers as a click, not a (zero-distance) drag. */}
             <div
-              onPointerDown={onMuteNudgePointerDown}
-              onPointerMove={onMuteNudgePointerMove}
-              onPointerUp={endMuteNudgeDrag}
-              onPointerCancel={endMuteNudgeDrag}
-              title="Drag to move"
               style={{
                 width: '24px',
                 height: '24px',
@@ -9368,8 +9377,6 @@ export function MeetingRoomPage() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
-                cursor: muteNudgeDragging ? 'grabbing' : 'grab',
-                touchAction: 'none',
               }}
             >
               <MicOff size={14} color="#FFFFFF" />
@@ -9377,6 +9384,7 @@ export function MeetingRoomPage() {
             <span>You're muted</span>
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => {
                 jitsiMeeting.dismissMutedSpeakingNudge();
                 jitsiMeeting.toggleAudio();
@@ -9397,6 +9405,7 @@ export function MeetingRoomPage() {
             <button
               type="button"
               aria-label="Dismiss"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => jitsiMeeting.dismissMutedSpeakingNudge()}
               style={{
                 background: 'transparent',
@@ -9409,7 +9418,8 @@ export function MeetingRoomPage() {
             >
               <X size={16} />
             </button>
-          </div>
+          </div>,
+          document.body,
         )}
 
         {/* Document Picture-in-Picture Portal (Rendered into detached native window) */}
