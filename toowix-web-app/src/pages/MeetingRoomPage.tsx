@@ -10124,6 +10124,29 @@ export function MeetingRoomPage() {
             </div>
           )}
 
+          {/* Real reported bug: reopening an ad-hoc meeting link shortly after the host ended it
+              for everyone silently started a brand-new session with a new moderator, with
+              nothing telling whoever clicked the link that this isn't the meeting they expected.
+              Ad-hoc links stay reusable on purpose (matches how Zoom/Google Meet instant links
+              work), so this is intentionally just an honest, non-blocking notice -- clicking Join
+              below still works normally and starts a fresh meeting -- not a redirect/lockout like
+              a truly expired or ended persisted meeting gets. Only shows for the short window the
+              backend's adHocEndedAt grace period covers (see lobby.service.ts). */}
+          {meetingInfo?.recentlyEndedForEveryone && (
+            <div
+              style={{
+                padding: '10px 14px',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(138, 180, 248, 0.1)',
+                border: '1px solid rgba(138, 180, 248, 0.3)',
+                color: isDark ? '#8AB4F8' : '#1A73E8',
+                fontSize: '13px',
+              }}
+            >
+              This meeting was recently ended. Joining now will start a new meeting.
+            </div>
+          )}
+
           {/* Error Notice */}
           {admissionError && (
             <div

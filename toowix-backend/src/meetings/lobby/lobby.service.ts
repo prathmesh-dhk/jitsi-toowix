@@ -100,6 +100,19 @@ function inferEndReason(meeting: any): IMeetingEndReason {
 // the correct outcome page. Was a plain Set<string> before this distinction existed.
 const endedMeetingSlugs = new Map<string, IMeetingEndReason>();
 
+// Real reported bug: an ad-hoc room's (instant-*/twx-*, no persisted Meeting document) "ended"
+// state was discarded the instant ANYONE's next join attempt arrived (see admitToRoom's ad-hoc
+// branch below) -- by design, so the link stays reusable to start a brand-new meeting later, the
+// same way Zoom/Google Meet instant links work. But that meant reopening the exact same link
+// seconds after the host ended it silently started a whole new session with a new moderator, with
+// no indication to whoever clicked it that this isn't the meeting they thought they were
+// rejoining. This tracks WHEN an ad-hoc room's "ended" marker was set, purely so a brief prejoin
+// lookup (GET, before anyone actually joins) can show an honest "this will start a new meeting"
+// notice for a short window after ending -- it does NOT block the join (see admitToRoom's GET
+// branch) and the link remains exactly as reusable as before once the window passes.
+const adHocEndedAt = new Map<string, number>();
+const RECENTLY_ENDED_GRACE_MS = 2 * 60 * 1000;
+
 // Pilot cache (see src/lib/simpleCache.ts): GET live-status is polled every 10s by every
 // participant in a room for the whole call. Keyed by roomSlug so all of a room's participants
 // polling within the same 5s window share one real DB read instead of one each. Invalidated at
@@ -456,6 +469,7 @@ export async function endForEveryone(
       return { body: { error: 'Meeting not found' }, httpStatus: 404 };
     }
     endedMeetingSlugs.set(room, reason);
+    adHocEndedAt.set(room, Date.now());
     invalidateLiveStatusCache(room);
     publishLobbyEvent(room, {
       type: 'LOBBY_ENDED',
@@ -706,6 +720,16 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       // alone can't tell a right-now meeting apart from a scheduled one, since both have a real
       // Meeting document.
       isInstant: !meeting || !meeting.scheduledAt,
+      // Soft, non-blocking signal (see adHocEndedAt's own comment): true only for an ad-hoc room
+      // whose "end for everyone" happened within the last RECENTLY_ENDED_GRACE_MS, so the prejoin
+      // screen can show an honest "this will start a new meeting" notice. Deliberately NOT folded
+      // into `ended`/`endReason` above -- those two drive resolvePrejoinEndedDestination's hard
+      // redirect to the ended/expired page, and this must never block the join, only inform it.
+      recentlyEndedForEveryone: !meeting && (() => {
+        const endedTs = adHocEndedAt.get(room);
+
+        return !!endedTs && Date.now() - endedTs < RECENTLY_ENDED_GRACE_MS;
+      })(),
     };
     if (params.method === 'GET') {
       return { body: { meeting: info }, httpStatus: 200 };
@@ -745,6 +769,7 @@ export async function admitToRoom(room: string, params: IAdmitToRoomParams): Pro
       // kicked the participant right back out. We're about to actually admit this join, so any
       // stale "ended" opinion recorded for this room no longer applies.
       endedMeetingSlugs.delete(room);
+      adHocEndedAt.delete(room);
       invalidateLiveStatusCache(room);
     }
     const identity = {

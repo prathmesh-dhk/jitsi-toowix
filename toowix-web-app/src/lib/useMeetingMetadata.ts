@@ -47,6 +47,11 @@ export interface IMeetingInfo {
   // lobby.service.ts's own isInstant field). Deliberately broader than persisted/
   // isFreeInstantMeeting below, which must stay narrow to the ad-hoc, 2-hour-capped case only.
   isInstant?: boolean;
+  // Soft, non-blocking signal (see lobby.service.ts's adHocEndedAt comment): true only for a
+  // brief window after an ad-hoc room's "end for everyone" -- lets the prejoin screen show an
+  // honest "this will start a new meeting" notice. Unlike `ended`/`endReason`, this never routes
+  // away from the lobby; the link stays exactly as reusable as before once the window passes.
+  recentlyEndedForEveryone?: boolean;
 }
 
 // Backend half of this split lives in lobby.service.ts / admission.ts -- isUnavailableMeetingResponse's
