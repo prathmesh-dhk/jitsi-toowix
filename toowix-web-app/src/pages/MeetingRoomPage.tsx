@@ -9313,6 +9313,8 @@ export function MeetingRoomPage() {
               remoteParticipants={remoteParticipants}
               roomTitle={meetingInfo?.description || roomId}
               avatarUrl={localAvatarUrl}
+              dominantSpeakerId={jitsiMeeting.dominantSpeakerId}
+              localParticipantId={jitsiMeeting.localParticipantId}
               onToggleMic={handleToggleInCallMic}
               onToggleVideo={handleToggleInCallVideo}
               onToggleHand={handleToggleRaiseHand}
