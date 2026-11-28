@@ -178,12 +178,16 @@ function PipTile({ tile, theme }: { tile: IPipTile; theme: { tileBg: string; ava
 
 // Real reported request: with more than 4 participants, the grid used to silently drop everyone
 // past the 4th -- no way to see them at all. Pages of PIP_PAGE_SIZE (4, matching the previous
-// grid's own look) are laid out side by side in a horizontally scrollable, scroll-snapped strip,
-// so every participant is reachable by scrolling right instead of being dropped. Whoever Jitsi's
-// own dominant-speaker detection currently reports as talking the most is moved to the very front
-// of the combined list before paging, so they always land on page 1 -- everyone else keeps their
-// existing relative order, which is what keeps this from visibly reshuffling the whole grid every
-// time the active speaker changes.
+// grid's own look) are laid out side by side in a strip, so every participant is reachable by
+// paging/dragging instead of being dropped (see onPointerMove/onPointerUp below).
+//
+// Tile POSITION is otherwise meant to hold perfectly still -- it only ever moves for two reasons
+// (see orderedTiles' own comment for the actual logic): whoever Jitsi's own dominant-speaker
+// detection reports is talking gets moved to the very front the moment that changes, and in that
+// same moment, everyone else gets sorted camera-on-first (so when one person is clearly speaking
+// and the rest are quiet, whoever already has their camera on gets priority for the remaining
+// page-1 seats). Nothing else -- a mute toggle, a name change, an unrelated re-render -- is ever
+// allowed to reshuffle anyone.
 function PipMultiParticipantPages({
   inCallVideo,
   inCallStream,
@@ -213,30 +217,62 @@ function PipMultiParticipantPages({
   const dragRef = useRef<{ pointerId: number; startX: number; startPageIndex: number; moved: boolean } | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
 
-  const orderedTiles = useMemo(() => {
+  // Real reported request: positions used to get recomputed from scratch on every render -- in
+  // practice stable (since the dominant speaker only moves to the front when it's genuinely NOT
+  // already there), but still fragile to rely on object-identity-free recomputation for something
+  // that's supposed to hold perfectly still. This keeps the actual committed order in a ref, which
+  // only ever gets touched at the exact moment the active speaker changes -- never on an unrelated
+  // re-render (a mute toggle, a name update, anything else).
+  const pinnedOrderRef = useRef<string[]>([]);
+  const lastDominantRef = useRef<string | null>(null);
+
+  const rawTiles = useMemo(() => {
     const localTile: IPipTile = {
       id: 'local', name: 'You', muted: Boolean(inCallMuted), video: inCallVideo,
       stream: inCallStream, avatarUrl, raisedHand: isHandRaised, isLocal: true,
     };
-    const tiles: IPipTile[] = [
+
+    return [
       localTile,
       ...remoteParticipants.map((p): IPipTile => ({
         id: p.id, name: p.name, muted: p.muted, video: p.video,
         stream: p.stream ?? null, avatarUrl: p.avatarUrl, raisedHand: Boolean(p.raisedHand), isLocal: false,
       })),
     ];
-    const dominantId = dominantSpeakerId && dominantSpeakerId === localParticipantId ? 'local' : dominantSpeakerId;
-    const dominantIdx = dominantId ? tiles.findIndex((t) => t.id === dominantId) : -1;
-
-    if (dominantIdx > 0) {
-      const [speaker] = tiles.splice(dominantIdx, 1);
-      tiles.unshift(speaker);
-    }
-
-    return tiles;
     // userInitial/avatarUrl intentionally excluded -- avatarUrl is already read directly above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inCallVideo, inCallStream, inCallMuted, isHandRaised, avatarUrl, remoteParticipants, dominantSpeakerId, localParticipantId]);
+  }, [inCallVideo, inCallStream, inCallMuted, isHandRaised, avatarUrl, remoteParticipants]);
+
+  const orderedTiles = useMemo(() => {
+    const tileById = new Map(rawTiles.map((t) => [t.id, t] as const));
+    const currentIds = rawTiles.map((t) => t.id);
+    // Carry over whichever ids from the last committed order still exist, in the SAME relative
+    // order -- this is what keeps everyone else's position from shifting just because, say,
+    // someone else toggled their mic. Anyone brand new (just joined) is appended at the end,
+    // never inserted into the middle of an already-settled order.
+    const stillHere = pinnedOrderRef.current.filter((id) => tileById.has(id));
+    const newcomers = currentIds.filter((id) => !stillHere.includes(id));
+    let pinnedIds = stillHere.length ? [...stillHere, ...newcomers] : currentIds;
+
+    const resolvedDominantId = dominantSpeakerId && dominantSpeakerId === localParticipantId ? 'local' : dominantSpeakerId;
+    // The ONLY two things that are ever allowed to move a tile: (1) the active speaker genuinely
+    // changing to someone who wasn't already in front, and, in that same moment, (2) sorting
+    // everyone else by camera-on-first -- so when one person is clearly speaking and the rest are
+    // quiet, whoever already has their camera on gets priority for the remaining page-1 seats
+    // instead of whoever happened to join first.
+    const dominantChanged = !!resolvedDominantId && resolvedDominantId !== lastDominantRef.current && pinnedIds.includes(resolvedDominantId);
+
+    if (dominantChanged) {
+      const rest = pinnedIds.filter((id) => id !== resolvedDominantId);
+
+      rest.sort((a, b) => Number(tileById.get(b)?.video) - Number(tileById.get(a)?.video));
+      pinnedIds = [resolvedDominantId as string, ...rest];
+    }
+    lastDominantRef.current = resolvedDominantId ?? null;
+    pinnedOrderRef.current = pinnedIds;
+
+    return pinnedIds.map((id) => tileById.get(id)).filter((t): t is IPipTile => !!t);
+  }, [rawTiles, dominantSpeakerId, localParticipantId]);
 
   const pages = useMemo(() => {
     const result: IPipTile[][] = [];
